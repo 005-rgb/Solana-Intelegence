@@ -1,0 +1,2889 @@
+# BUILD A COMPLETE PRODUCTION-READY APPLICATION
+
+## SOLANA 20× RADAR — WHALE + SMART MONEY + EARLY OPPORTUNITY INTELLIGENCE
+
+Anda adalah senior full-stack engineer, blockchain/Solana engineer, data engineer, quantitative researcher, security engineer, UI/UX engineer, dan DevOps engineer.
+
+TUGAS ANDA:
+
+Bangun aplikasi web FULL-STACK yang BENAR-BENAR BERFUNGSI untuk mendeteksi, menganalisis, melakukan tracking, memberi ranking, memberi alert, melakukan paper trading, melakukan evaluasi historis, serta mempelajari pola token di jaringan Solana.
+
+NAMA PRODUK:
+
+**Solana 20× Radar**
+
+TUJUAN UTAMA:
+
+Mencari token Solana yang menunjukkan kombinasi karakteristik yang secara historis berpotensi menghasilkan pergerakan besar SEBELUM pergerakan tersebut menjadi terlalu matang.
+
+Aplikasi TIDAK BOLEH hanya menjadi:
+
+* dashboard crypto biasa
+* daftar whale
+* fake analytics
+* static mockup
+* data dummy
+* random AI prediction
+
+Semua data utama harus berasal dari data Solana/on-chain dan data market yang benar-benar tersedia melalui provider/API yang dikonfigurasi.
+
+JANGAN mengklaim bahwa sistem dapat menjamin token 10× atau 20×.
+
+Sistem harus menggunakan bahasa:
+
+* Opportunity
+* Probability
+* Confidence
+* Historical Pattern
+* Risk
+* Signal
+
+bukan "pasti naik".
+
+==================================================
+
+# 1. CORE PRODUCT PRINCIPLE
+
+==================================================
+
+Bangun pipeline:
+
+SOLANA NETWORK
+↓
+DATA INGESTION
+↓
+TRANSACTION PARSING
+↓
+DATA NORMALIZATION
+↓
+TOKEN INTELLIGENCE
+↓
+WALLET INTELLIGENCE
+↓
+MARKET INTELLIGENCE
+↓
+SECURITY/RISK ENGINE
+↓
+SMART MONEY ENGINE
+↓
+HYPE ENGINE
+↓
+MOMENTUM ENGINE
+↓
+PATTERN ENGINE
+↓
+SCORING ENGINE
+↓
+CONFIDENCE ENGINE
+↓
+RADAR RANKING
+↓
+WATCHLIST
+↓
+PAPER TRADING
+↓
+OUTCOME TRACKING
+↓
+PATTERN LEARNING
+↓
+MODEL EVALUATION
+
+Jangan melompati tahapan tersebut.
+
+==================================================
+
+# 2. DATA SOURCE ARCHITECTURE
+
+==================================================
+
+Gunakan provider Solana yang benar-benar tersedia.
+
+Prioritaskan arsitektur provider abstraction.
+
+Buat interface:
+
+DataProvider
+
+sehingga provider dapat diganti tanpa mengubah business logic.
+
+Minimal dukung:
+
+* Solana RPC
+* WebSocket/log subscriptions jika tersedia
+* indexed transaction API
+* token metadata API
+* DEX market data
+* price/volume/liquidity data
+
+Jika provider utama membutuhkan API key:
+
+Buat:
+SETTINGS → DATA PROVIDER
+
+User/admin dapat memasukkan API key.
+
+Jangan pernah hard-code secret/API key.
+
+Gunakan environment variables/server-side secrets untuk credential sistem.
+
+Jika provider tertentu tidak memiliki data yang dibutuhkan, JANGAN mengarang datanya.
+
+Tampilkan:
+
+DATA UNAVAILABLE
+
+daripada membuat nilai palsu.
+
+==================================================
+
+# 3. SCANNING ENGINE
+
+==================================================
+
+Default automatic scan:
+
+**EVERY 30 SECONDS**
+
+Buat scheduler/background worker yang menjalankan scan setiap 30 detik.
+
+Jangan membuat browser client sebagai scheduler utama.
+
+Scheduler harus berjalan server-side.
+
+Buat:
+
+scan_jobs
+scan_runs
+scan_errors
+scan_metrics
+
+Setiap scan memiliki:
+
+* scan_id
+* started_at
+* finished_at
+* duration
+* tokens_scanned
+* transactions_processed
+* wallets_processed
+* errors
+* provider
+* status
+
+Status:
+
+RUNNING
+SUCCESS
+PARTIAL
+FAILED
+
+==================================================
+
+# 4. MANUAL SCAN
+
+==================================================
+
+Tambahkan tombol:
+
+**SCAN NOW**
+
+Ketika user menekan:
+
+* jalankan scan segera
+* jangan menunggu 30 detik
+* cegah duplicate scan bersamaan
+* tampilkan progress
+* tampilkan timestamp
+* tampilkan jumlah data yang diperbarui
+
+UI:
+
+[ 🔄 SCAN NOW ]
+
+Status:
+
+Last Scan:
+12 seconds ago
+
+Next Auto Scan:
+18 seconds
+
+==================================================
+
+# 5. INCREMENTAL SCANNING
+
+==================================================
+
+JANGAN melakukan full blockchain scan setiap 30 detik.
+
+Gunakan incremental architecture.
+
+Simpan:
+
+last_processed_slot
+last_processed_signature
+last_scan_timestamp
+
+Setiap cycle hanya mengambil data baru sejak checkpoint terakhir.
+
+Jika terjadi error:
+
+* jangan kehilangan checkpoint
+* gunakan retry
+* gunakan idempotent processing
+* jangan membuat duplicate transactions
+
+Gunakan unique constraints untuk:
+
+transaction_signature
+token_address
+wallet_address
+event_id
+
+==================================================
+
+# 6. TOKEN DISCOVERY ENGINE
+
+==================================================
+
+Temukan token Solana yang aktif/relevan.
+
+Prioritaskan:
+
+* newly launched tokens
+* tokens with growing volume
+* tokens with growing holders
+* tokens with growing liquidity
+* tokens receiving smart-money activity
+* tokens with unusual transaction acceleration
+* tokens experiencing social/narrative acceleration jika data tersedia
+
+Setiap token harus memiliki:
+
+mint_address
+
+sebagai primary blockchain identity.
+
+==================================================
+
+# 7. TOKEN INTELLIGENCE PROFILE
+
+==================================================
+
+Setiap token memiliki halaman detail super lengkap.
+
+SECTION:
+
+## BASIC
+
+* Name
+* Symbol
+* Logo
+* Mint address
+* Decimals
+* Total supply
+* Circulating supply jika tersedia
+* Market cap
+* FDV
+* Current price
+* ATH
+* ATL
+* Age
+* Launch timestamp
+* Current status
+
+==================================================
+
+# 8. TOKEN SECURITY
+
+==================================================
+
+Periksa jika datanya tersedia:
+
+* mint authority
+* freeze authority
+* metadata authority
+* token extensions
+* transfer restrictions
+* supply changes
+* mint events
+* burn events
+* authority changes
+
+Tampilkan:
+
+Mint Authority:
+ACTIVE / REVOKED / UNKNOWN
+
+Freeze Authority:
+ACTIVE / REVOKED / UNKNOWN
+
+JANGAN menyamakan "renounced" dengan satu flag sederhana.
+
+Simpan:
+
+* current status
+* previous status
+* transaction signature
+* timestamp
+* source
+
+==================================================
+
+# 9. BURN ANALYSIS
+
+==================================================
+
+Tampilkan:
+
+* total burned
+* burn percentage
+* burn transactions
+* latest burn
+* burn velocity
+* burn history
+
+Jika data burn tidak dapat diverifikasi:
+
+UNKNOWN
+
+bukan 0.
+
+==================================================
+
+# 10. LIQUIDITY INTELLIGENCE
+
+==================================================
+
+Tampilkan:
+
+* total liquidity
+* liquidity USD
+* liquidity/market-cap ratio
+* liquidity change 30s
+* liquidity change 5m
+* liquidity change 1h
+* liquidity change 24h
+* LP concentration
+* liquidity additions
+* liquidity removals
+* estimated buy impact
+* estimated sell impact
+* estimated slippage
+
+Buat:
+
+Liquidity Quality Score 0–100
+
+==================================================
+
+# 11. HOLDER INTELLIGENCE
+
+==================================================
+
+Tampilkan:
+
+* total holders
+* holder growth
+* new holders 30s
+* new holders 5m
+* new holders 1h
+* new holders 24h
+* top holder percentage
+* top 5 percentage
+* top 10 percentage
+* top 20 percentage
+* concentration
+* concentration change
+
+Classify holders jika data memungkinkan:
+
+* Dev
+* Insider
+* Whale
+* Smart Money
+* Sniper
+* Bundler
+* LP
+* Exchange
+* Burn
+* Unknown
+
+Jangan mengklaim klasifikasi dengan kepastian 100% jika hanya inferensi.
+
+Gunakan:
+
+Classification Confidence.
+
+==================================================
+
+# 12. WHALE ENGINE
+
+==================================================
+
+Whale bukan sekadar wallet dengan saldo besar.
+
+Deteksi:
+
+* large buys
+* large sells
+* large transfers
+* accumulation
+* distribution
+* repeated purchases
+* entry timing
+* exit timing
+
+Buat Whale Score.
+
+==================================================
+
+# 13. SMART MONEY ENGINE
+
+==================================================
+
+Untuk setiap wallet, hitung historical behavior jika data mencukupi.
+
+Metrics:
+
+* total trades
+* profitable trades
+* losing trades
+* win rate
+* realized PnL
+* average ROI
+* median ROI
+* largest win
+* largest loss
+* average holding period
+* early-entry frequency
+* successful early entries
+* historical token performance
+
+Buat:
+
+Smart Money Score 0–100
+
+JANGAN memberikan Smart Money Score tinggi hanya karena wallet memiliki saldo besar.
+
+==================================================
+
+# 14. WALLET CLUSTER ENGINE
+
+==================================================
+
+Deteksi kemungkinan hubungan antar-wallet berdasarkan evidence on-chain.
+
+Signals:
+
+* shared funding source
+* repeated transfers
+* synchronized transactions
+* similar entry timing
+* identical transaction patterns
+* common infrastructure
+* repeated interaction pattern
+
+Buat:
+
+Cluster ID
+Cluster Confidence
+
+Jangan menyatakan:
+
+"wallet A dan B adalah orang yang sama"
+
+kecuali benar-benar dapat dibuktikan.
+
+Gunakan:
+
+"Likely Related Cluster"
+
+==================================================
+
+# 15. BOT / WASH TRADING DETECTION
+
+==================================================
+
+Buat:
+
+Bot Probability Score
+
+dan:
+
+Organic Activity Score
+
+Deteksi pola:
+
+* excessive repetitive trading
+* synchronized wallets
+* abnormal buy/sell cycles
+* circular transfers
+* suspicious volume
+* repeated identical transaction sizes
+* unnatural timing
+* wallet clusters
+
+Jika volume tinggi tetapi organic score rendah:
+
+kurangi bobot volume dalam Opportunity Score.
+
+==================================================
+
+# 16. MARKET MOMENTUM ENGINE
+
+==================================================
+
+Hitung:
+
+* price change
+* volume change
+* transaction count
+* buyer count
+* seller count
+* buy/sell ratio
+* volume velocity
+* volume acceleration
+* transaction velocity
+* holder velocity
+* liquidity velocity
+
+Gunakan multiple windows:
+
+30s
+1m
+5m
+15m
+30m
+1h
+4h
+24h
+
+Jangan hanya menggunakan 24h percentage.
+
+==================================================
+
+# 17. HYPE ENGINE
+
+==================================================
+
+Buat:
+
+Hype Score 0–100
+
+Components:
+
+* volume velocity
+* transaction velocity
+* holder velocity
+* whale velocity
+* social velocity
+* price velocity
+* liquidity velocity
+
+Jika social data tidak tersedia:
+
+jangan membuat nilai palsu.
+
+Gunakan weighted score dari data yang tersedia dan tampilkan:
+
+Data Coverage %
+
+==================================================
+
+# 18. SOCIAL/NARRATIVE ENGINE
+
+==================================================
+
+Jika provider memungkinkan, collect:
+
+* X/Twitter mentions
+* Telegram activity
+* Discord
+* Reddit
+* website
+* GitHub
+* social follower growth
+* engagement
+* mention velocity
+
+Fokus pada:
+
+ACCELERATION
+
+bukan hanya follower count.
+
+Buat:
+
+Social Momentum Score
+
+dan:
+
+Narrative Score.
+
+==================================================
+
+# 19. DEVELOPER INTELLIGENCE
+
+==================================================
+
+Analisis developer/deployer wallet jika dapat diidentifikasi.
+
+Metrics:
+
+* previous tokens
+* previous launches
+* historical outcomes
+* rug history
+* wallet funding
+* token allocation
+* current holdings
+* transfers
+* selling behavior
+
+Buat:
+
+Developer Risk Score
+
+Jika developer tidak dapat diidentifikasi:
+
+UNKNOWN.
+
+==================================================
+
+# 20. RUG RISK ENGINE
+
+==================================================
+
+Buat comprehensive:
+
+Rug Risk Score 0–100
+
+Factors:
+
+* mint authority
+* freeze authority
+* holder concentration
+* developer concentration
+* insider concentration
+* LP risk
+* liquidity removal
+* suspicious transfers
+* bundler activity
+* sniper concentration
+* bot activity
+* sellability
+* abnormal token permissions
+* developer history
+* wallet cluster risk
+
+Risk categories:
+
+0–20 LOW
+21–40 MODERATE
+41–60 HIGH
+61–80 VERY HIGH
+81–100 EXTREME
+
+==================================================
+
+# 21. SELLABILITY TEST
+
+==================================================
+
+Jika secara teknis memungkinkan dan aman, estimate:
+
+Can Sell:
+YES / NO / UNKNOWN
+
+Potential Sell Slippage
+
+Potential Buy Slippage
+
+Trading restrictions
+
+Do not execute real transactions.
+
+This is ANALYTICAL only.
+
+==================================================
+
+# 22. TOKEN DISTRIBUTION QUALITY
+
+==================================================
+
+Calculate:
+
+* top 1
+* top 5
+* top 10
+* top 20
+* developer share
+* insider share
+* sniper share
+* bundler share
+* smart-money share
+* LP share
+* exchange share
+* unknown share
+
+Buat:
+
+Distribution Quality Score.
+
+==================================================
+
+# 23. WHALE ACCUMULATION DETECTOR
+
+==================================================
+
+Detect:
+
+* number of whales buying
+* aggregate whale buy USD
+* aggregate whale sell USD
+* net whale flow
+* whale concentration
+* whale accumulation velocity
+* whale distribution velocity
+
+Signal:
+
+ACCUMULATION
+DISTRIBUTION
+NEUTRAL
+
+==================================================
+
+# 24. SIGNAL CHANGE DETECTOR
+
+==================================================
+
+Store score history.
+
+Example:
+
+09:00 61
+09:30 67
+10:00 74
+10:30 81
+11:00 89
+
+Detect:
+
+Score acceleration
+Risk acceleration
+Whale acceleration
+Holder acceleration
+Volume acceleration
+
+Create:
+
+SIGNAL ACCELERATION ALERT
+
+==================================================
+
+# 25. OPPORTUNITY SCORE
+
+==================================================
+
+Create:
+
+Opportunity Score 0–100
+
+Potential components:
+
+* smart money
+* whale accumulation
+* volume acceleration
+* holder growth
+* liquidity quality
+* organic activity
+* momentum
+* social momentum
+* developer quality
+* token age
+* distribution quality
+* catalyst
+* historical pattern match
+
+Do NOT blindly hard-code weights if the application can later evaluate them.
+
+Store weights in database/configuration.
+
+==================================================
+
+# 26. MULTIPLIER POTENTIAL
+
+==================================================
+
+Create separate estimates:
+
+2× Potential
+5× Potential
+10× Potential
+20× Potential
+
+Values should represent historical/model-based opportunity classification, NOT guarantees.
+
+Example:
+
+10× Potential:
+LOW / MEDIUM / HIGH
+
+20× Potential:
+LOW / MEDIUM / HIGH
+
+==================================================
+
+# 27. CONFIDENCE SCORE
+
+==================================================
+
+Opportunity Score and Confidence Score MUST be separate.
+
+Confidence factors:
+
+* data completeness
+* historical sample size
+* signal agreement
+* provider reliability
+* pattern match quality
+* wallet classification confidence
+* market data quality
+
+Example:
+
+Opportunity:
+93
+
+Confidence:
+67%
+
+This means:
+
+strong opportunity signals but insufficient evidence.
+
+==================================================
+
+# 28. FINAL RADAR SCORE
+
+==================================================
+
+Dashboard should show:
+
+RADAR SCORE
+0–100
+
+with:
+
+Opportunity
+Smart Money
+Momentum
+Liquidity
+Hype
+Risk
+Confidence
+
+Never hide the component scores.
+
+==================================================
+
+# 29. HISTORICAL PATTERN MATCHING
+
+==================================================
+
+Create historical pattern database.
+
+Every significant token lifecycle should generate snapshots.
+
+Examples:
+
+* launch
+* early activity
+* whale entry
+* momentum
+* breakout
+* peak
+* distribution
+* collapse
+* rug
+
+When a new token appears:
+
+Compare current state against historical states.
+
+Output:
+
+Pattern Match:
+87%
+
+Historical Sample:
+143 cases
+
+Historical outcomes:
+
+≥2×
+≥5×
+≥10×
+≥20×
+
+Also calculate failure rate.
+
+Do not cherry-pick successful examples.
+
+==================================================
+
+# 30. PRE-RUG PATTERN ENGINE
+
+==================================================
+
+Store token states before failures.
+
+Create patterns such as:
+
+PRE-RUG-0001
+
+Record:
+
+* conditions
+* time before event
+* holder changes
+* liquidity changes
+* whale behavior
+* developer activity
+* volume behavior
+* wallet clusters
+
+When a live token matches:
+
+show:
+
+⚠️ POSSIBLE PRE-RUG PATTERN
+
+with:
+
+Pattern confidence
+Historical sample
+False-positive rate
+
+==================================================
+
+# 31. COUNTERFACTUAL ENGINE
+
+==================================================
+
+Every generated signal becomes a prediction.
+
+Store:
+
+* signal timestamp
+* token
+* entry price
+* radar score
+* confidence
+* predicted direction
+* expected range
+* risk score
+* model version
+
+Then evaluate after:
+
+5m
+15m
+30m
+1h
+4h
+6h
+12h
+24h
+48h
+7d
+
+Compare prediction vs reality.
+
+Store:
+
+correct
+incorrect
+partial
+unknown
+
+==================================================
+
+# 32. MODEL LEARNING
+
+==================================================
+
+The system should become more useful over time through measured historical outcomes.
+
+IMPORTANT:
+
+Do NOT implement uncontrolled self-modifying AI.
+
+Use controlled learning:
+
+Data
+→ outcome
+→ evaluation
+→ statistical analysis
+→ candidate weight update
+→ validation
+→ new model version
+
+Every model has:
+
+model_version
+created_at
+weights
+training_window
+validation_window
+sample_count
+performance
+
+==================================================
+
+# 33. MODEL VERSIONING
+
+==================================================
+
+Example:
+
+Radar Model v1.0
+Radar Model v1.1
+Radar Model v1.2
+
+Never overwrite historical models.
+
+Every historical prediction must remember which model generated it.
+
+==================================================
+
+# 34. WATCHLIST
+
+==================================================
+
+Create permanent:
+
+⭐ WATCHLIST
+
+User can:
+
+ADD TOKEN
+
+REMOVE FROM ACTIVE VIEW
+
+but DO NOT DELETE historical record automatically.
+
+If user explicitly removes a token, preserve its historical record in database.
+
+Token history must remain available forever unless the user explicitly deletes it.
+
+Watchlist should show:
+
+* token
+* current score
+* previous score
+* score change
+* risk
+* whale activity
+* momentum
+* price
+* liquidity
+* status
+* last update
+
+==================================================
+
+# 35. WATCHLIST STATUS
+
+==================================================
+
+Statuses:
+
+ACTIVE
+HYPED
+BREAKOUT
+ACCUMULATING
+COOLING
+DISTRIBUTING
+HIGH RISK
+RUGGED
+DEAD
+SUCCESS
+UNKNOWN
+
+Status transitions must be stored historically.
+
+==================================================
+
+# 36. 6-HOUR WATCHLIST ANALYSIS
+
+==================================================
+
+Every 6 hours run:
+
+WATCHLIST INTELLIGENCE ANALYSIS
+
+For each token:
+
+Compare:
+
+current vs previous 6h
+current vs 24h
+current vs 7d
+historical pattern
+
+Generate explanation:
+
+WHY SCORE INCREASED
+
+WHY SCORE DECREASED
+
+WHY HYPE IS SUSTAINED
+
+WHY HYPE FAILED
+
+WHY RISK INCREASED
+
+WHY TOKEN RUGGED
+
+WHY TOKEN REMAINS STRONG
+
+==================================================
+
+# 37. PATTERN MEMORY
+
+==================================================
+
+Every 6-hour analysis can contribute evidence to:
+
+PATTERN MEMORY
+
+Examples:
+
+Pattern:
+High whale accumulation + organic holder growth + rising liquidity
+
+Outcome:
+historical performance
+
+Another:
+
+High hype + low organic activity + high wallet concentration
+
+Outcome:
+high failure probability
+
+Do not label a pattern as reliable until minimum sample thresholds are met.
+
+==================================================
+
+# 38. PAPER TRADING
+
+==================================================
+
+Starting virtual capital:
+
+**$100,000 USD**
+
+No real money.
+
+Each BUY:
+
+**EXACTLY $100 USD**
+
+No custom position size.
+
+Example:
+
+BUY TOKEN ABC
+
+Capital:
+$100
+
+Entry:
+$0.000123
+
+Quantity:
+calculated from actual market price
+
+Store exact timestamp.
+
+==================================================
+
+# 39. PAPER TRADING REAL-TIME P/L
+
+==================================================
+
+Update open positions using latest available market price.
+
+Display:
+
+Entry Price
+Current Price
+Quantity
+Invested
+Current Value
+P/L USD
+P/L %
+Peak P/L
+Drawdown
+Holding Time
+
+Example:
+
+Invested:
+$100
+
+Current:
+$127.40
+
+P/L:
++$27.40
+
+P/L:
++27.40%
+
+==================================================
+
+# 40. PAPER PORTFOLIO
+
+==================================================
+
+Dashboard:
+
+Starting Balance
+Available Cash
+Invested Capital
+Current Equity
+Realized P/L
+Unrealized P/L
+Total ROI
+Win Rate
+Loss Rate
+Average Winner
+Average Loser
+Best Trade
+Worst Trade
+Max Drawdown
+Total Trades
+
+==================================================
+
+# 41. PAPER TRADE EXECUTION
+
+==================================================
+
+BUY is simulated.
+
+SELL is simulated.
+
+Do NOT connect to a real wallet.
+
+No private key.
+
+No transaction signing.
+
+No real funds.
+
+Paper trade execution must use recorded market conditions.
+
+If liquidity/slippage data exists, simulate:
+
+* estimated slippage
+* price impact
+* trading fee
+
+==================================================
+
+# 42. PAPER TRADING HISTORY
+
+==================================================
+
+Store every trade permanently.
+
+Fields:
+
+trade_id
+token
+side
+amount
+price
+quantity
+fee
+slippage
+timestamp
+radar_score
+confidence
+risk_score
+model_version
+reason
+
+==================================================
+
+# 43. TOKEN PURCHASE DETAIL
+
+==================================================
+
+For every purchased token show an extremely detailed analysis page.
+
+At minimum:
+
+BASIC
+MARKET
+LIQUIDITY
+SECURITY
+SUPPLY
+HOLDERS
+WHALES
+SMART MONEY
+WALLETS
+DEVELOPER
+TRANSACTIONS
+BUY/SELL PRESSURE
+MOMENTUM
+HYPE
+SOCIAL
+WEBSITE
+TOKEN DISTRIBUTION
+RISK
+PATTERNS
+PAPER POSITION
+P/L
+SIGNAL HISTORY
+
+==================================================
+
+# 44. REAL-TIME TOKEN PAGE
+
+==================================================
+
+Charts:
+
+Price
+Volume
+Liquidity
+Market Cap
+Holder Count
+Whale Net Flow
+Buy/Sell Ratio
+Radar Score
+Risk Score
+
+All charts should support:
+
+5m
+15m
+1h
+4h
+24h
+7d
+
+where data exists.
+
+==================================================
+
+# 45. ALERT SYSTEM
+
+==================================================
+
+Create alerts for:
+
+NEW HIGH SCORE
+SCORE ACCELERATION
+WHALE ACCUMULATION
+WHALE DISTRIBUTION
+SMART MONEY ENTRY
+LIQUIDITY SURGE
+LIQUIDITY DROP
+HOLDER SURGE
+VOLUME SURGE
+RUG RISK INCREASE
+PRE-RUG PATTERN
+BREAKOUT
+DISTRIBUTION
+SIGNAL FAILURE
+
+==================================================
+
+# 46. MAIN DASHBOARD
+
+==================================================
+
+Dashboard should immediately answer:
+
+"Coin apa yang paling menarik SEKARANG?"
+
+Sections:
+
+1. TOP OPPORTUNITIES
+2. NEWLY DETECTED
+3. WHALE ACTIVITY
+4. SMART MONEY
+5. BREAKOUT CANDIDATES
+6. WATCHLIST MOVERS
+7. RISK ALERTS
+8. PRE-RUG ALERTS
+9. PAPER PORTFOLIO
+10. SYSTEM HEALTH
+
+Each token row:
+
+Rank
+Token
+Age
+MC
+Liquidity
+Radar
+Opportunity
+Smart Money
+Momentum
+Hype
+Risk
+Confidence
+Price Change
+Whale Flow
+Holder Growth
+Last Scan
+
+==================================================
+
+# 47. FILTERS
+
+==================================================
+
+Filters:
+
+Market Cap
+Liquidity
+Token Age
+Radar Score
+Opportunity Score
+Risk
+Smart Money
+Hype
+Momentum
+Holder Growth
+Whale Activity
+Volume
+Status
+
+Sorting:
+
+Highest Opportunity
+Highest Smart Money
+Highest Momentum
+Lowest Risk
+Highest Confidence
+Newest
+Largest Whale Flow
+
+==================================================
+
+# 48. SEARCH
+
+==================================================
+
+Search by:
+
+* token name
+* symbol
+* mint address
+* wallet address
+
+==================================================
+
+# 49. TOKEN COMPARISON
+
+==================================================
+
+Allow user to compare up to 5 tokens.
+
+Compare:
+
+MC
+Liquidity
+Age
+Holders
+Holder Growth
+Whale Flow
+Smart Money
+Momentum
+Hype
+Risk
+Confidence
+Radar
+Historical Pattern
+Potential
+
+==================================================
+
+# 50. DATABASE
+
+==================================================
+
+Use PostgreSQL or equivalent production-grade relational database.
+
+Minimum tables:
+
+tokens
+token_snapshots
+token_security
+token_supply
+token_liquidity
+token_holders
+holder_snapshots
+token_social
+token_websites
+
+wallets
+wallet_snapshots
+wallet_transactions
+wallet_positions
+wallet_performance
+wallet_clusters
+
+transactions
+whale_events
+smart_money_events
+bot_events
+developer_events
+
+signals
+signal_history
+score_history
+risk_events
+hype_events
+momentum_events
+
+watchlist
+watchlist_history
+
+paper_accounts
+paper_positions
+paper_trades
+paper_equity_snapshots
+
+patterns
+pattern_matches
+pattern_outcomes
+
+predictions
+prediction_outcomes
+
+model_versions
+model_metrics
+
+scan_runs
+scan_errors
+system_events
+
+==================================================
+
+# 51. DATA INTEGRITY
+
+==================================================
+
+Every important on-chain record should preserve:
+
+source
+timestamp
+slot
+signature where available
+block time where available
+confidence
+
+Never silently replace missing data with zero.
+
+Use:
+
+NULL / UNKNOWN
+
+when appropriate.
+
+==================================================
+
+# 52. API ARCHITECTURE
+
+==================================================
+
+Separate:
+
+Frontend
+Backend API
+Workers
+Scheduler
+Database
+Cache
+Data Providers
+
+Suggested:
+
+Frontend:
+React / Next.js
+
+Backend:
+TypeScript / Node.js
+
+Database:
+PostgreSQL
+
+Cache:
+Redis if needed
+
+Background workers:
+BullMQ / equivalent
+
+Charts:
+production charting library
+
+Authentication:
+secure email/password or provider authentication
+
+==================================================
+
+# 53. REAL-TIME UPDATE ARCHITECTURE
+
+==================================================
+
+Frontend should NOT poll the entire backend every 30 seconds.
+
+Backend processes new data.
+
+Frontend receives relevant updates through:
+
+WebSocket / Server-Sent Events
+
+Fallback:
+efficient polling.
+
+==================================================
+
+# 54. CACHING
+
+==================================================
+
+Cache expensive data.
+
+Use cache for:
+
+token metadata
+market data
+wallet profile
+historical calculations
+
+But do not cache data longer than its freshness requirement.
+
+Clearly show:
+
+Last updated:
+XX seconds ago
+
+==================================================
+
+# 55. ERROR HANDLING
+
+==================================================
+
+Never crash the application because one provider fails.
+
+Implement:
+
+retry
+timeout
+fallback
+circuit breaker
+logging
+
+If data source unavailable:
+
+show:
+
+Provider temporarily unavailable.
+
+Do not display fabricated values.
+
+==================================================
+
+# 56. SECURITY
+
+==================================================
+
+Implement:
+
+server-side API secrets
+input validation
+rate limiting
+authentication
+authorization
+SQL injection protection
+XSS protection
+CSRF protection where relevant
+secure cookies
+audit logs
+
+NEVER ask user for:
+
+seed phrase
+private key
+wallet private key
+
+The application is analytics/paper trading only.
+
+==================================================
+
+# 57. UI DESIGN
+
+==================================================
+
+Style:
+
+Professional
+Minimal
+Fast
+Data-dense
+Institutional analytics feel
+
+Primary:
+
+white / very dark text
+
+Use colors only for meaning:
+
+GREEN = positive
+RED = danger
+YELLOW = warning
+BLUE = information
+
+Avoid excessive decoration.
+
+Desktop and mobile responsive.
+
+==================================================
+
+# 58. RADAR CARD
+
+==================================================
+
+Each opportunity card:
+
+TOKEN
+PRICE
+MC
+LIQUIDITY
+AGE
+
+RADAR SCORE
+OPPORTUNITY
+SMART MONEY
+MOMENTUM
+HYPE
+RISK
+CONFIDENCE
+
+Whale:
+
+* $XXX
+
+Holder:
++XX%
+
+Volume:
++XXX%
+
+Status:
+
+🔥 HIGH OPPORTUNITY
+
+Button:
+
+VIEW TOKEN
+
+Button:
+
+ADD WATCHLIST
+
+Button:
+
+PAPER BUY $100
+
+==================================================
+
+# 59. EXPLAINABILITY
+
+==================================================
+
+Every score must have:
+
+WHY THIS SCORE?
+
+Example:
+
+Radar Score 91
+
+Positive:
+
+* Smart money accumulation
+* Volume acceleration
+* Holder growth
+* Liquidity growth
+
+Negative:
+
+* High holder concentration
+* Moderate developer risk
+
+The user must understand WHY.
+
+Never output a score without explanation.
+
+==================================================
+
+# 60. SIGNAL EVIDENCE
+
+==================================================
+
+Every major signal should have evidence.
+
+Example:
+
+WHALE ACCUMULATION
+
+Evidence:
+
+7 wallets
+$312,400 aggregate buy
+15-minute period
++18.4% whale net flow
+
+Each evidence item should be traceable to underlying records.
+
+==================================================
+
+# 61. DATA FRESHNESS
+
+==================================================
+
+Show:
+
+Last blockchain update
+Last market update
+Last holder update
+Last whale update
+Last social update
+Last model calculation
+
+Do not pretend real-time if the underlying source is delayed.
+
+==================================================
+
+# 62. SYSTEM HEALTH PAGE
+
+==================================================
+
+Admin/system page:
+
+RPC Status
+Market Provider
+Indexer
+Database
+Redis
+Scheduler
+Worker
+Last Scan
+Average Scan Duration
+Errors
+Tokens/Scan
+Transactions/Scan
+
+==================================================
+
+# 63. BACKTESTING
+
+==================================================
+
+Create a backtesting engine.
+
+User can select:
+
+date range
+minimum market cap
+minimum liquidity
+minimum score
+risk threshold
+
+Evaluate historical signals.
+
+Metrics:
+
+Total Signals
+Win Rate
+Average Return
+Median Return
+2× Rate
+5× Rate
+10× Rate
+20× Rate
+Max Drawdown
+False Positive Rate
+Average Time to Peak
+
+IMPORTANT:
+
+Avoid look-ahead bias.
+
+The model must only use information that would have been available at the signal timestamp.
+
+==================================================
+
+# 64. ANTI-LOOKAHEAD PROTECTION
+
+==================================================
+
+Historical simulation MUST NOT use future information.
+
+At timestamp T:
+
+only data <= T can be used.
+
+Do not use:
+
+future holder count
+future liquidity
+future price
+future wallet classification
+future outcome
+
+when generating historical signal at T.
+
+==================================================
+
+# 65. SURVIVORSHIP BIAS PROTECTION
+
+==================================================
+
+Do not backtest only currently successful tokens.
+
+Include:
+
+dead tokens
+rugged tokens
+failed launches
+successful tokens
+
+This is essential for honest evaluation.
+
+==================================================
+
+# 66. SCORE CALIBRATION
+
+==================================================
+
+Do not assume:
+
+Score 90 = 90% chance of success.
+
+If calibration is implemented, calculate actual empirical probabilities from historical outcomes.
+
+Example:
+
+Score bucket 90–100:
+
+Historical:
+≥2× = 61%
+≥5× = 28%
+≥10× = 11%
+
+Then display:
+
+Historical outcome rate
+
+rather than false certainty.
+
+==================================================
+
+# 67. LEARNING DASHBOARD
+
+==================================================
+
+Create:
+
+MODEL PERFORMANCE
+
+Model Version
+Signals
+Win Rate
+Average Return
+2×
+5×
+10×
+20×
+False Positive
+Max Drawdown
+
+PATTERN PERFORMANCE
+
+Most successful patterns
+Most dangerous patterns
+Most common failed signals
+Pre-rug patterns
+False whale signals
+False hype signals
+
+==================================================
+
+# 68. DATA QUALITY SCORE
+
+==================================================
+
+Every token should have:
+
+Data Quality:
+0–100
+
+Based on:
+
+market completeness
+holder completeness
+wallet completeness
+liquidity completeness
+social completeness
+historical depth
+
+Low data quality should reduce Confidence.
+
+==================================================
+
+# 69. FINAL DECISION STATES
+
+==================================================
+
+Do NOT simply show BUY/SELL.
+
+Use:
+
+WATCH
+EARLY OPPORTUNITY
+HIGH OPPORTUNITY
+EXTREME OPPORTUNITY
+RISK ALERT
+DISTRIBUTION
+AVOID
+INSUFFICIENT DATA
+
+Paper trading can have:
+
+PAPER BUY $100
+
+but this is not financial advice.
+
+==================================================
+
+# 70. CRITICAL SAFETY AGAINST FALSE SIGNALS
+
+==================================================
+
+Never generate a high opportunity signal solely because:
+
+price increased
+volume increased
+one whale bought
+social mentions increased
+
+Require multi-factor confirmation.
+
+Implement:
+
+minimum evidence threshold.
+
+Example:
+
+A signal requires at least N independent signal categories.
+
+Do not hard-code arbitrary thresholds if they cannot be justified; put them into configuration.
+
+==================================================
+
+# 71. SCORING ENGINE SHOULD BE CONFIGURABLE
+
+==================================================
+
+Create database/config:
+
+signal_weights
+
+thresholds
+
+minimum_sample_sizes
+
+risk_limits
+
+data_freshness_limits
+
+model_versions
+
+This allows future tuning without rewriting application code.
+
+==================================================
+
+# 72. WATCHLIST IMMORTALITY RULE
+
+==================================================
+
+IMPORTANT:
+
+WATCHLIST records must never disappear automatically.
+
+Even if:
+
+token rugpulls
+token dies
+token liquidity becomes zero
+token disappears from market
+token loses 99%
+provider no longer lists it
+
+Historical watchlist record remains.
+
+This data becomes training/evaluation data.
+
+==================================================
+
+# 73. 6-HOUR REPORT FORMAT
+
+==================================================
+
+Example:
+
+WATCHLIST INTELLIGENCE
+
+12 tokens analyzed
+
+4 improved
+5 weakened
+2 high-risk
+1 rugged
+
+TOKEN ABC
+
+Radar:
+82 → 91
+
+WHY:
+
+Whale accumulation +24%
+Holder growth +31%
+Liquidity +14%
+Organic activity strong
+
+RISK:
+
+Holder concentration increased 4%
+
+Pattern:
+
+87% similarity to historical accumulation pattern
+
+Historical outcomes:
+
+2×: 63%
+5×: 31%
+10×: 12%
+
+Do not state this as a prediction guarantee.
+
+==================================================
+
+# 74. SUPER-DEWA FEATURE — OPPORTUNITY VS RISK MATRIX
+
+==================================================
+
+Create 2D matrix:
+
+X:
+Opportunity
+
+Y:
+Risk
+
+Quadrants:
+
+HIGH OPPORTUNITY / LOW RISK
+HIGH OPPORTUNITY / HIGH RISK
+LOW OPPORTUNITY / LOW RISK
+LOW OPPORTUNITY / HIGH RISK
+
+This immediately shows the best candidates.
+
+==================================================
+
+# 75. SUPER-DEWA FEATURE — SIGNAL CONSENSUS
+
+==================================================
+
+Calculate:
+
+How many independent engines agree?
+
+Example:
+
+Whale:
+BULLISH
+
+Smart Money:
+BULLISH
+
+Momentum:
+BULLISH
+
+Holder:
+BULLISH
+
+Liquidity:
+BULLISH
+
+Risk:
+NEUTRAL
+
+Social:
+BULLISH
+
+Consensus:
+6/7
+
+This should increase Confidence.
+
+==================================================
+
+# 76. SUPER-DEWA FEATURE — EARLYNESS SCORE
+
+==================================================
+
+Create:
+
+EARLYNESS SCORE 0–100
+
+Factors:
+
+token age
+market cap
+holder growth
+volume acceleration
+whale entry timing
+momentum stage
+historical lifecycle position
+
+A token already +2,000% should generally receive lower Earlyness than an otherwise similar token at an earlier stage.
+
+==================================================
+
+# 77. SUPER-DEWA FEATURE — SIGNAL DECAY
+
+==================================================
+
+Signals should expire.
+
+Example:
+
+A whale purchase from 8 hours ago should not carry the same weight as one from 30 seconds ago.
+
+Create time decay.
+
+Every signal has:
+
+created_at
+age
+current_weight
+
+==================================================
+
+# 78. SUPER-DEWA FEATURE — MARKET REGIME
+
+==================================================
+
+Detect overall Solana market regime:
+
+BULLISH
+NEUTRAL
+BEARISH
+HIGH VOLATILITY
+
+The same token pattern may perform differently in different market regimes.
+
+Store market regime at signal time.
+
+Use it in historical comparisons.
+
+==================================================
+
+# 79. SUPER-DEWA FEATURE — LIQUIDITY SURVIVAL
+
+==================================================
+
+Do not only measure liquidity now.
+
+Measure:
+
+Can current liquidity survive increased selling?
+
+Estimate:
+
+$1K sell
+$5K sell
+$10K sell
+$25K sell
+$50K sell
+
+where provider data permits.
+
+Display estimated impact.
+
+==================================================
+
+# 80. SUPER-DEWA FEATURE — WHALE QUALITY
+
+==================================================
+
+Not all whales are equal.
+
+Classify:
+
+Tier A:
+historically strong
+
+Tier B:
+moderate
+
+Tier C:
+unknown
+
+Tier D:
+poor historical performance
+
+Whale activity should be weighted by whale quality.
+
+==================================================
+
+# 81. SUPER-DEWA FEATURE — FALSE HYPE DETECTOR
+
+==================================================
+
+Detect:
+
+High social
+High volume
+Low holder quality
+Low organic activity
+High bot probability
+High concentration
+
+Output:
+
+⚠️ POSSIBLE FALSE HYPE
+
+==================================================
+
+# 82. SUPER-DEWA FEATURE — ACCUMULATION QUALITY
+
+==================================================
+
+Differentiate:
+
+Organic accumulation
+
+from:
+
+Coordinated/artificial accumulation.
+
+Use:
+
+wallet diversity
+funding relationships
+timing
+trade size distribution
+holding behavior
+selling behavior
+
+==================================================
+
+# 83. SUPER-DEWA FEATURE — SIGNAL JOURNAL
+
+==================================================
+
+Every signal should automatically create a journal entry.
+
+Example:
+
+TOKEN ABC
+
+10:30
+Radar 78
+
+11:00
+Radar 84
+
+11:30
+Radar 91
+
+12:00
+Paper Buy $100
+
+13:00
+Radar 88
+
+14:00
+Distribution warning
+
+This becomes a complete decision timeline.
+
+==================================================
+
+# 84. UX REQUIREMENT
+
+==================================================
+
+User should be able to understand the most important information in under 10 seconds.
+
+Dashboard priority:
+
+1. strongest opportunity
+2. strongest risk
+3. whale movement
+4. score changes
+5. paper portfolio
+
+Detailed information remains one click away.
+
+==================================================
+
+# 85. NO FAKE DATA
+
+==================================================
+
+ABSOLUTE REQUIREMENT:
+
+Do not create fake:
+
+prices
+holders
+liquidity
+transactions
+wallets
+whales
+social metrics
+market caps
+P/L
+signals
+
+For development/testing only, seed data may be used, but it MUST be clearly labeled:
+
+DEMO DATA
+
+Production mode must use real data.
+
+==================================================
+
+# 86. DEVELOPMENT MODE
+
+==================================================
+
+Provide:
+
+DEMO MODE
+LIVE MODE
+
+Demo mode:
+controlled seed dataset.
+
+Live mode:
+real providers.
+
+Never mix them silently.
+
+==================================================
+
+# 87. TESTING
+
+==================================================
+
+Create tests for:
+
+transaction parser
+token parser
+holder calculations
+whale detection
+wallet classification
+cluster detection
+bot detection
+risk scoring
+hype scoring
+momentum scoring
+radar scoring
+paper trading
+P/L
+historical evaluation
+pattern matching
+scheduler
+duplicate prevention
+
+==================================================
+
+# 88. ACCEPTANCE TEST
+
+==================================================
+
+Application is NOT COMPLETE unless:
+
+[ ] App runs without fatal errors
+[ ] Database migrations work
+[ ] Real provider connection works
+[ ] Auto scan works every 30 seconds
+[ ] Manual scan works
+[ ] Incremental scan works
+[ ] Duplicate transactions are prevented
+[ ] Token discovery works
+[ ] Token detail works
+[ ] Holder data works
+[ ] Whale detection works
+[ ] Smart-money scoring works
+[ ] Liquidity analysis works
+[ ] Risk engine works
+[ ] Hype engine works
+[ ] Momentum engine works
+[ ] Watchlist persists permanently
+[ ] $100,000 paper balance works
+[ ] Every paper buy = exactly $100
+[ ] Real-time P/L works
+[ ] Paper sell works
+[ ] Trade history works
+[ ] 6-hour analysis scheduler works
+[ ] Pattern memory works
+[ ] Prediction outcomes work
+[ ] Backtesting works
+[ ] Model versioning works
+[ ] No look-ahead bias
+[ ] No survivorship bias
+[ ] No fake production data
+[ ] Error handling works
+[ ] Mobile UI works
+[ ] Desktop UI works
+
+==================================================
+
+# 89. IMPLEMENTATION RULE
+
+==================================================
+
+Do not stop after creating UI.
+
+You must implement:
+
+frontend
+backend
+database
+API
+workers
+scheduler
+data ingestion
+processing
+scoring
+storage
+real-time updates
+paper trading
+historical analysis
+tests
+
+If an external API requires credentials, create a clear:
+
+SETTINGS → API CONFIGURATION
+
+page and environment variable documentation.
+
+==================================================
+
+# 90. BUILD ORDER
+
+==================================================
+
+Build in this order:
+
+PHASE 1
+Project architecture
+Database
+Authentication
+Configuration
+
+PHASE 2
+Solana provider
+Data ingestion
+Transaction processing
+
+PHASE 3
+Token intelligence
+Market intelligence
+Holder intelligence
+
+PHASE 4
+Wallet intelligence
+Whale engine
+Smart money
+Cluster detection
+Bot detection
+
+PHASE 5
+Risk engine
+Hype engine
+Momentum engine
+Scoring
+
+PHASE 6
+Dashboard
+Token pages
+Watchlist
+Alerts
+
+PHASE 7
+Paper trading
+
+PHASE 8
+Historical snapshots
+Pattern engine
+Prediction engine
+
+PHASE 9
+6-hour intelligence
+Learning
+Backtesting
+
+PHASE 10
+Optimization
+Testing
+Security
+Performance
+Production hardening
+
+==================================================
+
+# 91. PERFORMANCE
+
+==================================================
+
+Optimize for large-scale token monitoring.
+
+Do not repeatedly recalculate expensive historical metrics.
+
+Use:
+
+materialized aggregates
+incremental calculations
+cache
+background jobs
+database indexes
+
+Index at minimum:
+
+mint_address
+wallet_address
+transaction_signature
+timestamp
+slot
+radar_score
+risk_score
+watchlist status
+
+==================================================
+
+# 92. OBSERVABILITY
+
+==================================================
+
+Add:
+
+structured logging
+error tracking
+job metrics
+provider metrics
+scan metrics
+
+Track:
+
+scan duration
+API latency
+failed requests
+database latency
+worker failures
+
+==================================================
+
+# 93. ADMIN CONTROLS
+
+==================================================
+
+Admin can configure:
+
+scan interval
+provider
+API keys
+score weights
+risk thresholds
+minimum sample size
+signal decay
+paper trading settings
+data retention
+
+DEFAULT:
+
+scan = 30 seconds
+watchlist analysis = 6 hours
+starting virtual capital = $100,000
+purchase amount = $100
+
+==================================================
+
+# 94. FINAL UI MENU
+
+==================================================
+
+MAIN NAVIGATION:
+
+Dashboard
+
+Radar
+
+New Tokens
+
+Whales
+
+Smart Money
+
+Watchlist
+
+Paper Portfolio
+
+Trades
+
+Alerts
+
+Patterns
+
+Backtest
+
+Model Intelligence
+
+Token Search
+
+Settings
+
+System Health
+
+==================================================
+
+# 95. FINAL DASHBOARD PHILOSOPHY
+
+==================================================
+
+The system must answer five questions:
+
+1.
+
+WHAT TOKEN IS INTERESTING NOW?
+
+2.
+
+WHY IS IT INTERESTING?
+
+3.
+
+WHO IS BUYING IT?
+
+4.
+
+WHAT COULD MAKE THE SIGNAL FAIL?
+
+5.
+
+HAS THIS PATTERN WORKED HISTORICALLY?
+
+If the system cannot answer one of these because data is unavailable, explicitly say:
+
+INSUFFICIENT DATA.
+
+==================================================
+
+# 96. IMPORTANT FINANCIAL DISCLAIMER
+
+==================================================
+
+Display clearly:
+
+"This application provides blockchain analytics and paper-trading research signals. Scores and historical patterns do not guarantee future returns and are not financial advice."
+
+==================================================
+
+# 97. FINAL COMPLETION REQUIREMENT
+
+==================================================
+
+DO NOT respond:
+
+"Here is a prototype."
+
+DO NOT respond:
+
+"Some features are placeholders."
+
+DO NOT leave TODOs for core functionality.
+
+DO NOT generate fake production data.
+
+DO NOT omit backend logic.
+
+DO NOT omit database logic.
+
+DO NOT omit scheduler.
+
+DO NOT omit real-time data processing.
+
+DO NOT omit paper trading.
+
+DO NOT omit historical learning.
+
+DO NOT omit risk detection.
+
+DO NOT omit error handling.
+
+If a requested data source is unavailable, implement the provider abstraction and graceful UNKNOWN state rather than fabricating information.
+
+At the end, provide:
+
+1. Application URL
+2. Admin URL
+3. Test account
+4. Environment variables required
+5. Connected data providers
+6. Database migration status
+7. Scheduler status
+8. Current scan status
+9. Test results
+10. Known external limitations only
+
+The application must be runnable and operational.
+
+==================================================
+
+# FINAL PRODUCT DEFINITION
+
+==================================================
+
+The finished product is:
+
+**SOLANA 20× RADAR**
+
+A real-time Solana intelligence platform that continuously scans the ecosystem every 30 seconds, discovers early opportunities, tracks whales and smart money, evaluates token quality, detects potential manipulation/rug patterns, analyzes liquidity/holders/momentum/social activity, permanently remembers watchlisted tokens, simulates $100 paper purchases from a $100,000 virtual portfolio, tracks real-time P/L, evaluates historical predictions, performs six-hour watchlist intelligence reviews, stores successful and failed patterns, and improves its scoring model through controlled historical evaluation.
+
+PRIMARY OBJECTIVE:
+
+**Find asymmetric opportunities as early as possible while aggressively filtering false hype, manipulation, illiquidity, and rug-risk.**
+
+BUILD THE COMPLETE APPLICATION NOW.

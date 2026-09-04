@@ -1,0 +1,65 @@
+                         SOLANA NETWORK
+                              │
+                ┌─────────────┴─────────────┐
+                │                           │
+          REAL-TIME DATA                HISTORICAL DATA
+          STREAM / RPC                   DATABASE
+                │                           │
+                └─────────────┬─────────────┘
+                              ↓
+                    ┌─────────────────┐
+                    │ DATA INGESTION  │
+                    │ ENGINE          │
+                    └────────┬────────┘
+                             ↓
+                 ┌───────────────────────┐
+                 │ TRANSACTION PARSER &  │
+                 │ NORMALIZATION ENGINE  │
+                 └───────────┬───────────┘
+                             ↓
+        ┌────────────────────┼────────────────────┐
+        ↓                    ↓                    ↓
+ TOKEN INTELLIGENCE     WALLET INTELLIGENCE   MARKET INTELLIGENCE
+        │                    │                    │
+        ↓                    ↓                    ↓
+ Token Safety             Whale Detection      Price
+ Holder Analysis          Smart Money          Volume
+ Liquidity                Wallet Cluster       Liquidity
+ Developer                 Bot Detection        Momentum
+ Distribution              Insider Detection   Buy/Sell
+        │                    │                    │
+        └────────────────────┼────────────────────┘
+                             ↓
+                    ┌──────────────────┐
+                    │ SIGNAL ENGINE    │
+                    └────────┬─────────┘
+                             ↓
+       ┌─────────────────────┼─────────────────────┐
+       ↓                     ↓                     ↓
+ OPPORTUNITY SCORE     RISK SCORE           SMART MONEY SCORE
+       │                     │                     │
+       └─────────────────────┼─────────────────────┘
+                             ↓
+                    ┌──────────────────┐
+                    │ RADAR SCORE      │
+                    │ 0–100            │
+                    └────────┬─────────┘
+                             ↓
+                    ┌──────────────────┐
+                    │ WATCHLIST        │
+                    │ PERMANENT        │
+                    └────────┬─────────┘
+                             ↓
+              ┌──────────────┴──────────────┐
+              ↓                             ↓
+       PAPER TRADING                 6-HOUR ANALYSIS
+       $100,000 VIRTUAL              & LEARNING ENGINE
+              │                             │
+              ↓                             ↓
+       REAL-TIME P/L                 PATTERN DATABASE
+              │                             │
+              └──────────────┬──────────────┘
+                             ↓
+                    SELF-LEARNING ENGINE
+                             ↓
+                    IMPROVED SIGNAL MODEL

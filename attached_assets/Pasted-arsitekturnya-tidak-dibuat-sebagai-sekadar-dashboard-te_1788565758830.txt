@@ -1,0 +1,831 @@
+arsitekturnya tidak dibuat sebagai sekadar dashboard, tetapi sebagai self-learning Solana intelligence system.
+
+🧠 SOLANA 20× RADAR — MASTER ARCHITECTURE
+                         SOLANA NETWORK
+                              │
+                ┌─────────────┴─────────────┐
+                │                           │
+          REAL-TIME DATA                HISTORICAL DATA
+          STREAM / RPC                   DATABASE
+                │                           │
+                └─────────────┬─────────────┘
+                              ↓
+                    ┌─────────────────┐
+                    │ DATA INGESTION  │
+                    │ ENGINE          │
+                    └────────┬────────┘
+                             ↓
+                 ┌───────────────────────┐
+                 │ TRANSACTION PARSER &  │
+                 │ NORMALIZATION ENGINE  │
+                 └───────────┬───────────┘
+                             ↓
+        ┌────────────────────┼────────────────────┐
+        ↓                    ↓                    ↓
+ TOKEN INTELLIGENCE     WALLET INTELLIGENCE   MARKET INTELLIGENCE
+        │                    │                    │
+        ↓                    ↓                    ↓
+ Token Safety             Whale Detection      Price
+ Holder Analysis          Smart Money          Volume
+ Liquidity                Wallet Cluster       Liquidity
+ Developer                 Bot Detection        Momentum
+ Distribution              Insider Detection   Buy/Sell
+        │                    │                    │
+        └────────────────────┼────────────────────┘
+                             ↓
+                    ┌──────────────────┐
+                    │ SIGNAL ENGINE    │
+                    └────────┬─────────┘
+                             ↓
+       ┌─────────────────────┼─────────────────────┐
+       ↓                     ↓                     ↓
+ OPPORTUNITY SCORE     RISK SCORE           SMART MONEY SCORE
+       │                     │                     │
+       └─────────────────────┼─────────────────────┘
+                             ↓
+                    ┌──────────────────┐
+                    │ RADAR SCORE      │
+                    │ 0–100            │
+                    └────────┬─────────┘
+                             ↓
+                    ┌──────────────────┐
+                    │ WATCHLIST        │
+                    │ PERMANENT        │
+                    └────────┬─────────┘
+                             ↓
+              ┌──────────────┴──────────────┐
+              ↓                             ↓
+       PAPER TRADING                 6-HOUR ANALYSIS
+       $100,000 VIRTUAL              & LEARNING ENGINE
+              │                             │
+              ↓                             ↓
+       REAL-TIME P/L                 PATTERN DATABASE
+              │                             │
+              └──────────────┬──────────────┘
+                             ↓
+                    SELF-LEARNING ENGINE
+                             ↓
+                    IMPROVED SIGNAL MODEL
+1. AUTO SCANNER
+
+Default interval: 30 detik.
+
+Setiap siklus:
+
+SCAN
+ ↓
+Discover new tokens
+ ↓
+Update existing tokens
+ ↓
+Update whale transactions
+ ↓
+Update liquidity
+ ↓
+Update holders
+ ↓
+Update volume
+ ↓
+Update price
+ ↓
+Update risk
+ ↓
+Recalculate scores
+ ↓
+Compare previous state
+ ↓
+Generate signal
+
+Ada dua mode:
+
+AUTO SCAN
+
+Berjalan otomatis setiap 30 detik.
+
+MANUAL SCAN
+
+User menekan:
+
+🔄 SCAN NOW
+
+Kemudian sistem menjalankan scanning tanpa harus menunggu interval berikutnya.
+
+Penting: sistem harus menggunakan incremental scanning/cache agar tidak menarik seluruh blockchain setiap 30 detik. Ini akan sangat menghemat API/RPC cost.
+
+2. PERMANENT WATCHLIST
+
+Saya akan membuatnya berbeda dari watchlist biasa.
+
+WATCHLIST = Permanent Research Memory
+
+Ketika token dimasukkan:
+
+⭐ ADD TO WATCHLIST
+
+token tidak pernah dihapus otomatis.
+
+Bahkan jika:
+
+rugpull
+liquidity = 0
+harga turun 99%
+token mati
+developer menghilang
+trading berhenti
+
+record tetap ada.
+
+Karena token tersebut justru menjadi data pembelajaran berharga.
+
+Status token
+WATCHLIST
+│
+├── 🟢 ACTIVE
+├── 🔥 HYPED
+├── 🚀 BREAKOUT
+├── 🟡 COOLING
+├── 🔴 DISTRIBUTION
+├── ☠️ RUGGED
+├── ⚫ DEAD
+└── 🏆 SUCCESS
+
+Jadi 6 bulan kemudian kita bisa bertanya:
+
+"Dari 10.000 token yang pernah masuk Watchlist, karakteristik apa yang paling sering mendahului 10×?"
+
+3. VIRTUAL FUND
+
+Starting balance:
+
+💰 $100,000
+
+Ini paper trading, bukan uang sungguhan.
+
+Setiap posisi:
+
+$100 FIXED PER PURCHASE
+
+Contoh:
+
+Virtual Balance
+$100,000
+
+BUY TOKEN ABC
+Position: $100
+
+Entry:
+$0.0000421
+
+Current:
+$0.0000512
+
+P/L:
++21.62%
+
+Position Value:
+$121.62
+
+Jika 50 pembelian:
+
+50 × $100 = $5,000 deployed.
+
+Sisa:
+
+$95,000
+
+4. PAPER TRADING HARUS BENAR-BENAR REALISTIS
+
+Jangan sekadar:
+
+harga naik → profit.
+
+Simulasi harus memperhitungkan:
+
+entry price
+exit price
+liquidity
+slippage
+trading fee
+price impact
+timestamp
+actual market conditions
+token liquidity
+failed/illiquid exit
+unrealized P/L
+realized P/L
+
+Ini penting agar hasil testing tidak terlihat bagus secara palsu.
+
+Dashboard
+PAPER PORTFOLIO
+
+Starting Capital       $100,000
+Current Equity          $108,742
+Available Cash           $96,400
+Invested                  $8,600
+
+Total P/L                +$8,742
+ROI                       +8.74%
+
+Win Rate                  63.2%
+Trades                       86
+Winners                      54
+Losers                       32
+
+Best Trade               +487%
+Worst Trade               -91%
+5. TOKEN INTELLIGENCE PAGE
+
+Ini akan menjadi salah satu halaman paling penting.
+
+Setiap token yang dibeli atau masuk watchlist mempunyai Token Intelligence Profile.
+
+BASIC
+Token name
+Symbol
+Contract/Mint address
+Logo
+Decimals
+Supply
+Circulating supply
+Market cap
+FDV
+Price
+Age
+Launch timestamp
+LIQUIDITY
+Total liquidity
+Liquidity change
+LP size
+LP concentration
+Liquidity/MC
+liquidity depth
+estimated slippage
+buy impact
+sell impact
+LP additions
+LP removals
+TOKEN SECURITY
+Mint authority
+Freeze authority
+Metadata authority
+Renounced status
+Burned supply
+Burn events
+Token extensions
+Transfer restrictions
+suspicious permissions
+
+Catatan penting: istilah seperti renounce dan burn tidak boleh hanya berupa boolean sederhana. Sistem harus menyimpan bukti on-chain + timestamp + transaction signature.
+
+6. HOLDER INTELLIGENCE
+
+Bukan hanya:
+
+Top 10 holders.
+
+Kita buat:
+
+Holder Distribution
+Holder #1       7.82%
+Holder #2       5.41%
+Holder #3       3.92%
+...
+Top 10          31.4%
+Top 20          42.7%
+
+Kemudian klasifikasi:
+
+Dev
+Insider
+Smart Money
+Whale
+Sniper
+Bundler
+LP
+Exchange
+Burn address
+Unknown
+
+Dan:
+
+Holder Dynamics
+New holders/30s
+New holders/5m
+New holders/1h
+Holder growth %
+Whale accumulation
+Whale distribution
+concentration change
+top-holder balance changes
+7. WALLET INTELLIGENCE
+
+Setiap whale yang terdeteksi memiliki profile.
+
+WALLET
+
+Wallet Score          94/100
+Smart Money           91/100
+
+Historical Trades       327
+Winning Trades          241
+Win Rate               73.7%
+
+Average ROI            +38.2%
+Median ROI             +14.7%
+
+Best Trade             +2,840%
+Average Hold           3.7 days
+
+Current Holdings         17
+Current Positions         8
+
+Lalu sistem mengetahui:
+
+"Wallet ini biasanya membeli token pada fase awal atau setelah breakout?"
+
+Itu jauh lebih bernilai daripada sekadar mengetahui wallet tersebut kaya.
+
+8. SOCIAL + WEBSITE INTELLIGENCE
+
+Token profile juga:
+
+Website
+website URL
+domain age jika tersedia
+website availability
+project description
+documentation
+whitepaper
+GitHub
+team information
+Social
+X/Twitter
+Telegram
+Discord
+Reddit
+YouTube
+follower count
+engagement
+mention velocity
+sentiment
+social growth
+
+Bukan hanya jumlah follower.
+
+Yang dicari adalah:
+
+ACCELERATION
+
+Misalnya:
+
+X mentions
+
+10/hour
+ ↓
+28/hour
+ ↓
+71/hour
+ ↓
+190/hour
+
+Itu jauh lebih penting daripada memiliki 100K follower yang tidak aktif.
+
+9. HYPE ENGINE
+
+Saya akan membuat Hype Score tersendiri.
+
+Komponen:
+
+Social Velocity
+Volume Velocity
+Holder Velocity
+Whale Velocity
+Search/Attention Velocity
+Transaction Velocity
+Liquidity Velocity
+Price Velocity
+
+Jadi:
+
+Hype ≠ Price Increase
+
+Token bisa mempunyai:
+
+Hype Score 94
+
+sementara:
+
+Price +3%
+
+dan justru itu bisa menjadi kondisi menarik.
+
+10. RUGPULL ENGINE
+
+Ini harus berjalan sebelum sistem memberikan high-conviction signal.
+
+Risk model:
+
+Developer Risk
+Holder Concentration
+Liquidity Risk
+Mint Risk
+Freeze Risk
+Insider Risk
+Bundler Risk
+Sniper Risk
+Wash Trading Risk
+Wallet Cluster Risk
+Sellability Risk
+Contract/Extension Risk
+
+Output:
+
+RUG RISK
+
+0–20 = LOW
+21–40 = MODERATE
+41–60 = HIGH
+61–80 = VERY HIGH
+81–100 = EXTREME
+
+11. SUPER-DEWA FEATURE #1 — SIGNAL CHANGE DETECTOR
+
+Ini saya sangat rekomendasikan.
+
+Jangan hanya melihat score.
+
+Sistem menyimpan score history.
+
+Contoh:
+
+09:00   Score 61
+09:30   Score 67
+10:00   Score 74
+10:30   Score 81
+11:00   Score 89
+
+Maka sistem mengatakan:
+
+🚨 SIGNAL ACCELERATION
+
+Bukan hanya:
+
+Score = 89.
+
+Karena arah perubahan score sering lebih informatif daripada nilai absolut.
+
+12. SUPER-DEWA FEATURE #2 — PRE-RUG DETECTOR
+
+Ini sangat penting untuk permintaan Anda mengenai analisis:
+
+"Kenapa token yang awalnya hype akhirnya rugpull?"
+
+Sistem menyimpan seluruh keadaan token sebelum rug.
+
+Kemudian mencari:
+
+H-60
+H-30
+H-15
+H-5
+H-1
+RUG
+
+Misalnya ditemukan pola:
+
+17 menit sebelum rugpull, insider concentration meningkat.
+
+9 menit sebelum rugpull, LP mulai turun.
+
+4 menit sebelum rugpull, developer wallet mentransfer token.
+
+Sistem kemudian menyimpan:
+
+PRE-RUG PATTERN #02481
+
+Sehingga kejadian berikutnya bisa dikenali sebelum rug terjadi.
+
+13. SUPER-DEWA FEATURE #3 — PATTERN MEMORY
+
+Ini yang akan membuat sistem semakin pintar.
+
+Setiap token menghasilkan:
+
+TOKEN LIFECYCLE
+
+Launch
+ ↓
+Discovery
+ ↓
+Early Hype
+ ↓
+Whale Entry
+ ↓
+Expansion
+ ↓
+Peak
+ ↓
+Distribution
+ ↓
+Collapse
+
+Semua state disimpan.
+
+Kemudian sistem membandingkan token baru dengan historical patterns.
+
+14. SUPER-DEWA FEATURE #4 — COUNTERFACTUAL ENGINE
+
+Ini lebih kuat lagi.
+
+Setiap signal yang diberikan disimpan:
+
+Apa yang diprediksi?
+
+Kemudian beberapa jam/hari kemudian:
+
+Apa yang benar-benar terjadi?
+
+Contoh:
+
+Prediction:
+
+Token ABC
+Expected:
++100% to +300%
+
+Actual after 24h:
+-87%
+
+Sistem mencari:
+
+WHY WRONG?
+
+Misalnya:
+
+whale ternyata bot
+volume ternyata wash trading
+holder growth fake
+liquidity terlalu tipis
+insider concentration underestimated
+
+Lalu bobot model dikoreksi.
+
+15. SUPER-DEWA FEATURE #5 — MODEL VERSIONING
+
+Jangan biarkan sistem mengubah model secara liar.
+
+Setiap perubahan diberi versi:
+
+Radar Model v1.0
+Radar Model v1.1
+Radar Model v1.2
+Radar Model v2.0
+
+Dan setiap prediction mencatat:
+
+menggunakan model versi berapa.
+
+Ini sangat penting untuk mengukur apakah sistem benar-benar menjadi lebih baik.
+
+16. 6-HOUR INTELLIGENCE REPORT
+
+Setiap 6 jam, Watchlist dianalisis ulang.
+
+Contoh:
+
+WATCHLIST INTELLIGENCE — 06:00
+
+12 tokens improved
+
+7 tokens deteriorated
+
+3 tokens entered high-risk
+
+4 tokens showed strong accumulation
+
+2 tokens showed pre-rug pattern
+
+Kemudian setiap token mendapat penjelasan:
+
+Why Score Increased
+
+Whale accumulation +18%
+Holder growth +27%
+Organic volume +43%
+Liquidity +12%
+
+atau:
+
+Why Score Collapsed
+
+Whale distribution detected
+LP decreased 31%
+Insider concentration increased
+Sell pressure +240%
+
+17. SISTEM HARUS MEMISAHKAN DATA DAN INTERPRETASI
+
+Ini prinsip arsitektur penting.
+
+RAW DATA
+   ↓
+NORMALIZED DATA
+   ↓
+DERIVED METRICS
+   ↓
+SIGNALS
+   ↓
+SCORE
+   ↓
+RECOMMENDATION
+
+Jangan biarkan AI langsung membaca blockchain lalu berkata:
+
+"Token ini bagus."
+
+AI hanya boleh bekerja setelah data terstruktur.
+
+Ini membuat hasil jauh lebih konsisten dan dapat diaudit.
+
+18. DATABASE UTAMA
+
+Minimal:
+
+tokens
+token_snapshots
+token_transactions
+token_security
+token_liquidity
+token_holders
+holder_snapshots
+
+wallets
+wallet_transactions
+wallet_positions
+wallet_performance
+wallet_clusters
+
+whale_events
+smart_money_events
+hype_events
+risk_events
+
+watchlist
+watchlist_snapshots
+
+paper_portfolio
+paper_positions
+paper_trades
+
+signals
+signal_history
+predictions
+prediction_outcomes
+
+patterns
+pattern_matches
+pattern_outcomes
+
+model_versions
+score_history
+system_events
+
+Snapshot history sangat penting.
+
+Jangan hanya menyimpan keadaan token sekarang.
+
+Kita harus bisa menjawab:
+
+"Bagaimana kondisi token ini 30 menit sebelum naik?"
+
+atau:
+
+"Bagaimana kondisi 10 menit sebelum rugpull?"
+
+19. CORE ENGINE
+
+Saya akan membagi scoring menjadi:
+
+                 RADAR ENGINE
+                      │
+       ┌──────────────┼──────────────┐
+       ↓              ↓              ↓
+ OPPORTUNITY        QUALITY          RISK
+       │              │              │
+       ↓              ↓              ↓
+ Momentum        Smart Money       Rug
+ Hype            Organic           Insider
+ Volume          Holder Quality    Liquidity
+ Whale           Distribution      Manipulation
+ Catalyst        Wallet Quality    Sellability
+       │              │              │
+       └──────────────┼──────────────┘
+                      ↓
+               FINAL RADAR SCORE
+                      ↓
+             CONFIDENCE SCORE
+
+Final Score dan Confidence jangan disatukan.
+
+Contoh:
+
+Radar Score = 94
+Confidence = 61%
+
+berarti sinyal terlihat sangat menarik tetapi bukti belum cukup.
+
+Sebaliknya:
+
+Radar Score = 86
+Confidence = 94%
+
+bisa lebih layak diprioritaskan.
+
+20. Fitur paling penting untuk target 10×/20×
+
+Saya tambahkan satu metrik khusus:
+
+MULTIPLIER POTENTIAL SCORE
+
+Bukan prediksi pasti.
+
+Model menilai:
+
+Apakah token masih memiliki ruang untuk bergerak besar?
+
+Faktor:
+
+current MC
+liquidity
+volume
+holder expansion
+whale accumulation
+social acceleration
+token age
+comparable historical patterns
+supply structure
+market regime
+
+Output:
+
+2× Potential     HIGH
+5× Potential     HIGH
+10× Potential    MEDIUM-HIGH
+20× Potential    MEDIUM
+
+Ini lebih jujur dan lebih berguna daripada sistem mengatakan:
+
+"TOKEN X pasti 20×."
+
+21. Yang saya anggap sebagai "otak" aplikasi
+
+Pada akhirnya sistem memiliki tiga memori:
+
+MEMORY 1 — Market Memory
+
+Semua aktivitas token.
+
+MEMORY 2 — Wallet Memory
+
+Semua perilaku whale/smart money.
+
+MEMORY 3 — Pattern Memory
+
+Semua pola:
+
+success + failure + rug + false signal.
+
+Kemudian:
+
+NEW TOKEN
+    ↓
+CURRENT MARKET DATA
+    ↓
+WALLET HISTORY
+    ↓
+SIMILAR HISTORICAL PATTERNS
+    ↓
+RISK CHECK
+    ↓
+SIGNAL
+    ↓
+PAPER TRADE
+    ↓
+OUTCOME
+    ↓
+LEARNING
+    ↓
+PATTERN MEMORY UPDATED
+
+Dengan desain ini, $100.000 virtual fund bukan sekadar fitur demo. Ia menjadi salah satu mekanisme untuk menguji apakah radar benar-benar menghasilkan keputusan yang lebih baik dari waktu ke waktu.
+
+Prinsip akhirnya
+
+Jangan mengoptimalkan sistem untuk "menemukan coin yang sudah naik".
+
+Optimalkan untuk:
+
+menemukan perubahan perilaku on-chain + smart money + organic demand + liquidity + social momentum + token quality sedini mungkin, lalu menguji apakah kombinasi tersebut secara historis menghasilkan asymmetric upside dengan risiko yang masih dapat diterima.
+
+Itulah arsitektur yang menurut saya paling tepat sebelum kita masuk ke tahap 1 prompt super-detail untuk membangun aplikasi full real-work
