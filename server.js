@@ -70,6 +70,7 @@ function freshState() {
     scanRunning: false,
     tokens: DEMO_TOKENS,
     whaleActivity,
+    scanRuns: [],
     watchlist: [DEMO_TOKENS[0].mint, DEMO_TOKENS[2].mint],
     watchlistHistory: [],
     alerts: [

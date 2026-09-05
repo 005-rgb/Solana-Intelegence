@@ -159,14 +159,18 @@ async function readState(fallback) {
     return fallback;
   }
 
-  const [tokens, activeWatchlist, events, alerts, patterns, account, whalePoints] = await Promise.all([
-    prisma.token.findMany({ orderBy: [{ radar: "desc" }, { updatedAt: "desc" }] }),
-    prisma.watchlistEntry.findMany({ where: { active: true }, include: { token: true } }),
+  const tokenFilter = radar.mode === "live"
+    ? { providerUrl: { not: null } }
+    : { mint: { in: (fallback.tokens || []).map(item => item.mint) } };
+  const [tokens, activeWatchlist, events, alerts, patterns, account, whalePoints, scanRuns] = await Promise.all([
+    prisma.token.findMany({ where: tokenFilter, orderBy: [{ radar: "desc" }, { updatedAt: "desc" }] }),
+    prisma.watchlistEntry.findMany({ where: { active: true, token: tokenFilter }, include: { token: true } }),
     prisma.watchlistEvent.findMany({ include: { token: true }, orderBy: { createdAt: "asc" } }),
     prisma.alert.findMany({ orderBy: { createdAt: "desc" }, take: 20 }),
     prisma.pattern.findMany({ orderBy: { match: "desc" } }),
     prisma.paperAccount.findUnique({ where: { id: 1 }, include: { positions: { include: { token: true } }, history: { orderBy: { time: "desc" }, take: 100 } } }),
-    prisma.whaleActivityPoint.findMany({ where: { source: radar.mode === "live" ? "live" : "demo" }, orderBy: { recordedAt: "asc" }, take: 96 })
+    prisma.whaleActivityPoint.findMany({ where: { source: radar.mode === "live" ? "live" : "demo" }, orderBy: { recordedAt: "asc" }, take: 96 }),
+    prisma.scanRun.findMany({ orderBy: { startedAt: "desc" }, take: 100 })
   ]);
 
   let activityRows = whalePoints;
@@ -215,6 +219,18 @@ async function readState(fallback) {
     alerts: alerts.map(alert => ({ type: alert.type, token: alert.token, text: alert.text, tone: alert.tone, time: alert.timeLabel || alert.createdAt.toISOString() })),
     patterns: patterns.map(pattern => ({ id: pattern.patternId, name: pattern.name, desc: pattern.detail, match: pattern.match, sample: pattern.sample, outcome: pattern.outcome, tone: pattern.tone })),
     whaleActivity: activityRows.map(fromWhalePoint),
+    scanRuns: scanRuns.map(run => ({
+      id: run.id,
+      manual: run.manual,
+      status: run.status,
+      startedAt: run.startedAt.toISOString(),
+      finishedAt: run.finishedAt?.toISOString() || null,
+      durationMs: run.durationMs,
+      tokensScanned: run.tokensScanned,
+      transactionsProcessed: run.transactionsProcessed,
+      errorCount: run.errorCount,
+      provider: run.provider
+    })),
     portfolio: dbPortfolio,
     system: { ...(fallback.system || {}), ...(radar.system || {}), database: "POSTGRESQL / PRISMA" }
   };
