@@ -221,6 +221,14 @@ model ScanLease {
   updatedAt  DateTime @updatedAt
 }
 
+model MutationLease {
+  id         Int      @id @default(1)
+  owner      String
+  acquiredAt DateTime?
+  expiresAt  DateTime
+  updatedAt  DateTime @updatedAt
+}
+
 model TokenObservation {
   id                 String    @id @default(cuid())
   scanRunId          String?

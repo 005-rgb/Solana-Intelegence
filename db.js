@@ -469,6 +469,35 @@ async function ensureScanLease() {
   });
 }
 
+async function ensureMutationLease() {
+  return prisma.mutationLease.upsert({
+    where: { id: 1 },
+    update: {},
+    create: { id: 1, owner: "", expiresAt: new Date(0) }
+  });
+}
+
+async function acquireMutationLease(owner, ttlMs = 15_000) {
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + ttlMs);
+  await ensureMutationLease();
+  const updated = await prisma.mutationLease.updateMany({
+    where: {
+      id: 1,
+      OR: [{ owner }, { expiresAt: { lt: now } }]
+    },
+    data: { owner, acquiredAt: now, expiresAt }
+  });
+  return updated.count === 1;
+}
+
+async function releaseMutationLease(owner) {
+  await prisma.mutationLease.updateMany({
+    where: { id: 1, owner },
+    data: { owner: "", acquiredAt: null, expiresAt: new Date(0) }
+  });
+}
+
 async function acquireScanLease(owner, ttlMs = 30_000) {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + ttlMs);
@@ -480,6 +509,18 @@ async function acquireScanLease(owner, ttlMs = 30_000) {
     },
     data: { owner, acquiredAt: now, expiresAt }
   });
+  if (updated.count === 1) {
+    await prisma.scanRun.updateMany({
+      where: { status: "RUNNING" },
+      data: {
+        status: "INTERRUPTED",
+        finishedAt: now,
+        qualityStatus: "FAILED",
+        errorCount: 1,
+        timeoutReason: "lease_expired"
+      }
+    });
+  }
   return updated.count === 1;
 }
 
@@ -492,6 +533,10 @@ async function releaseScanLease(owner) {
 
 async function reconcileInterruptedScans() {
   const finishedAt = new Date();
+  const lease = await prisma.scanLease.findUnique({ where: { id: 1 } });
+  if (lease?.owner && lease.expiresAt > finishedAt) {
+    return { interrupted: 0, active: true };
+  }
   await prisma.scanRun.updateMany({
     where: { status: "RUNNING" },
     data: {
@@ -506,23 +551,31 @@ async function reconcileInterruptedScans() {
     where: { id: 1 },
     data: { owner: "", acquiredAt: null, expiresAt: new Date(0) }
   });
+  return { interrupted: true, active: false };
 }
 
 async function recordSkippedScan({ manual = true, provider, correlationId, requestId, idempotencyKey, reason }) {
-  return prisma.scanRun.create({
-    data: {
-      manual,
-      status: "SKIPPED",
-      startedAt: new Date(),
-      finishedAt: new Date(),
-      provider,
-      correlationId,
-      requestId,
-      idempotencyKey,
-      qualityStatus: "SKIPPED",
-      timeoutReason: reason
+  try {
+    return await prisma.scanRun.create({
+      data: {
+        manual,
+        status: "SKIPPED",
+        startedAt: new Date(),
+        finishedAt: new Date(),
+        provider,
+        correlationId,
+        requestId,
+        idempotencyKey,
+        qualityStatus: "SKIPPED",
+        timeoutReason: reason
+      }
+    });
+  } catch (error) {
+    if (error.code === "P2002" && idempotencyKey) {
+      return findScanByIdempotencyKey(idempotencyKey);
     }
-  });
+    throw error;
+  }
 }
 
 async function findScanByIdempotencyKey(idempotencyKey) {
@@ -594,6 +647,9 @@ module.exports = {
   createScanRun,
   finishScanRun,
   ensureScanLease,
+  ensureMutationLease,
+  acquireMutationLease,
+  releaseMutationLease,
   acquireScanLease,
   releaseScanLease,
   reconcileInterruptedScans,

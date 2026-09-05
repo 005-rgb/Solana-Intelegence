@@ -16,6 +16,8 @@ const {
   recordTokenObservations,
   acquireScanLease,
   releaseScanLease,
+  acquireMutationLease,
+  releaseMutationLease,
   recordSkippedScan,
   findScanByIdempotencyKey,
   findTradeByIdempotencyKey,
@@ -208,6 +210,21 @@ function rateLimit(req, url) {
   return current.count <= limit
     ? { allowed: true }
     : { allowed: false, retryAfter: Math.max(1, Math.ceil((current.resetAt - now) / 1000)) };
+}
+
+async function lockMutation(req) {
+  const owner = `${req.requestId}:${crypto.randomUUID()}`;
+  const acquired = await acquireMutationLease(owner, BODY_TIMEOUT_MS + 10_000);
+  return acquired ? owner : null;
+}
+
+async function unlockMutation(owner, requestId) {
+  if (!owner) return;
+  try {
+    await releaseMutationLease(owner);
+  } catch (error) {
+    console.error(`[${requestId}] Mutation lease release failed`, error.message);
+  }
 }
 function jsonState() {
   const now = Date.now();
@@ -936,11 +953,7 @@ async function runScan(manual = false, options = {}) {
     });
     state.patterns = derivePatterns(state.tokens, state.scanRuns);
     await persistPatterns(state.patterns);
-    try {
-      await saveState();
-    } finally {
-      await releaseScanLease(correlationId);
-    }
+    await saveState();
     return { ok: true, manual, duration: Date.now() - started, tokens: state.tokens.length };
   } catch (error) {
     if (scanDeadline) clearTimeout(scanDeadline);
@@ -997,12 +1010,16 @@ async function runScan(manual = false, options = {}) {
         errorCount: filtered || partial ? 0 : 1
       });
     }
-    try {
-      await saveState();
-    } finally {
-      await releaseScanLease(correlationId);
-    }
+    await saveState();
     return { ok: false, message: filtered ? "No token passed the active security filters. No token was added to Radar." : "DexScreener provider temporarily unavailable. Data remains unchanged.", securityFilter: lastFilterReport, requestId };
+  } finally {
+    if (leaseAcquired) {
+      try {
+        await releaseScanLease(correlationId);
+      } catch (releaseError) {
+        console.error(`[${requestId || correlationId}] Scan lease release failed`, releaseError.message);
+      }
+    }
   }
 }
 
@@ -1021,46 +1038,75 @@ async function handleApi(req, res, url) {
     return send(res, 200, await runScan(true, { requestId: req.requestId, idempotencyKey }));
   }
   if (req.method === "POST" && url.pathname === "/api/analysis") {
-    state.patterns = derivePatterns(state.tokens, state.scanRuns);
-    await persistPatterns(state.patterns);
-    await saveState();
-    return send(res, 200, { ok: true, patterns: state.patterns.length, state: jsonState() });
+    const mutationOwner = await lockMutation(req);
+    if (!mutationOwner) return send(res, 409, { error: "Another state mutation is in progress.", requestId: req.requestId });
+    try {
+      state = await readState(state);
+      state.patterns = derivePatterns(state.tokens, state.scanRuns);
+      await persistPatterns(state.patterns);
+      await saveState();
+      return send(res, 200, { ok: true, patterns: state.patterns.length, state: jsonState() });
+    } finally {
+      await unlockMutation(mutationOwner, req.requestId);
+    }
   }
   if (req.method === "POST" && url.pathname.startsWith("/api/watchlist/")) {
-    const id = decodeURIComponent(url.pathname.split("/").pop());
-    const item = tokenById(id);
-    if (!item) return send(res, 404, { error: "Token not found" });
-    const nextState = {
-      ...state,
-      watchlist: state.watchlist.includes(item.mint) ? [...state.watchlist] : [...state.watchlist, item.mint],
-      watchlistHistory: [...state.watchlistHistory, { mint: item.mint, action: "ADDED", at: new Date().toISOString() }]
-    };
-    await persistState(nextState, { watchlistEvent: { mint: item.mint, action: "ADDED" } });
-    state = nextState;
-    return send(res, 200, { ok: true, watchlist: state.watchlist });
-  }
-  if (req.method === "DELETE" && url.pathname.startsWith("/api/watchlist/")) {
-    const id = decodeURIComponent(url.pathname.split("/").pop());
-    const item = tokenById(id);
-    if (item) {
+    const mutationOwner = await lockMutation(req);
+    if (!mutationOwner) return send(res, 409, { error: "Another state mutation is in progress.", requestId: req.requestId });
+    try {
+      state = await readState(state);
+      const id = decodeURIComponent(url.pathname.split("/").pop());
+      const item = tokenById(id);
+      if (!item) return send(res, 404, { error: "Token not found" });
       const nextState = {
         ...state,
-        watchlist: state.watchlist.filter(mint => mint !== item.mint),
-        watchlistHistory: [...state.watchlistHistory, { mint: item.mint, action: "REMOVED_FROM_ACTIVE_VIEW", at: new Date().toISOString() }]
+        watchlist: state.watchlist.includes(item.mint) ? [...state.watchlist] : [...state.watchlist, item.mint],
+        watchlistHistory: [...state.watchlistHistory, { mint: item.mint, action: "ADDED", at: new Date().toISOString() }]
       };
-      await persistState(nextState, { watchlistEvent: { mint: item.mint, action: "REMOVED_FROM_ACTIVE_VIEW" } });
+      await persistState(nextState, { watchlistEvent: { mint: item.mint, action: "ADDED" } });
       state = nextState;
+      return send(res, 200, { ok: true, watchlist: state.watchlist });
+    } finally {
+      await unlockMutation(mutationOwner, req.requestId);
     }
-    return send(res, 200, { ok: true, watchlist: state.watchlist });
+  }
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/watchlist/")) {
+    const mutationOwner = await lockMutation(req);
+    if (!mutationOwner) return send(res, 409, { error: "Another state mutation is in progress.", requestId: req.requestId });
+    try {
+      state = await readState(state);
+      const id = decodeURIComponent(url.pathname.split("/").pop());
+      const item = tokenById(id);
+      if (item) {
+        const nextState = {
+          ...state,
+          watchlist: state.watchlist.filter(mint => mint !== item.mint),
+          watchlistHistory: [...state.watchlistHistory, { mint: item.mint, action: "REMOVED_FROM_ACTIVE_VIEW", at: new Date().toISOString() }]
+        };
+        await persistState(nextState, { watchlistEvent: { mint: item.mint, action: "REMOVED_FROM_ACTIVE_VIEW" } });
+        state = nextState;
+      }
+      return send(res, 200, { ok: true, watchlist: state.watchlist });
+    } finally {
+      await unlockMutation(mutationOwner, req.requestId);
+    }
   }
   if (req.method === "POST" && url.pathname === "/api/trades") {
+    let idempotencyKey = null;
+    let mutationOwner = null;
     try {
       const body = await readBody(req);
       if (typeof body.mint !== "string" || body.mint.length < 1 || body.mint.length > 128 || !["BUY", "SELL"].includes(body.side)) {
         return send(res, 422, { error: "Trade requires a valid mint and BUY or SELL side.", requestId: req.requestId });
       }
       const rawIdempotencyKey = String(req.headers["idempotency-key"] || "");
-      const idempotencyKey = /^[A-Za-z0-9._:-]{1,128}$/.test(rawIdempotencyKey) ? rawIdempotencyKey : null;
+      idempotencyKey = /^[A-Za-z0-9._:-]{1,128}$/.test(rawIdempotencyKey) ? rawIdempotencyKey : null;
+      if (idempotencyKey && await findTradeByIdempotencyKey(idempotencyKey)) {
+        return send(res, 200, { ok: true, duplicate: true, state: jsonState(), requestId: req.requestId });
+      }
+      mutationOwner = await lockMutation(req);
+      if (!mutationOwner) return send(res, 409, { error: "Another state mutation is in progress.", requestId: req.requestId });
+      state = await readState(state);
       if (idempotencyKey && await findTradeByIdempotencyKey(idempotencyKey)) {
         return send(res, 200, { ok: true, duplicate: true, state: jsonState(), requestId: req.requestId });
       }
@@ -1104,8 +1150,14 @@ async function handleApi(req, res, url) {
       if (/Payload too large|Request body timed out|Invalid JSON|Request body must be/.test(error.message)) {
         return send(res, error.message === "Payload too large." ? 413 : 400, { error: error.message, requestId: req.requestId });
       }
+      if (error.code === "P2002" && idempotencyKey) {
+        const existing = await findTradeByIdempotencyKey(idempotencyKey);
+        if (existing) return send(res, 200, { ok: true, duplicate: true, state: jsonState(), requestId: req.requestId });
+      }
       console.error(`[${req.requestId}] Paper trade failed`, error.message);
       return send(res, 500, { error: "Paper trade could not be persisted.", requestId: req.requestId });
+    } finally {
+      await unlockMutation(mutationOwner, req.requestId);
     }
   }
   send(res, 404, { error: "API route not found" });
