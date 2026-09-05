@@ -86,8 +86,21 @@ model Alert {
   tone      String
   timeLabel String?
   createdAt DateTime @default(now())
+  outbox    AlertOutbox[]
 
   @@index([createdAt])
+}
+
+model AlertOutbox {
+  id          String    @id @default(cuid())
+  alertId     Int
+  eventType   String
+  payload     Json
+  createdAt   DateTime  @default(now())
+  publishedAt DateTime?
+  alert       Alert     @relation(fields: [alertId], references: [id], onDelete: Cascade)
+
+  @@index([publishedAt, createdAt])
 }
 
 model Pattern {
@@ -142,6 +155,7 @@ model PaperTrade {
   price     Float
   fee       Float        @default(0)
   score     Int?
+  idempotencyKey String? @unique
   time      DateTime     @default(now())
   account   PaperAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
   token     Token?       @relation(fields: [tokenId], references: [id], onDelete: SetNull)
@@ -190,11 +204,21 @@ model ScanRun {
   timeoutReason                String?
   decisionVersion              String             @default("baseline-v1")
   correlationId                String?
+  requestId                    String?
+  idempotencyKey               String?            @unique
   sourceMetrics                Json?
   tokenObservations            TokenObservation[]
 
   @@index([startedAt])
   @@index([status])
+}
+
+model ScanLease {
+  id         Int      @id @default(1)
+  owner      String
+  acquiredAt DateTime?
+  expiresAt  DateTime
+  updatedAt  DateTime @updatedAt
 }
 
 model TokenObservation {

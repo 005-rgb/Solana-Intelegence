@@ -51,6 +51,19 @@ The current Radar board is a fail-closed research filter, not a validated predic
 
 If a provider or security scan fails, the last known good Radar board remains visible. A filtered scan persists its observations and audit record without replacing the board. `baseline-v1` intentionally leaves Radar, opportunity, flow, risk, and confidence fields as `UNKNOWN` until later scoring and outcome phases.
 
+## Phase 0A platform safety
+
+The server keeps scan execution safe across restarts and concurrent callers:
+
+- PostgreSQL-backed scan lease prevents overlapping scans across processes; overlapping requests are recorded as `SKIPPED`.
+- Startup reconciliation marks orphaned `RUNNING` scans as `INTERRUPTED` and releases the lease.
+- Manual scans and paper trades accept bounded `Idempotency-Key` values.
+- Every request receives an `X-Request-ID`; scan runs persist request and correlation IDs.
+- API rate limits, same-origin mutation checks, security headers, bounded JSON bodies, and request timeouts are enabled.
+- Watchlist changes, paper trades, and alert creation use database transactions; alert creation also writes a durable outbox event.
+
+Mutation authentication can be enforced by setting the `RADAR_AUTH_TOKEN` secret. Without it, the app remains suitable for the trusted Replit preview boundary, not an unauthenticated public deployment.
+
 Run the baseline unit matrix with:
 
 ```bash

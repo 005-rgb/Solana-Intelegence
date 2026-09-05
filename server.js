@@ -10,9 +10,15 @@ const {
   recordWatchlistEvent,
   recordWhaleActivity,
   recordAlert,
+  recordAlertsAtomic,
   createScanRun,
   finishScanRun,
   recordTokenObservations,
+  acquireScanLease,
+  releaseScanLease,
+  recordSkippedScan,
+  findScanByIdempotencyKey,
+  findTradeByIdempotencyKey,
   persistPatterns,
   disconnectDb
 } = require("./db");
@@ -36,6 +42,12 @@ const STATE_FILE = path.join(DATA_DIR, "radar-state.json");
 const AUTO_SCAN_MS = 15_000;
 const LIVE_SCAN_TIMEOUT_MS = 20_000;
 const ANALYSIS_MS = 6 * 60 * 60 * 1000;
+const MAX_BODY_BYTES = 100_000;
+const BODY_TIMEOUT_MS = 5_000;
+const RATE_WINDOW_MS = 60_000;
+const API_RATE_LIMIT = 120;
+const MUTATION_RATE_LIMIT = 20;
+const rateBuckets = new Map();
 let lastFilterReport = {
   checked: 0, accepted: 0, rejected: 0, unresolved: 0, reasons: [],
   providerRecords: 0, pairRequests: 0, pairFailures: 0, providerAgeMs: null,
@@ -95,18 +107,107 @@ async function saveState() {
   await persistState(state);
 }
 
+function securityHeaders() {
+  return {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Content-Security-Policy": "default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' https:;"
+  };
+}
+
 function send(res, status, body, headers = {}) {
   const payload = typeof body === "string" ? body : JSON.stringify(body);
-  res.writeHead(status, { "Content-Type": typeof body === "string" ? "text/plain; charset=utf-8" : "application/json; charset=utf-8", "Cache-Control": "no-store", ...headers });
+  res.writeHead(status, {
+    ...securityHeaders(),
+    "Content-Type": typeof body === "string" ? "text/plain; charset=utf-8" : "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    ...headers
+  });
   res.end(payload);
 }
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let body = "";
-    req.on("data", chunk => { body += chunk; if (body.length > 100_000) reject(new Error("Payload too large")); });
-    req.on("end", () => { try { resolve(body ? JSON.parse(body) : {}); } catch { reject(new Error("Invalid JSON")); } });
-    req.on("error", reject);
+    let settled = false;
+    const timer = setTimeout(() => finishReject(new Error("Request body timed out.")), BODY_TIMEOUT_MS);
+    const finishReject = error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    };
+    const finishResolve = value => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const contentLength = Number(req.headers["content-length"]);
+    if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
+      return finishReject(new Error("Payload too large."));
+    }
+    req.on("data", chunk => {
+      body += chunk;
+      if (Buffer.byteLength(body) > MAX_BODY_BYTES) finishReject(new Error("Payload too large."));
+    });
+    req.on("end", () => {
+      if (settled) return;
+      try {
+        const parsed = body ? JSON.parse(body) : {};
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Request body must be a JSON object.");
+        finishResolve(parsed);
+      } catch (error) {
+        finishReject(error.message === "Request body must be a JSON object." ? error : new Error("Invalid JSON."));
+      }
+    });
+    req.on("error", finishReject);
   });
+}
+
+function requestId(req) {
+  const supplied = String(req.headers["x-request-id"] || "");
+  return /^[A-Za-z0-9._:-]{1,128}$/.test(supplied) ? supplied : crypto.randomUUID();
+}
+
+function mutationRoute(url, method) {
+  return method === "POST" && (url.pathname === "/api/scan" || url.pathname === "/api/analysis" || url.pathname === "/api/trades" || url.pathname.startsWith("/api/watchlist/"))
+    || method === "DELETE" && url.pathname.startsWith("/api/watchlist/");
+}
+
+function mutationAllowed(req) {
+  const origin = req.headers.origin;
+  if (origin) {
+    try {
+      if (new URL(origin).host !== req.headers.host) return false;
+    } catch {
+      return false;
+    }
+  }
+  if (req.headers["sec-fetch-site"] === "cross-site") return false;
+  const configuredToken = process.env.RADAR_AUTH_TOKEN;
+  if (configuredToken) return req.headers.authorization === `Bearer ${configuredToken}`;
+  return true;
+}
+
+function rateLimit(req, url) {
+  if (!url.pathname.startsWith("/api/")) return { allowed: true };
+  const now = Date.now();
+  const key = `${req.socket?.remoteAddress || "unknown"}:${mutationRoute(url, req.method) ? "mutation" : "api"}`;
+  const limit = mutationRoute(url, req.method) ? MUTATION_RATE_LIMIT : API_RATE_LIMIT;
+  const current = rateBuckets.get(key);
+  if (!current || now >= current.resetAt) {
+    rateBuckets.set(key, { count: 1, resetAt: now + RATE_WINDOW_MS });
+    if (rateBuckets.size > 2_000) {
+      for (const [bucketKey, bucket] of rateBuckets) if (bucket.resetAt <= now) rateBuckets.delete(bucketKey);
+    }
+    return { allowed: true };
+  }
+  current.count += 1;
+  return current.count <= limit
+    ? { allowed: true }
+    : { allowed: false, retryAfter: Math.max(1, Math.ceil((current.resetAt - now) / 1000)) };
 }
 function jsonState() {
   const now = Date.now();
@@ -418,8 +519,8 @@ async function publishPotentialAlerts(previousTokens, currentTokens) {
   const newCandidates = currentTokens.filter(item => !previousMints.has(item.mint));
   const alerts = newCandidates.map(potentialAlert);
   if (!alerts.length) return;
+  await recordAlertsAtomic(alerts);
   state.alerts = [...alerts, ...(state.alerts || [])].slice(0, 20);
-  await Promise.all(alerts.map(alert => recordAlert(alert).catch(error => console.error("Potential-token alert persistence failed", error.message))));
 }
 
 function derivePatterns(tokens, scanRuns = []) {
@@ -670,15 +771,44 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
   }
 }
 
-async function runScan(manual = false) {
-  if (state.scanRunning) return { ok: false, message: "A scan is already running." };
+async function runScan(manual = false, options = {}) {
+  const correlationId = crypto.randomUUID();
+  const idempotencyKey = options.idempotencyKey || null;
+  const requestId = options.requestId || null;
+  if (idempotencyKey) {
+    const previousRun = await findScanByIdempotencyKey(idempotencyKey);
+    if (previousRun) {
+      return {
+        ok: previousRun.status === "SUCCESS",
+        duplicate: true,
+        scanRunId: previousRun.id,
+        status: previousRun.status,
+        message: "The scan request was already accepted."
+      };
+    }
+  }
+  if (state.scanRunning) {
+    await recordSkippedScan({ manual, provider: state.provider, correlationId, requestId, idempotencyKey, reason: "overlapping_scan" });
+    return { ok: false, skipped: true, message: "A scan is already running.", requestId };
+  }
+  let leaseAcquired = false;
+  try {
+    leaseAcquired = await acquireScanLease(correlationId, LIVE_SCAN_TIMEOUT_MS + 10_000);
+  } catch (error) {
+    console.error(`[${requestId || correlationId}] Scan lease unavailable`, error.message);
+    return { ok: false, message: "Scan lock is temporarily unavailable.", requestId };
+  }
+  if (!leaseAcquired) {
+    await recordSkippedScan({ manual, provider: state.provider, correlationId, requestId, idempotencyKey, reason: "distributed_scan_lock" });
+    return { ok: false, skipped: true, message: "A scan is already running.", requestId };
+  }
   state.scanRunning = true;
   const started = Date.now();
-  const correlationId = crypto.randomUUID();
   let scanRun = null;
   let scanResult = null;
   const scanController = new AbortController();
   let scanDeadline;
+  let deadlineExceeded = false;
   lastFilterReport = {
     ...lastFilterReport,
     checked: 0,
@@ -729,6 +859,7 @@ async function runScan(manual = false) {
     timeoutReason: lastFilterReport.timeoutReason || null,
     decisionVersion: BASELINE_DECISION_VERSION,
     correlationId,
+    requestId,
     sourceMetrics: lastFilterReport.sourceMetrics || {}
   });
   try {
@@ -740,6 +871,8 @@ async function runScan(manual = false) {
         provider: state.provider,
         decisionVersion: BASELINE_DECISION_VERSION,
         correlationId,
+        requestId,
+        idempotencyKey,
         ...scanAudit()
       }),
       new Promise((_, reject) => setTimeout(() => reject(new Error("Scan run could not be registered in the database.")), 8000))
@@ -747,7 +880,10 @@ async function runScan(manual = false) {
     state.mode = "live";
     state.provider = "DexScreener";
     const previousTokens = state.tokens;
-    scanDeadline = setTimeout(() => scanController.abort(), LIVE_SCAN_TIMEOUT_MS);
+    scanDeadline = setTimeout(() => {
+      deadlineExceeded = true;
+      scanController.abort();
+    }, LIVE_SCAN_TIMEOUT_MS);
     scanResult = await Promise.race([
       fetchLiveTokens({ correlationId, signal: scanController.signal }),
       new Promise((_, reject) => setTimeout(() => reject(new Error("LIVE scan timed out before provider verification completed.")), LIVE_SCAN_TIMEOUT_MS))
@@ -800,7 +936,11 @@ async function runScan(manual = false) {
     });
     state.patterns = derivePatterns(state.tokens, state.scanRuns);
     await persistPatterns(state.patterns);
-    await saveState();
+    try {
+      await saveState();
+    } finally {
+      await releaseScanLease(correlationId);
+    }
     return { ok: true, manual, duration: Date.now() - started, tokens: state.tokens.length };
   } catch (error) {
     if (scanDeadline) clearTimeout(scanDeadline);
@@ -809,8 +949,8 @@ async function runScan(manual = false) {
       && lastFilterReport.unresolved === 0
       && lastFilterReport.qualityStatus === "FULL";
     const partial = Boolean(scanResult) && lastFilterReport.qualityStatus === "PARTIAL";
-    const timedOut = /timed out|timeout|aborted/i.test(error.message);
-    if (!scanResult) {
+    const timedOut = deadlineExceeded || /timed out|timeout|aborted/i.test(error.message);
+    if (!scanResult || deadlineExceeded) {
       lastFilterReport = {
         ...lastFilterReport,
         qualityStatus: timedOut ? "TIMEOUT" : "FAILED",
@@ -857,18 +997,29 @@ async function runScan(manual = false) {
         errorCount: filtered || partial ? 0 : 1
       });
     }
-    await saveState();
-    return { ok: false, message: filtered ? "No token passed the active security filters. No token was added to Radar." : "DexScreener provider temporarily unavailable. Data remains unchanged.", securityFilter: lastFilterReport };
+    try {
+      await saveState();
+    } finally {
+      await releaseScanLease(correlationId);
+    }
+    return { ok: false, message: filtered ? "No token passed the active security filters. No token was added to Radar." : "DexScreener provider temporarily unavailable. Data remains unchanged.", securityFilter: lastFilterReport, requestId };
   }
 }
 
 async function handleApi(req, res, url) {
+  if (mutationRoute(url, req.method) && !mutationAllowed(req)) {
+    return send(res, 403, { error: "Mutation is not authorized for this origin.", requestId: req.requestId });
+  }
   if (req.method === "GET" && url.pathname === "/api/state") return send(res, 200, jsonState());
   if (req.method === "GET" && url.pathname.startsWith("/api/tokens/")) {
     const item = tokenById(decodeURIComponent(url.pathname.split("/").pop()));
     return item ? send(res, 200, { token: item, mode: state.mode }) : send(res, 404, { error: "Token not found" });
   }
-  if (req.method === "POST" && url.pathname === "/api/scan") return send(res, 200, await runScan(true));
+  if (req.method === "POST" && url.pathname === "/api/scan") {
+    const rawIdempotencyKey = String(req.headers["idempotency-key"] || "");
+    const idempotencyKey = /^[A-Za-z0-9._:-]{1,128}$/.test(rawIdempotencyKey) ? rawIdempotencyKey : null;
+    return send(res, 200, await runScan(true, { requestId: req.requestId, idempotencyKey }));
+  }
   if (req.method === "POST" && url.pathname === "/api/analysis") {
     state.patterns = derivePatterns(state.tokens, state.scanRuns);
     await persistPatterns(state.patterns);
@@ -879,59 +1030,83 @@ async function handleApi(req, res, url) {
     const id = decodeURIComponent(url.pathname.split("/").pop());
     const item = tokenById(id);
     if (!item) return send(res, 404, { error: "Token not found" });
-    if (!state.watchlist.includes(item.mint)) state.watchlist.push(item.mint);
-    state.watchlistHistory.push({ mint: item.mint, action: "ADDED", at: new Date().toISOString() });
-    await saveState();
-    await recordWatchlistEvent(item.mint, "ADDED");
+    const nextState = {
+      ...state,
+      watchlist: state.watchlist.includes(item.mint) ? [...state.watchlist] : [...state.watchlist, item.mint],
+      watchlistHistory: [...state.watchlistHistory, { mint: item.mint, action: "ADDED", at: new Date().toISOString() }]
+    };
+    await persistState(nextState, { watchlistEvent: { mint: item.mint, action: "ADDED" } });
+    state = nextState;
     return send(res, 200, { ok: true, watchlist: state.watchlist });
   }
   if (req.method === "DELETE" && url.pathname.startsWith("/api/watchlist/")) {
     const id = decodeURIComponent(url.pathname.split("/").pop());
     const item = tokenById(id);
     if (item) {
-      state.watchlist = state.watchlist.filter(mint => mint !== item.mint);
-      state.watchlistHistory.push({ mint: item.mint, action: "REMOVED_FROM_ACTIVE_VIEW", at: new Date().toISOString() });
-      await saveState();
-      await recordWatchlistEvent(item.mint, "REMOVED_FROM_ACTIVE_VIEW");
+      const nextState = {
+        ...state,
+        watchlist: state.watchlist.filter(mint => mint !== item.mint),
+        watchlistHistory: [...state.watchlistHistory, { mint: item.mint, action: "REMOVED_FROM_ACTIVE_VIEW", at: new Date().toISOString() }]
+      };
+      await persistState(nextState, { watchlistEvent: { mint: item.mint, action: "REMOVED_FROM_ACTIVE_VIEW" } });
+      state = nextState;
     }
     return send(res, 200, { ok: true, watchlist: state.watchlist });
   }
   if (req.method === "POST" && url.pathname === "/api/trades") {
     try {
       const body = await readBody(req);
+      if (typeof body.mint !== "string" || body.mint.length < 1 || body.mint.length > 128 || !["BUY", "SELL"].includes(body.side)) {
+        return send(res, 422, { error: "Trade requires a valid mint and BUY or SELL side.", requestId: req.requestId });
+      }
+      const rawIdempotencyKey = String(req.headers["idempotency-key"] || "");
+      const idempotencyKey = /^[A-Za-z0-9._:-]{1,128}$/.test(rawIdempotencyKey) ? rawIdempotencyKey : null;
+      if (idempotencyKey && await findTradeByIdempotencyKey(idempotencyKey)) {
+        return send(res, 200, { ok: true, duplicate: true, state: jsonState(), requestId: req.requestId });
+      }
       const item = tokenById(body.mint);
       if (!item) return send(res, 404, { error: "Token not found" });
       const price = parseFloat(String(item.price).replace("$", ""));
       if (!Number.isFinite(price)) return send(res, 422, { error: "Current price is unavailable; paper trade cannot be simulated." });
+      const nextPortfolio = JSON.parse(JSON.stringify(state.portfolio));
       let tradeRecord;
       if (body.side === "BUY") {
         const amount = 100;
-        if (state.portfolio.cash < amount) return send(res, 422, { error: "Insufficient virtual cash." });
-        if (state.portfolio.positions.some(position => position.mint === item.mint)) return send(res, 409, { error: "An open virtual position already exists for this token." });
+        if (nextPortfolio.cash < amount) return send(res, 422, { error: "Insufficient virtual cash." });
+        if (nextPortfolio.positions.some(position => position.mint === item.mint)) return send(res, 409, { error: "An open virtual position already exists for this token." });
         const fee = amount * 0.003;
         const position = { mint: item.mint, symbol: item.symbol, name: item.name, invested: amount, quantity: (amount - fee) / price, entry: price, peakPnl: 0, openedAt: Date.now() };
-        state.portfolio.cash -= amount;
-        state.portfolio.fees += fee;
-        state.portfolio.trades += 1;
-        state.portfolio.positions.push(position);
-        state.portfolio.history.unshift({ symbol: item.symbol, side: "BUY", amount, price, fee, score: item.radar, time: Date.now() });
-        tradeRecord = { mint: item.mint, symbol: item.symbol, side: "BUY", amount, price, fee, score: item.radar, time: Date.now() };
+        nextPortfolio.cash -= amount;
+        nextPortfolio.fees += fee;
+        nextPortfolio.trades += 1;
+        nextPortfolio.positions.push(position);
+        const tradeTime = Date.now();
+        nextPortfolio.history.unshift({ symbol: item.symbol, side: "BUY", amount, price, fee, score: item.radar, time: tradeTime });
+        tradeRecord = { mint: item.mint, symbol: item.symbol, side: "BUY", amount, price, fee, score: item.radar, time: tradeTime, idempotencyKey };
       } else if (body.side === "SELL") {
-        const position = state.portfolio.positions.find(p => p.mint === item.mint);
+        const position = nextPortfolio.positions.find(p => p.mint === item.mint);
         if (!position) return send(res, 422, { error: "No open paper position for this token." });
         const value = position.quantity * price;
         const fee = value * 0.003;
-        state.portfolio.cash += value - fee;
-        state.portfolio.realized += value - fee - position.invested;
-        state.portfolio.fees += fee;
-        state.portfolio.history.unshift({ symbol: item.symbol, side: "SELL", amount: value, price, fee, score: item.radar, time: Date.now() });
-        state.portfolio.positions = state.portfolio.positions.filter(p => p !== position);
-        tradeRecord = { mint: item.mint, symbol: item.symbol, side: "SELL", amount: value, price, fee, score: item.radar, time: Date.now() };
-      } else return send(res, 400, { error: "Unsupported trade side." });
-      await saveState();
-      await recordTrade(tradeRecord);
+        nextPortfolio.cash += value - fee;
+        nextPortfolio.realized += value - fee - position.invested;
+        nextPortfolio.fees += fee;
+        const tradeTime = Date.now();
+        nextPortfolio.history.unshift({ symbol: item.symbol, side: "SELL", amount: value, price, fee, score: item.radar, time: tradeTime });
+        nextPortfolio.positions = nextPortfolio.positions.filter(p => p !== position);
+        tradeRecord = { mint: item.mint, symbol: item.symbol, side: "SELL", amount: value, price, fee, score: item.radar, time: tradeTime, idempotencyKey };
+      }
+      const nextState = { ...state, portfolio: nextPortfolio };
+      await persistState(nextState, { tradeRecord });
+      state = nextState;
       return send(res, 200, { ok: true, state: jsonState() });
-    } catch (error) { return send(res, 400, { error: error.message }); }
+    } catch (error) {
+      if (/Payload too large|Request body timed out|Invalid JSON|Request body must be/.test(error.message)) {
+        return send(res, error.message === "Payload too large." ? 413 : 400, { error: error.message, requestId: req.requestId });
+      }
+      console.error(`[${req.requestId}] Paper trade failed`, error.message);
+      return send(res, 500, { error: "Paper trade could not be persisted.", requestId: req.requestId });
+    }
   }
   send(res, 404, { error: "API route not found" });
 }
@@ -944,14 +1119,29 @@ function serveStatic(req, res, url) {
     if (error) return send(res, 404, "Not found");
     const ext = path.extname(file);
     const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml" };
-    res.writeHead(200, { "Content-Type": types[ext] || "application/octet-stream", "Cache-Control": "no-store" });
+    res.writeHead(200, { ...securityHeaders(), "Content-Type": types[ext] || "application/octet-stream", "Cache-Control": "no-store" });
     res.end(content);
   });
 }
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-  if (url.pathname.startsWith("/api/")) return handleApi(req, res, url).catch(error => send(res, 500, { error: error.message }));
+  req.requestId = requestId(req);
+  res.setHeader("X-Request-ID", req.requestId);
+  req.setTimeout(BODY_TIMEOUT_MS, () => {
+    if (!res.headersSent) send(res, 408, { error: "Request timed out.", requestId: req.requestId });
+    req.destroy();
+  });
+  const limit = rateLimit(req, url);
+  if (!limit.allowed) {
+    return send(res, 429, { error: "Rate limit exceeded.", requestId: req.requestId }, { "Retry-After": String(limit.retryAfter) });
+  }
+  if (url.pathname.startsWith("/api/")) {
+    return handleApi(req, res, url).catch(error => {
+      console.error(`[${req.requestId}] API request failed`, error.message);
+      if (!res.headersSent) send(res, 500, { error: "Internal server error.", requestId: req.requestId });
+    });
+  }
   serveStatic(req, res, url);
 });
 

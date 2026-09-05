@@ -207,6 +207,8 @@ async function readState(fallback) {
     await seedState(fallback);
   }
   await ensureLiveOnly();
+  await ensureScanLease();
+  await reconcileInterruptedScans();
   radar = await prisma.radarState.findUnique({ where: { id: 1 } });
 
   const tokenFilter = { providerUrl: { not: null } };
@@ -305,6 +307,8 @@ async function readState(fallback) {
       timeoutReason: run.timeoutReason,
       decisionVersion: run.decisionVersion,
       correlationId: run.correlationId,
+      requestId: run.requestId,
+      idempotencyKey: run.idempotencyKey,
       sourceMetrics: run.sourceMetrics || null,
       provider: run.provider
     })),
@@ -313,7 +317,7 @@ async function readState(fallback) {
   };
 }
 
-async function persistState(state) {
+async function persistState(state, mutation = {}) {
   await prisma.$transaction(async tx => {
     await tx.radarState.upsert({
       where: { id: 1 },
@@ -361,6 +365,34 @@ async function persistState(state) {
       const item = await tx.token.findUnique({ where: { mint: position.mint } });
       if (item) await tx.paperPosition.create({ data: { accountId: 1, tokenId: item.id, invested: position.invested, quantity: position.quantity, entry: position.entry, peakPnl: position.peakPnl, openedAt: new Date(position.openedAt) } });
     }
+
+    if (mutation.watchlistEvent) {
+      const item = await tx.token.findUnique({ where: { mint: mutation.watchlistEvent.mint } });
+      if (item) {
+        await tx.watchlistEvent.create({
+          data: { tokenId: item.id, action: mutation.watchlistEvent.action }
+        });
+      }
+    }
+
+    if (mutation.tradeRecord) {
+      const trade = mutation.tradeRecord;
+      const item = await tx.token.findUnique({ where: { mint: trade.mint } });
+      await tx.paperTrade.create({
+        data: {
+          accountId: 1,
+          tokenId: item?.id || null,
+          symbol: trade.symbol,
+          side: trade.side,
+          amount: trade.amount,
+          price: trade.price,
+          fee: trade.fee || 0,
+          score: trade.score,
+          idempotencyKey: trade.idempotencyKey || null,
+          time: new Date(trade.time)
+        }
+      });
+    }
   });
 }
 
@@ -395,12 +427,112 @@ async function recordAlert(alert) {
   });
 }
 
+async function recordAlertsAtomic(alerts) {
+  if (!Array.isArray(alerts) || !alerts.length) return [];
+  return prisma.$transaction(async tx => {
+    const created = [];
+    for (const alert of alerts) {
+      const row = await tx.alert.create({
+        data: {
+          type: alert.type,
+          token: alert.token,
+          text: alert.text,
+          tone: alert.tone,
+          timeLabel: alert.time
+        }
+      });
+      await tx.alertOutbox.create({
+        data: {
+          alertId: row.id,
+          eventType: "ALERT_CREATED",
+          payload: alert
+        }
+      });
+      created.push(row);
+    }
+    return created;
+  });
+}
 async function createScanRun(data) {
   return prisma.scanRun.create({ data });
 }
 
 async function finishScanRun(id, data) {
   return prisma.scanRun.update({ where: { id }, data });
+}
+
+async function ensureScanLease() {
+  return prisma.scanLease.upsert({
+    where: { id: 1 },
+    update: {},
+    create: { id: 1, owner: "", expiresAt: new Date(0) }
+  });
+}
+
+async function acquireScanLease(owner, ttlMs = 30_000) {
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + ttlMs);
+  await ensureScanLease();
+  const updated = await prisma.scanLease.updateMany({
+    where: {
+      id: 1,
+      OR: [{ owner }, { expiresAt: { lt: now } }]
+    },
+    data: { owner, acquiredAt: now, expiresAt }
+  });
+  return updated.count === 1;
+}
+
+async function releaseScanLease(owner) {
+  await prisma.scanLease.updateMany({
+    where: { id: 1, owner },
+    data: { owner: "", acquiredAt: null, expiresAt: new Date(0) }
+  });
+}
+
+async function reconcileInterruptedScans() {
+  const finishedAt = new Date();
+  await prisma.scanRun.updateMany({
+    where: { status: "RUNNING" },
+    data: {
+      status: "INTERRUPTED",
+      finishedAt,
+      qualityStatus: "FAILED",
+      errorCount: 1,
+      timeoutReason: "process_restart"
+    }
+  });
+  await prisma.scanLease.updateMany({
+    where: { id: 1 },
+    data: { owner: "", acquiredAt: null, expiresAt: new Date(0) }
+  });
+}
+
+async function recordSkippedScan({ manual = true, provider, correlationId, requestId, idempotencyKey, reason }) {
+  return prisma.scanRun.create({
+    data: {
+      manual,
+      status: "SKIPPED",
+      startedAt: new Date(),
+      finishedAt: new Date(),
+      provider,
+      correlationId,
+      requestId,
+      idempotencyKey,
+      qualityStatus: "SKIPPED",
+      timeoutReason: reason
+    }
+  });
+}
+
+async function findScanByIdempotencyKey(idempotencyKey) {
+  if (!idempotencyKey) return null;
+  return prisma.scanRun.findUnique({ where: { idempotencyKey } });
+}
+
+async function findTradeByIdempotencyKey(idempotencyKey) {
+  if (!idempotencyKey) return null;
+  return prisma.paperTrade.findUnique({ where: { idempotencyKey } });
 }
 
 async function recordTokenObservations(observations, scanRunId) {
@@ -449,4 +581,25 @@ async function disconnectDb() {
   await prisma.$disconnect();
 }
 
-module.exports = { prisma, readState, persistState, persistPatterns, recordTrade, recordWatchlistEvent, recordWhaleActivity, recordAlert, createScanRun, finishScanRun, recordTokenObservations, disconnectDb };
+module.exports = {
+  prisma,
+  readState,
+  persistState,
+  persistPatterns,
+  recordTrade,
+  recordWatchlistEvent,
+  recordWhaleActivity,
+  recordAlert,
+  recordAlertsAtomic,
+  createScanRun,
+  finishScanRun,
+  ensureScanLease,
+  acquireScanLease,
+  releaseScanLease,
+  reconcileInterruptedScans,
+  recordSkippedScan,
+  findScanByIdempotencyKey,
+  findTradeByIdempotencyKey,
+  recordTokenObservations,
+  disconnectDb
+};
