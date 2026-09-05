@@ -78,6 +78,11 @@ th { text-align:left; font-size:9px; text-transform:uppercase; letter-spacing:.8
 td { padding:13px 16px; border-top:1px solid #f0f3f7; white-space:nowrap; font-size:11px; }
 tbody tr:hover { background:#fbfdff; }
 .token-cell { display:flex; align-items:center; gap:9px; }
+.token-link { display:block; border:0; padding:0; background:transparent; color:inherit; text-align:left; }
+.token-link:hover .token-meta strong { color:var(--blue); text-decoration:underline; }
+.token-actions { display:flex; align-items:center; gap:6px; }
+.token-actions .btn { white-space:nowrap; }
+.btn:disabled { cursor:not-allowed; opacity:.45; }
 .token-logo { width:27px; height:27px; border-radius:50%; display:grid; place-items:center; color:#fff; font-size:9px; font-weight:800; background:linear-gradient(145deg,#4f83f3,#1e3c8a); }
 .token-logo-image { object-fit:cover; border:1px solid #dbe5f3; }
 .token-meta strong { display:block; font-size:11px; }
