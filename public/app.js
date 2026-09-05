@@ -16,6 +16,10 @@ const money = (value, digits = 0) => value == null ? "UNKNOWN" : value.toLocaleS
 const compact = value => value == null ? "UNKNOWN" : value >= 1e6 ? `$${(value / 1e6).toFixed(1)}M` : value >= 1e3 ? `$${(value / 1e3).toFixed(0)}K` : `$${value.toFixed(0)}`;
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[c]));
 const tone = (risk, positive = false) => positive ? "green" : risk <= 25 ? "green" : risk <= 55 ? "yellow" : "red";
+const nextScanLabel = () => {
+  const seconds = Math.max(0, Math.ceil(((snapshot?.nextScanAt || Date.now() + 30000) - Date.now()) / 1000));
+  return `Next auto scan ${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+};
 function toast(message, error = false) { const el = document.createElement("div"); el.className = `toast ${error ? "error" : ""}`; el.textContent = message; document.querySelector("#toast-region").appendChild(el); setTimeout(() => el.remove(), 3500); }
 async function api(path, options = {}) { const response = await fetch(path, { headers: { "Content-Type":"application/json" }, ...options }); const data = await response.json(); if (!response.ok) throw new Error(data.error || "Request failed"); return data; }
 
@@ -29,7 +33,7 @@ function layout(content) {
       <div class="sidebar-bottom"><div class="mode-pill"><span class="mode-dot ${isLive ? "live":""}"></span>${isLive ? "LIVE PROVIDER" : "DEMO DATA"}</div><div class="disclaimer">Research analytics only. Scores and historical patterns are not guarantees or financial advice.</div></div>
     </aside>
     <main class="content">
-      <header class="topbar"><div class="topbar-left"><span class="eyebrow">Solana 20× Radar</span><span class="scan-status"><span class="live-dot"></span>${isLive ? "Provider connected" : "Controlled dataset"} · ${snapshot?.lastScan ? "updated just now" : "awaiting first scan"}</span></div><div class="top-actions"><input id="global-search" class="search" placeholder="Search token or mint…" /><button class="icon-button" title="Alerts" onclick="go('dashboard')">◔</button><button class="icon-button" title="Settings" onclick="go('settings')">⋯</button></div></header>
+      <header class="topbar"><div class="topbar-left"><span class="eyebrow">Solana 20× Radar</span><span class="scan-status"><span class="live-dot"></span>${isLive ? "Provider connected" : "Controlled dataset"} · ${snapshot?.lastScan ? "updated just now" : "awaiting first scan"} · <span id="next-scan-label">${nextScanLabel()}</span></span></div><div class="top-actions"><input id="global-search" class="search" placeholder="Search token or mint…" /><button class="icon-button" title="Alerts" onclick="go('dashboard')">◔</button><button class="icon-button" title="Settings" onclick="go('settings')">⋯</button></div></header>
       <div class="mobile-nav">${NAV.map(navItem).join("")}</div>
       <div class="main">${content}</div>
     </main>
@@ -71,3 +75,7 @@ async function trade(id, side) { try { const result = await api("/api/trades", {
 async function setMode(mode) { try { await api("/api/settings", { method:"POST", body:JSON.stringify({mode}) }); toast(`${mode === "demo" ? "Demo data":"Live provider"} mode selected.`); await refresh(); } catch(e){toast(e.message,true);} }
 window.go=go; window.scan=scan; window.showToken=showToken; window.toggleWatch=toggleWatch; window.removeWatch=removeWatch; window.trade=trade; window.setMode=setMode;
 refresh().catch(error => { app.innerHTML = `<div class="empty" style="margin:40px"><strong>Unable to load radar</strong>${esc(error.message)}</div>`; });
+setInterval(() => {
+  const label = document.querySelector("#next-scan-label");
+  if (label && snapshot) label.textContent = nextScanLabel();
+}, 1000);

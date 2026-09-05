@@ -17,7 +17,7 @@ No API keys are hard-coded or sent to the browser. The application never asks fo
 
 ## Architecture
 
-- `server.js`: server-side HTTP API, provider boundary, 30-second scheduler, scan and paper-trade logic.
+- `server.js`: server-side HTTP API, provider boundary, server-side automatic scan every 30 seconds, scan and paper-trade logic.
 - `db.js`: Prisma repository layer for PostgreSQL-backed state, watchlist events, paper trades, and scan runs.
 - `prisma/schema.prisma`: PostgreSQL schema and indexes for tokens, signals, watchlists, paper trading, and scan observability.
 - `public/`: responsive institutional research UI.
@@ -39,3 +39,7 @@ npm run db:push
 - **LIVE MODE**: set `RADAR_MODE=live` and run a scan. The server calls `DEXSCREENER_API_URL` or its public default endpoint. Unavailable fields remain `UNKNOWN`.
 
 No API keys are hard-coded or sent to the browser. The application never asks for seed phrases/private keys and only supports simulated paper trading.
+
+## Automatic scanning
+
+The scheduler runs on the server every 30 seconds. The browser only displays the countdown and is not responsible for triggering scans. Overlapping scans are rejected, and each run is stored in `ScanRun` with status, duration, provider, and processed-record counts.

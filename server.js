@@ -81,7 +81,7 @@ function freshState() {
       ]
     },
     system: {
-      scheduler: "RUNNING", worker: "READY", database: "LOCAL PERSISTENCE", rpc: "DEMO PROVIDER", market: "DEMO PROVIDER",
+      scheduler: "RUNNING · 30s", worker: "READY", database: "LOCAL PERSISTENCE", rpc: "DEMO PROVIDER", market: "DEMO PROVIDER",
       lastScanStatus: "NOT RUN YET", avgDuration: "—", tokensPerScan: 0, transactionsPerScan: 0, errors: 0
     }
   };
@@ -322,6 +322,8 @@ async function start() {
   try {
     state = await readState(state);
     state.system.database = "POSTGRESQL / PRISMA";
+    state.system.scheduler = "RUNNING · 30s";
+    state.nextScanAt = Date.now() + AUTO_SCAN_MS;
     await saveState();
     setInterval(() => { if (!state.scanRunning) runScan(false).catch(error => console.error("Automatic scan failed", error)); }, AUTO_SCAN_MS);
     setInterval(() => {
