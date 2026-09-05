@@ -86,10 +86,27 @@ function fromWhalePoint(row) {
   };
 }
 
+function toDate(value) {
+  if (value instanceof Date) return value;
+  if (typeof value === "number" && Number.isFinite(value)) return new Date(value);
+  if (typeof value === "string" && /^\d{10,}$/.test(value.trim())) return new Date(Number(value));
+  return new Date(value);
+}
+
 async function seedState(state) {
   await prisma.$transaction(async tx => {
-    await tx.radarState.create({
-      data: {
+    await tx.radarState.upsert({
+      where: { id: 1 },
+      update: {
+        mode: state.mode,
+        provider: state.provider,
+        lastScan: state.lastScan ? new Date(state.lastScan) : null,
+        nextScanAt: state.nextScanAt ? new Date(state.nextScanAt) : null,
+        scanRunning: false,
+        watchlistHistory: state.watchlistHistory || [],
+        system: state.system || {}
+      },
+      create: {
         id: 1,
         mode: state.mode,
         provider: state.provider,
@@ -105,14 +122,14 @@ async function seedState(state) {
     }
 
     const tokens = new Map();
-    for (const item of state.tokens) {
-      const created = await tx.token.create({ data: tokenData(item) });
+    for (const item of state.tokens || []) {
+      const created = await tx.token.upsert({ where: { mint: item.mint }, update: tokenData(item), create: tokenData(item) });
       tokens.set(item.mint, created.id);
     }
 
     for (const mint of state.watchlist || []) {
       const tokenId = tokens.get(mint);
-      if (tokenId) await tx.watchlistEntry.create({ data: { tokenId, active: true } });
+      if (tokenId) await tx.watchlistEntry.upsert({ where: { tokenId }, update: { active: true }, create: { tokenId, active: true } });
     }
     for (const event of state.watchlistHistory || []) {
       const tokenId = tokens.get(event.mint);
@@ -126,8 +143,16 @@ async function seedState(state) {
     }
 
     const portfolio = state.portfolio;
-    await tx.paperAccount.create({
-      data: {
+    await tx.paperAccount.upsert({
+      where: { id: 1 },
+      update: {
+        starting: portfolio.starting,
+        cash: portfolio.cash,
+        realized: portfolio.realized,
+        fees: portfolio.fees,
+        trades: portfolio.trades
+      },
+      create: {
         id: 1,
         starting: portfolio.starting,
         cash: portfolio.cash,
@@ -594,9 +619,9 @@ async function recordTokenObservations(observations, scanRunId) {
     data: observations.map(observation => ({
       ...observation,
       scanRunId: scanRunId || null,
-      observedAt: new Date(observation.observedAt),
-      providerUpdatedAt: observation.providerUpdatedAt ? new Date(observation.providerUpdatedAt) : null,
-      pairCreatedAt: observation.pairCreatedAt ? new Date(observation.pairCreatedAt) : null
+      observedAt: toDate(observation.observedAt),
+      providerUpdatedAt: observation.providerUpdatedAt ? toDate(observation.providerUpdatedAt) : null,
+      pairCreatedAt: observation.pairCreatedAt ? toDate(observation.pairCreatedAt) : null
     }))
   });
 }

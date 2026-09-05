@@ -29,8 +29,10 @@ const {
   FILTER_CONFIG,
   MAX_TOP_HOLDER_PERCENT,
   MIN_LIQUIDITY_USD,
+  dedupePairs,
   dedupeMintEntries,
   evaluateBaselineCandidate,
+  normalizeDiscoveryUniverse,
   selectBoardTokens,
   selectPrimaryPair,
   summarizeBaselineCandidates
@@ -584,11 +586,20 @@ function appendScanRunToState(scanRun, status, audit, details) {
   }, ...(state.scanRuns || [])].slice(0, 100);
 }
 
-function observationData(item, endpoint, sourceRequestId, observedAt) {
-  const pair = item.details?.pair || {};
+function timestampMs(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && /^\d{10,}$/.test(value.trim())) {
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) ? numericValue : NaN;
+  }
+  return Date.parse(String(value || ""));
+}
+
+function observationData(item, endpoint, sourceRequestId, observedAt, pairOverride = null, pairRole = "primary") {
+  const pair = pairOverride || item.details?.pair || {};
   const providerMetadata = item.details?.providerMetadata || {};
   const decision = evaluateBaselineCandidate(item);
-  const rawPayload = { providerMetadata, pair };
+  const rawPayload = { providerMetadata, pair, pairRole, discoverySources: item.details?.discoverySources || [] };
   return {
     mint: item.mint,
     pairAddress: pair.address || null,
@@ -613,17 +624,19 @@ function observationData(item, endpoint, sourceRequestId, observedAt) {
     sourceEndpoint: endpoint,
     sourceRequestId,
     sourceResponseHash: crypto.createHash("sha256").update(JSON.stringify(rawPayload)).digest("hex"),
-    freshnessMs: Number.isFinite(Date.parse(providerMetadata.providerUpdatedAt || ""))
-      ? Math.max(0, Date.now() - Date.parse(providerMetadata.providerUpdatedAt))
+    freshnessMs: Number.isFinite(timestampMs(providerMetadata.providerUpdatedAt))
+      ? Math.max(0, Date.now() - timestampMs(providerMetadata.providerUpdatedAt))
       : null,
-    dataQuality: pair.address ? "PARTIAL_SECURITY_SEPARATE" : "MISSING_PAIR",
+    dataQuality: pair.address ? `${pairRole.toUpperCase()}_PAIR_SECURITY_SEPARATE` : "MISSING_PAIR",
     qualityReasons: decision.reasonCodes,
     rawPayload
   };
 }
 
 async function fetchLiveTokens({ correlationId, signal } = {}) {
-  const endpoint = process.env.DEXSCREENER_API_URL || "https://api.dexscreener.com/token-boosts/latest/v1";
+  const boostEndpoint = process.env.DEXSCREENER_API_URL || "https://api.dexscreener.com/token-boosts/latest/v1";
+  const profileEndpoint = process.env.DEXSCREENER_PROFILES_API_URL || "https://api.dexscreener.com/token-profiles/latest/v1";
+  const pairEndpoint = process.env.DEXSCREENER_PAIR_API_URL || "https://api.dexscreener.com/latest/dex/tokens";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 7000);
   const observedAt = new Date().toISOString();
@@ -632,16 +645,35 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
   let pairFailures = 0;
   try {
     const requestSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
-    const response = await fetch(endpoint, { signal: requestSignal, headers: { Accept: "application/json" } });
-    if (!response.ok) throw new Error(`Provider HTTP ${response.status}`);
-    const payload = await response.json();
-    const entries = Array.isArray(payload) ? payload.filter(item => item && item.chainId === "solana") : [];
-    const boostedEntries = dedupeMintEntries(entries, 10);
-    pairRequests = boostedEntries.length;
-    const pairResponses = await Promise.all(boostedEntries.map(async item => {
-      const mint = item.tokenAddress;
+    const readFeed = async endpoint => {
       try {
-        const pairResponse = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(mint)}`, {
+        const response = await fetch(endpoint, { signal: requestSignal, headers: { Accept: "application/json" } });
+        if (!response.ok) throw new Error(`Provider HTTP ${response.status}`);
+        const payload = await response.json();
+        return {
+          ok: true,
+          entries: Array.isArray(payload) ? payload.filter(item => item && (!item.chainId || item.chainId === "solana")) : [],
+          error: null
+        };
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        return { ok: false, entries: [], error: error.message };
+      }
+    };
+    const [boostFeed, profileFeed] = await Promise.all([readFeed(boostEndpoint), readFeed(profileEndpoint)]);
+    const boostEntries = boostFeed.entries.filter(item => item.chainId === "solana" && item.tokenAddress);
+    const profileEntries = profileFeed.entries.filter(item => item.chainId === "solana" && item.tokenAddress);
+    const discovery = normalizeDiscoveryUniverse({
+      boostEntries,
+      profileEntries,
+      watchlistMints: state.watchlist,
+      limit: Math.max(1, Math.min(100, Number(process.env.DEXSCREENER_DISCOVERY_LIMIT || 30)))
+    });
+    pairRequests = discovery.entries.length;
+    const pairResponses = await Promise.all(discovery.entries.map(async entry => {
+      const mint = entry.tokenAddress;
+      try {
+        const pairResponse = await fetch(`${pairEndpoint}/${encodeURIComponent(mint)}`, {
           signal: requestSignal,
           headers: { Accept: "application/json" }
         });
@@ -655,33 +687,37 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
         return { pairs: [] };
       }
     }));
-    const allPairs = pairResponses.flatMap(result => Array.isArray(result?.pairs) ? result.pairs.filter(pair => pair?.chainId === "solana") : []);
-    const fresh = boostedEntries.map((item, index) => {
-      const mint = item.tokenAddress || `live-${index}`;
-      const pairs = Array.isArray(pairResponses[index]?.pairs)
-        ? pairResponses[index].pairs.filter(pair => pair && pair.chainId === "solana")
-        : [];
+    const rawPairs = pairResponses.flatMap(result => Array.isArray(result?.pairs) ? result.pairs : []);
+    const allPairs = dedupePairs(rawPairs);
+    const fresh = discovery.entries.map((entry, index) => {
+      const mint = entry.tokenAddress || `live-${index}`;
+      const pairs = dedupePairs(Array.isArray(pairResponses[index]?.pairs) ? pairResponses[index].pairs : []);
       const pair = selectPrimaryPair(pairs);
+      const boost = entry.sourceEntries.boost_feed || {};
+      const profile = entry.sourceEntries.new_pair_feed || {};
       const shortMint = mint.slice(0, 4).toUpperCase();
       const baseToken = pair?.baseToken || {};
       const pairInfo = pair?.info || {};
-      const symbol = baseToken.symbol || item.symbol || `SOL-${shortMint}`;
-      const name = baseToken.name || item.name || String(item.description || "").split(/\r?\n/).map(line => line.trim()).find(Boolean) || `Solana token ${shortMint}`;
-      const description = item.description || pairInfo.description || null;
-      const links = providerLinks(item.links, pairInfo.websites, pairInfo.socials);
-      const websites = providerLinks(item.links, pairInfo.websites).filter(link => !["twitter", "telegram", "discord"].includes(link.type));
-      const socials = providerLinks(item.links, pairInfo.socials).filter(link => !websites.some(site => site.url === link.url));
-      const imageUrl = /^https?:\/\//i.test(String(item.icon || "")) ? item.icon : pairInfo.imageUrl || null;
-      const headerUrl = /^https?:\/\//i.test(String(item.header || "")) ? item.header : pairInfo.header || null;
+      const sourceItem = { ...profile, ...boost };
+      const symbol = baseToken.symbol || sourceItem.symbol || `SOL-${shortMint}`;
+      const name = baseToken.name || sourceItem.name || String(sourceItem.description || "").split(/\r?\n/).map(line => line.trim()).find(Boolean) || `Solana token ${shortMint}`;
+      const description = sourceItem.description || pairInfo.description || null;
+      const links = providerLinks(sourceItem.links, pairInfo.websites, pairInfo.socials);
+      const websites = providerLinks(sourceItem.links, pairInfo.websites).filter(link => !["twitter", "telegram", "discord"].includes(link.type));
+      const socials = providerLinks(sourceItem.links, pairInfo.socials).filter(link => !websites.some(site => site.url === link.url));
+      const imageUrl = /^https?:\/\//i.test(String(sourceItem.icon || "")) ? sourceItem.icon : pairInfo.imageUrl || null;
+      const headerUrl = /^https?:\/\//i.test(String(sourceItem.header || "")) ? sourceItem.header : pairInfo.header || null;
       const providerMetadata = {
-        chainId: item.chainId, symbol, name, icon: imageUrl, header: headerUrl,
-        openGraph: item.openGraph || null, description, links, websites, socials, pairInfo,
-        cto: typeof item.cto === "boolean" ? item.cto : null,
-        boostAmount: item.amount ?? null, totalBoostAmount: item.totalAmount ?? null,
-        providerUpdatedAt: item.updatedAt || null
+        chainId: "solana", symbol, name, icon: imageUrl, header: headerUrl,
+        openGraph: sourceItem.openGraph || null, description, links, websites, socials, pairInfo,
+        cto: typeof boost.cto === "boolean" ? boost.cto : null,
+        boostAmount: boost.amount ?? null, totalBoostAmount: boost.totalAmount ?? null,
+        providerUpdatedAt: boost.updatedAt || profile.updatedAt || null,
+        discoverySources: entry.sources
       };
       const evidence = [
-        "DexScreener supplied live token-boost metadata and pair data when available; missing market metrics remain UNKNOWN.",
+        `DexScreener discovery sources: ${entry.sources.join(", ")}.`,
+        "DexScreener supplied live discovery metadata and pair data when available; missing market metrics remain UNKNOWN.",
         `DexScreener CTO flag: ${providerMetadata.cto == null ? "UNKNOWN" : providerMetadata.cto ? "TRUE" : "FALSE"}.`,
         links.length ? `DexScreener supplied ${links.length} external link${links.length === 1 ? "" : "s"}.` : "DexScreener supplied no external links."
       ];
@@ -696,9 +732,10 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
       const base = token(symbol, name, price, marketCap, liquidity, null, null, null, null, null, null, null, priceChange, "UNKNOWN", "UNKNOWN", providerMetadata.cto ? "CTO FLAG" : "PROVIDER", providerAge, "Pending independent Solana security verification.", "unknown", null, "UNKNOWN");
       return {
         ...base, mint, symbol, name,
-        providerUrl: pair?.url || item.url || `https://dexscreener.com/solana/${mint}`,
+        providerUrl: pair?.url || sourceItem.url || `https://dexscreener.com/solana/${mint}`,
         details: {
-          ...base.details, source: endpoint, coverage: "DEXSCREENER_TOKEN_BOOST_METADATA",
+          ...base.details, source: "DexScreener", coverage: "DEXSCREENER_MULTI_SOURCE_DISCOVERY",
+          discoverySources: entry.sources,
           pair: pair ? {
             address: pair.pairAddress || null, dexId: pair.dexId || null, url: pair.url || null,
             baseToken: pair.baseToken || null, quoteToken: pair.quoteToken || null,
@@ -708,8 +745,17 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
             priceChange: pair.priceChange || {}, txns: pair.txns || {}, makers: pair.makers || {},
             info: pair.info || null, pairCountForMint: pairs.length
           } : null,
+          pairs: pairs.map(candidate => ({
+            address: candidate.pairAddress || null, dexId: candidate.dexId || null, url: candidate.url || null,
+            chainId: candidate.chainId || null, baseToken: candidate.baseToken || null, quoteToken: candidate.quoteToken || null,
+            pairCreatedAt: candidate.pairCreatedAt || null, updatedAt: candidate.updatedAt || null,
+            priceUsd: candidate.priceUsd ?? null, fdv: candidate.fdv ?? null, marketCap: candidate.marketCap ?? null,
+            liquidityUsd: candidate.liquidity?.usd ?? null, volume: candidate.volume || {},
+            priceChange: candidate.priceChange || {}, txns: candidate.txns || {}, makers: candidate.makers || {}
+          })),
+          primaryPairPolicy: "SOLANA_ONLY_WITH_PRICE_AND_LIQUIDITY_THEN_LIQUIDITY_UPDATED_CREATED_ADDRESS",
           providerMetadata,
-          profile: { description, imageUrl, headerUrl, websites, socials, openGraph: item.openGraph || null },
+          profile: { description, imageUrl, headerUrl, websites, socials, openGraph: sourceItem.openGraph || null },
           evidence
         }
       };
@@ -737,7 +783,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
       };
     });
     const providerAgeMs = fresh.reduce((maxAge, item) => {
-      const updatedAt = Date.parse(item.details?.providerMetadata?.providerUpdatedAt || "");
+      const updatedAt = timestampMs(item.details?.providerMetadata?.providerUpdatedAt);
       return Number.isFinite(updatedAt) ? Math.max(maxAge, Math.max(0, Date.now() - updatedAt)) : maxAge;
     }, 0) || null;
     const rpcStatuses = securityResults.map(result => result.status);
@@ -746,9 +792,9 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
       : rpcStatuses.some(status => status !== "UNVERIFIED") ? "PARTIAL" : "FAILED";
     const report = summarizeBaselineCandidates(secured, {
       checked: secured.length,
-      providerRecords: entries.length,
-      discoveryUniverseSize: boostedEntries.length,
-      providerRecordsWithPair: fresh.filter(item => item.details?.pair).length,
+       providerRecords: boostEntries.length + profileEntries.length,
+       discoveryUniverseSize: discovery.entries.length,
+       providerRecordsWithPair: fresh.filter(item => (item.details?.pairs || []).length > 0).length,
       providerRecordsWithPrice: fresh.filter(item => item.price !== "UNKNOWN").length,
       providerRecordsWithLiquidity: fresh.filter(item => item.liquidity != null).length,
       pairRequests, pairFailures, providerAgeMs, rpcFreshnessMs,
@@ -760,13 +806,15 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
            : "FAILED",
       filterConfig: FILTER_CONFIG,
       sourceMetrics: {
-        boost_feed_seen: entries.length,
-        unique_mints_before_dedup: new Set(entries.map(item => item.tokenAddress).filter(Boolean)).size,
-        unique_pairs_before_dedup: new Set(allPairs.map(pair => pair.pairAddress).filter(Boolean)).size,
-         unique_mints_after_dedup: boostedEntries.length,
-         unique_pairs_after_dedup: new Set(fresh.map(item => item.details?.pair?.address).filter(Boolean)).size,
-        source_overlap: {},
-        source_only_candidates: { boost_feed: boostedEntries.length }
+        ...discovery.sourceMetrics,
+         unique_pairs_before_dedup: new Set(rawPairs.map(pair => pair.pairAddress).filter(Boolean)).size,
+        unique_pairs_after_dedup: new Set(fresh.flatMap(item => item.details?.pairs || []).map(pair => pair.address).filter(Boolean)).size,
+        discovery_sources: {
+          boost_feed: { endpoint: boostEndpoint, ok: boostFeed.ok, error: boostFeed.error },
+          new_pair_feed: { endpoint: profileEndpoint, ok: profileFeed.ok, error: profileFeed.error },
+          watchlist: { count: state.watchlist.length, ok: true }
+        },
+        primary_pair_policy: "SOLANA_ONLY_WITH_PRICE_AND_LIQUIDITY_THEN_LIQUIDITY_UPDATED_CREATED_ADDRESS"
       }
     });
     lastFilterReport = {
@@ -780,7 +828,17 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
     };
     return {
       tokens: safeTokens,
-      observations: secured.map(item => observationData(item, endpoint, sourceRequestId, observedAt)),
+      observations: secured.flatMap(item => {
+        const pairs = item.details?.pairs?.length ? item.details.pairs : [item.details?.pair || null];
+        return pairs.map(candidate => observationData(
+          item,
+          pairEndpoint,
+          sourceRequestId,
+          observedAt,
+          candidate,
+          candidate?.address && candidate.address === item.details?.pair?.address ? "primary" : "secondary"
+        ));
+      }),
       report: lastFilterReport
     };
   } finally {

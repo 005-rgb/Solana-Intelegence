@@ -3,7 +3,9 @@ const assert = require("node:assert/strict");
 const {
   FILTER_CONFIG,
   dedupeMintEntries,
+  dedupePairs,
   evaluateBaselineCandidate,
+  normalizeDiscoveryUniverse,
   selectBoardTokens,
   selectPrimaryPair,
   summarizeBaselineCandidates
@@ -88,6 +90,38 @@ test("duplicate mints and pairs resolve deterministically", () => {
     { chainId: "solana", pairAddress: "z", priceUsd: "1", liquidity: { usd: 1000 }, pairCreatedAt: 2 },
     { chainId: "solana", pairAddress: "a", priceUsd: "1", liquidity: { usd: 1000 }, pairCreatedAt: 2 }
   ]).pairAddress, "a");
+});
+
+test("phase 1 discovery merges sources, preserves watchlist priority, and records overlap", () => {
+  const discovery = normalizeDiscoveryUniverse({
+    boostEntries: [
+      { tokenAddress: "boost-only", chainId: "solana" },
+      { tokenAddress: "shared", chainId: "solana" }
+    ],
+    profileEntries: [
+      { tokenAddress: "profile-only", chainId: "solana" },
+      { tokenAddress: "shared", chainId: "solana" }
+    ],
+    watchlistMints: ["watch-only", "shared"],
+    limit: 10
+  });
+  assert.deepEqual(discovery.entries.map(entry => entry.tokenAddress), ["shared", "watch-only", "profile-only", "boost-only"]);
+  assert.deepEqual(discovery.entries[0].sources, ["boost_feed", "new_pair_feed", "watchlist"]);
+  assert.equal(discovery.sourceMetrics.unique_mints_before_dedup, 4);
+  assert.equal(discovery.sourceMetrics.unique_mints_after_dedup, 4);
+  assert.equal(discovery.sourceMetrics.source_overlap["boost_feed+new_pair_feed"], 1);
+  assert.equal(discovery.sourceMetrics.source_only_candidates.watchlist, 1);
+});
+
+test("phase 1 pair observations are deduplicated without dropping other valid pairs", () => {
+  const pairs = dedupePairs([
+    { chainId: "solana", pairAddress: "pair-b", priceUsd: "1", liquidity: { usd: 1000 } },
+    { chainId: "solana", pairAddress: "pair-b", priceUsd: "1", liquidity: { usd: 2000 } },
+    { chainId: "solana", pairAddress: "pair-a", priceUsd: "1", liquidity: { usd: 3000 } },
+    { chainId: "ethereum", pairAddress: "pair-eth", priceUsd: "1", liquidity: { usd: 999999 } }
+  ]);
+  assert.deepEqual(pairs.map(pair => pair.pairAddress), ["pair-b", "pair-a"]);
+  assert.equal(selectPrimaryPair(pairs).pairAddress, "pair-a");
 });
 
 test("partial candidate data remains unresolved and cannot reconcile as accepted", () => {

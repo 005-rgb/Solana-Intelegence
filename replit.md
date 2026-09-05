@@ -51,6 +51,15 @@ The current Radar board is a fail-closed research filter, not a validated predic
 
 If a provider or security scan fails, the last known good Radar board remains visible. A filtered scan persists its observations and audit record without replacing the board. `baseline-v1` intentionally leaves Radar, opportunity, flow, risk, and confidence fields as `UNKNOWN` until later scoring and outcome phases.
 
+## Phase 1 discovery and observations
+
+- Discovery merges DexScreener token boosts, latest token profiles, and active watchlist mints.
+- Mints are deduplicated deterministically with watchlist priority; every Solana pair returned for a mint is retained as an immutable `TokenObservation`.
+- The primary pair policy is explicit: Solana only, price and liquidity required, then highest liquidity, freshest `updatedAt`, newest `pairCreatedAt`, and stable pair address tie-break.
+- Boost data is stored as attention metadata and never acts as a quality score by itself.
+- Missing provider fields remain `null`/`UNKNOWN`; source endpoint, request ID, response hash, observation time, provider update time, and quality reasons are persisted.
+- The scan audit exposes source health, overlap, deduplicated mint/pair counts, pair policy, and primary/secondary observation lineage.
+
 ## Phase 0A platform safety
 
 The server keeps scan execution safe across restarts and concurrent callers:

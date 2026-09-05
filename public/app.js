@@ -119,6 +119,9 @@ function baselineAuditPanel(report = {}, run = {}, compactMode = false) {
   const sourceOnly = source.source_only_candidates && typeof source.source_only_candidates === "object"
     ? Object.entries(source.source_only_candidates).map(([key, value]) => `${key}: ${value}`).join(" · ")
     : "none recorded";
+  const sourceHealth = source.discovery_sources && typeof source.discovery_sources === "object"
+    ? Object.entries(source.discovery_sources).map(([key, value]) => `${key}: ${value?.ok === true ? "OK" : value?.count != null ? `${value.count} tracked` : "FAILED"}`).join(" · ")
+    : "not recorded";
   const reasonMarkup = reasons.length
     ? reasons.slice(0, compactMode ? 4 : 12).map(reason => `<div class="health-row"><span>${esc(reason.code)}<small class="health-muted"> · ${esc(reason.reason || "No label")}</small></span><strong>${auditValue(reason.count)}</strong></div>`).join("")
     : `<div class="empty"><strong>No rejection reasons recorded</strong><span>Reason counters will appear after the first provider scan.</span></div>`;
@@ -146,7 +149,7 @@ function baselineAuditPanel(report = {}, run = {}, compactMode = false) {
         <div class="health-row"><span>Duration / timeout</span><strong>${auditAge(run.durationMs)} / ${run.timedOut ? "YES" : "NO"}</strong></div>
       </div>
     </div>
-    ${compactMode ? "" : `<div class="grid section-grid audit-columns"><div><div class="card-title">Stable rejection reasons</div>${reasonMarkup}</div><div><div class="card-title">Discovery denominators</div><div class="health-row"><span>Unique mints before / after dedup</span><strong>${auditValue(source.unique_mints_before_dedup)} / ${auditValue(source.unique_mints_after_dedup)}</strong></div><div class="health-row"><span>Unique pairs before dedup</span><strong>${auditValue(source.unique_pairs_before_dedup)}</strong></div><div class="health-row"><span>Source-only candidates</span><strong>${esc(sourceOnly)}</strong></div><div class="health-row"><span>Source overlap</span><strong>${esc(overlaps)}</strong></div></div></div>`}
+    ${compactMode ? "" : `<div class="grid section-grid audit-columns"><div><div class="card-title">Stable rejection reasons</div>${reasonMarkup}</div><div><div class="card-title">Discovery denominators</div><div class="health-row"><span>Unique mints before / after dedup</span><strong>${auditValue(source.unique_mints_before_dedup)} / ${auditValue(source.unique_mints_after_dedup)}</strong></div><div class="health-row"><span>Unique pairs before / after dedup</span><strong>${auditValue(source.unique_pairs_before_dedup)} / ${auditValue(source.unique_pairs_after_dedup)}</strong></div><div class="health-row"><span>Source health</span><strong>${esc(sourceHealth)}</strong></div><div class="health-row"><span>Source-only candidates</span><strong>${esc(sourceOnly)}</strong></div><div class="health-row"><span>Source overlap</span><strong>${esc(overlaps)}</strong></div><div class="health-row"><span>Primary pair policy</span><strong>${esc(source.primary_pair_policy || "not recorded")}</strong></div></div></div>`}
     <div class="data-note">Decision version: <strong>${auditValue(report.decisionVersion || run.decisionVersion || "baseline-v1")}</strong> · Filter config is persisted with every ScanRun. Predictive scores are intentionally UNKNOWN.</div>
   </section>`;
 }

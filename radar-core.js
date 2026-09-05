@@ -39,6 +39,8 @@ function selectPrimaryPair(pairs) {
     .sort((left, right) => {
       const liquidityDifference = (numeric(right.liquidity?.usd) ?? -1) - (numeric(left.liquidity?.usd) ?? -1);
       if (liquidityDifference) return liquidityDifference;
+      const updatedDifference = (numeric(right.updatedAt) ?? -1) - (numeric(left.updatedAt) ?? -1);
+      if (updatedDifference) return updatedDifference;
       const createdDifference = (numeric(right.pairCreatedAt) ?? -1) - (numeric(left.pairCreatedAt) ?? -1);
       if (createdDifference) return createdDifference;
       return String(left.pairAddress || "").localeCompare(String(right.pairAddress || ""));
@@ -85,7 +87,12 @@ function normalizeDiscoveryUniverse({ boostEntries = [], profileEntries = [], wa
       merged.set(mint, current);
     }
   }
-  const entries = [...merged.values()].slice(0, limit);
+  const entries = [...merged.values()]
+    .sort((left, right) => {
+      const sourcePriority = entry => entry.sources.includes("watchlist") ? 0 : entry.sources.includes("new_pair_feed") ? 1 : 2;
+      return sourcePriority(left) - sourcePriority(right) || left.tokenAddress.localeCompare(right.tokenAddress);
+    })
+    .slice(0, limit);
   const sourceMetrics = {
     boost_feed_seen: new Set((Array.isArray(boostEntries) ? boostEntries : []).map(item => item?.tokenAddress).filter(Boolean)).size,
     profile_feed_seen: new Set((Array.isArray(profileEntries) ? profileEntries : []).map(item => item?.tokenAddress).filter(Boolean)).size,
