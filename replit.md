@@ -11,7 +11,7 @@ The server binds to `0.0.0.0:5000`.
 ## Data modes
 
 - **DEMO MODE** (default): uses a clearly labelled, controlled dataset for development and UI/engine validation. It is not production market data.
-- **LIVE MODE**: set `RADAR_MODE=live` and run a scan. The server calls the configured `DEXSCREENER_API_URL` or its public default endpoint. Unavailable fields remain `UNKNOWN`.
+- **LIVE MODE**: set `RADAR_MODE=live` and run a scan. The server calls the configured `DEXSCREENER_API_URL` or its public default endpoint, keeps only Solana records, and preserves DexScreener metadata such as provider URL, icon, header, description, links, CTO flag, boost amounts, and provider update time. Unavailable market/intelligence fields remain `UNKNOWN`.
 
 No API keys are hard-coded or sent to the browser. The application never asks for seed phrases/private keys and only supports simulated paper trading.
 
@@ -36,7 +36,7 @@ npm run db:push
 ## Data modes
 
 - **DEMO MODE** (default): controlled dataset for development and UI/engine validation. It is explicitly labeled and is not production market data.
-- **LIVE MODE**: set `RADAR_MODE=live` and run a scan. The server calls `DEXSCREENER_API_URL` or its public default endpoint. Unavailable fields remain `UNKNOWN`.
+- **LIVE MODE**: set `RADAR_MODE=live` and run a scan. The server calls `DEXSCREENER_API_URL` or its public default endpoint, keeps only Solana records, and preserves DexScreener metadata such as provider URL, icon, header, description, links, CTO flag, boost amounts, and provider update time. Unavailable market/intelligence fields remain `UNKNOWN`.
 
 No API keys are hard-coded or sent to the browser. The application never asks for seed phrases/private keys and only supports simulated paper trading.
 

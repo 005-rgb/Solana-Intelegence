@@ -33,6 +33,12 @@ const NAV = NAV_GROUPS.flatMap(([, items]) => items);
 const money = (value, digits = 0) => value == null ? "UNKNOWN" : value.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: digits });
 const compact = value => value == null ? "UNKNOWN" : value >= 1e6 ? `$${(value / 1e6).toFixed(1)}M` : value >= 1e3 ? `$${(value / 1e3).toFixed(0)}K` : `$${value.toFixed(0)}`;
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[c]));
+const safeHttpUrl = value => /^https?:\/\//i.test(String(value || "")) ? String(value) : "";
+function tokenLogo(item, large = false) {
+  const icon = safeHttpUrl(item?.details?.providerMetadata?.icon);
+  const className = large ? "big-logo" : "token-logo";
+  return icon ? `<img class="${className} token-logo-image" src="${esc(icon)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<div class="${className}">${esc(String(item?.symbol || "?").slice(0, 2))}</div>`;
+}
 const tone = (risk, positive = false) => positive ? "green" : risk <= 25 ? "green" : risk <= 55 ? "yellow" : "red";
 const nextScanLabel = () => {
   const seconds = Math.max(0, Math.ceil(((snapshot?.nextScanAt || Date.now() + 30000) - Date.now()) / 1000));
@@ -62,7 +68,7 @@ function head(eyebrow, title, description, actions = "") { return `<div class="p
 function stat(label, value, foot, accent, cls = "") { return `<div class="card metric"><span class="metric-accent">${accent}</span><div class="metric-label">${label}</div><div class="metric-value ${cls}">${value}</div><div class="metric-foot">${foot}</div></div>`; }
 function statusBadge(item) { const t = item.status?.includes("RISK") || item.status === "DISTRIBUTING" ? "red" : item.status === "BREAKOUT" || item.status === "ACCUMULATING" || item.status === "ACTIVE" ? "green" : item.status === "HYPED" || item.status === "COOLING" ? "yellow" : "blue"; return `<span class="badge badge-${t}">${esc(item.status)}</span>`; }
 function tokenRow(item, index, actions = true) { return `<tr>
-  <td class="rank">0${index + 1}</td><td><div class="token-cell"><div class="token-logo">${esc(item.symbol.slice(0,2))}</div><div class="token-meta"><strong>${esc(item.symbol)}</strong><span>${esc(item.name)}</span></div></div></td>
+  <td class="rank">0${index + 1}</td><td><div class="token-cell">${tokenLogo(item)}<div class="token-meta"><strong>${esc(item.symbol)}</strong><span>${esc(item.name)}</span></div></div></td>
   <td>${esc(item.age)}</td><td>${compact(item.marketCap)}</td><td>${compact(item.liquidity)}</td><td class="score">${item.radar ?? "UNKNOWN"}</td><td>${item.opportunity ?? "UNKNOWN"}</td><td>${item.smartMoney ?? "UNKNOWN"}</td><td class="${String(item.priceChange).startsWith("-") ? "negative":"positive"}">${esc(item.priceChange)}</td><td>${statusBadge(item)}</td>
   ${actions ? `<td><button class="btn btn-small btn-quiet" onclick="showToken('${encodeURIComponent(item.mint)}')">View</button></td>` : ""}</tr>`; }
 function tokenTable(items, title = "Top opportunities", subtitle = "Ranked by current Radar Score") { return `<section class="card page-panel"><div class="card-head"><div><div class="card-title">${title}</div><div class="card-kicker">${subtitle}</div></div><button class="btn btn-small" onclick="go('radar')">View radar ↗</button></div><div class="table-wrap"><table><thead><tr><th>#</th><th>Token</th><th>Age</th><th>MC</th><th>Liquidity</th><th>Radar</th><th>Opp.</th><th>Smart</th><th>24h</th><th>Status</th><th></th></tr></thead><tbody>${items.map(tokenRow).join("")}</tbody></table></div><div class="data-note">${snapshot.mode === "demo" ? "DEMO DATA · Controlled dataset for development. Live mode requires a configured provider." : "LIVE DATA · Values reflect the latest provider response. Unavailable fields remain UNKNOWN."}</div></section>`; }
@@ -122,7 +128,7 @@ const ageMinutes = value => {
   return hours * 60 + minutes;
 };
 function tokenMiniRow(item, index, extra = "") {
-  return `<tr><td class="rank">${String(index + 1).padStart(2, "0")}</td><td><div class="token-cell"><div class="token-logo">${esc(String(item.symbol || "?").slice(0,2))}</div><div class="token-meta"><strong>${esc(item.symbol)}</strong><span>${esc(item.name)}</span></div></div></td><td>${compact(item.marketCap)}</td><td>${compact(item.liquidity)}</td><td class="score">${item.radar ?? "UNKNOWN"}</td>${extra}<td>${statusBadge(item)}</td><td><button class="btn btn-small btn-quiet" onclick="showToken('${encodeURIComponent(item.mint)}')">View</button></td></tr>`;
+  return `<tr><td class="rank">${String(index + 1).padStart(2, "0")}</td><td><div class="token-cell">${tokenLogo(item)}<div class="token-meta"><strong>${esc(item.symbol)}</strong><span>${esc(item.name)}</span></div></div></td><td>${compact(item.marketCap)}</td><td>${compact(item.liquidity)}</td><td class="score">${item.radar ?? "UNKNOWN"}</td>${extra}<td>${statusBadge(item)}</td><td><button class="btn btn-small btn-quiet" onclick="showToken('${encodeURIComponent(item.mint)}')">View</button></td></tr>`;
 }
 function newTokens() {
   const items = [...snapshot.tokens].sort((a, b) => ageMinutes(a.age) - ageMinutes(b.age));

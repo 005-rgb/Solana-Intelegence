@@ -180,16 +180,50 @@ async function fetchLiveTokens() {
     const response = await fetch(endpoint, { signal: controller.signal, headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error(`Provider HTTP ${response.status}`);
     const payload = await response.json();
-    const entries = Array.isArray(payload) ? payload : [];
-    const fresh = entries.slice(0, 10).map((item, index) => ({
-      ...token(`LIVE${index + 1}`, item.description || "Live Solana token", item.amount ? `$${Number(item.amount).toFixed(6)}` : "UNKNOWN", null, null, null, null, null, null, null, null, null, "UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN", "Live provider record; deeper intelligence requires indexed market data.", "unknown", null, "UNKNOWN",
-      ),
-      mint: item.tokenAddress || `live-${index}`,
-      symbol: (item.symbol || item.description || "TOKEN").slice(0, 10).toUpperCase(),
-      name: item.description || "Unnamed token",
-      providerUrl: item.url || null,
-      details: { ...token("X", "x", "UNKNOWN", 0, 0, 0, 0, 0, 0, 0, 0, 0, "UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN", "unknown", 0, "UNKNOWN").details, source: endpoint }
-    }));
+    const entries = Array.isArray(payload) ? payload.filter(item => item && item.chainId === "solana") : [];
+    const fresh = entries.slice(0, 10).map((item, index) => {
+      const mint = item.tokenAddress || `live-${index}`;
+      const shortMint = mint.slice(0, 4).toUpperCase();
+      const symbol = `SOL-${shortMint}`;
+      const description = String(item.description || "").split(/\r?\n/).map(line => line.trim()).find(Boolean) || `Solana token ${shortMint}`;
+      const links = Array.isArray(item.links) ? item.links.filter(link => link && typeof link.url === "string").map(link => ({ label: link.label || link.type || "Link", type: link.type || null, url: link.url })) : [];
+      const providerMetadata = {
+        chainId: item.chainId,
+        icon: item.icon || null,
+        header: item.header || null,
+        openGraph: item.openGraph || null,
+        description: item.description || null,
+        links,
+        cto: typeof item.cto === "boolean" ? item.cto : null,
+        boostAmount: item.amount ?? null,
+        totalBoostAmount: item.totalAmount ?? null,
+        providerUpdatedAt: item.updatedAt || null
+      };
+      const evidence = [
+        "DexScreener supplied token-boost metadata only; market metrics are UNKNOWN until pair data is available.",
+        `DexScreener CTO flag: ${providerMetadata.cto == null ? "UNKNOWN" : providerMetadata.cto ? "TRUE" : "FALSE"}.`,
+        links.length ? `DexScreener supplied ${links.length} external link${links.length === 1 ? "" : "s"}.` : "DexScreener supplied no external links."
+      ];
+      if (providerMetadata.boostAmount != null) evidence.push(`Reported boost amount: ${providerMetadata.boostAmount}.`);
+      if (providerMetadata.providerUpdatedAt) evidence.push(`Provider metadata updated ${providerMetadata.providerUpdatedAt}.`);
+      const providerTime = providerMetadata.providerUpdatedAt ? Date.parse(providerMetadata.providerUpdatedAt) : NaN;
+      const providerAge = Number.isFinite(providerTime) ? formatAge(Math.max(0, Date.now() - providerTime)) : "UNKNOWN";
+      const base = token(symbol, description, "UNKNOWN", null, null, null, null, null, null, null, null, null, "UNKNOWN", "UNKNOWN", "UNKNOWN", providerMetadata.cto ? "CTO FLAG" : "PROVIDER", providerAge, "DexScreener token-boost metadata; deeper intelligence requires indexed market and pair data.", "unknown", null, "UNKNOWN");
+      return {
+        ...base,
+        mint,
+        symbol,
+        name: description,
+        providerUrl: item.url || `https://dexscreener.com/solana/${mint}`,
+        details: {
+          ...base.details,
+          source: endpoint,
+          coverage: "DEXSCREENER_TOKEN_BOOST_METADATA",
+          providerMetadata,
+          evidence
+        }
+      };
+    });
     if (!fresh.length) throw new Error("Provider returned no token records");
     return fresh;
   } finally {
