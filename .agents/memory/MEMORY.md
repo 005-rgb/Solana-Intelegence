@@ -1,3 +1,4 @@
 - [Solana RPC verification](solana-rpc-verification.md) — public RPC rate limits require batched, fail-closed security checks and visible filter diagnostics.
 - [Audit count semantics](audit-count-semantics.md) — rejection reason counters are multi-label; reconcile row outcomes, not the sum of reason occurrences.
 - [Prisma nullable unique push](prisma-nullable-unique-push.md) — inspect existing values before confirming nullable unique idempotency indexes.
+- [Core before monetization](core-before-monetization.md) — finish and validate Radar reliability before wallet execution or configurable fees.
