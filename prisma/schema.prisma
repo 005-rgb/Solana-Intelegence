@@ -1,0 +1,166 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model RadarState {
+  id               Int       @id @default(1)
+  mode             String    @default("demo")
+  provider         String
+  lastScan         DateTime?
+  nextScanAt       DateTime?
+  scanRunning      Boolean   @default(false)
+  watchlistHistory Json
+  system           Json
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}
+
+model Token {
+  id              Int              @id @default(autoincrement())
+  mint            String           @unique
+  symbol          String
+  name            String
+  price           String
+  marketCap       Float?
+  liquidity       Float?
+  radar           Int?
+  opportunity     Int?
+  smartMoney      Int?
+  momentum        Int?
+  hype            Int?
+  risk            Int?
+  confidence      Int?
+  priceChange     String
+  whaleFlow       String
+  holderGrowth    String
+  status          String
+  age             String
+  rationale       String
+  riskLabel       String
+  dataQuality     Int?
+  potential       String
+  providerUrl     String?
+  details         Json
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  watchlistEntry  WatchlistEntry?
+  watchlistEvents WatchlistEvent[]
+  positions       PaperPosition[]
+  trades          PaperTrade[]
+
+  @@index([radar])
+  @@index([risk])
+  @@index([status])
+  @@index([updatedAt])
+}
+
+model WatchlistEntry {
+  id        Int      @id @default(autoincrement())
+  tokenId   Int      @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  token     Token    @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+}
+
+model WatchlistEvent {
+  id        Int      @id @default(autoincrement())
+  tokenId   Int
+  action    String
+  createdAt DateTime @default(now())
+  token     Token    @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  @@index([tokenId, createdAt])
+}
+
+model Alert {
+  id        Int      @id @default(autoincrement())
+  type      String
+  token     String
+  text      String
+  tone      String
+  timeLabel String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model Pattern {
+  id        Int      @id @default(autoincrement())
+  patternId String   @unique
+  name      String
+  detail    String
+  match     Int
+  sample    Int
+  outcome   String
+  tone      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PaperAccount {
+  id        Int             @id @default(1)
+  starting  Float
+  cash      Float
+  realized  Float
+  fees      Float
+  trades    Int
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  positions PaperPosition[]
+  history   PaperTrade[]
+}
+
+model PaperPosition {
+  id        Int          @id @default(autoincrement())
+  accountId Int
+  tokenId   Int
+  invested  Float
+  quantity  Float
+  entry     Float
+  peakPnl   Float
+  openedAt  DateTime
+  account   PaperAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  token     Token        @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, tokenId])
+  @@index([openedAt])
+}
+
+model PaperTrade {
+  id        Int          @id @default(autoincrement())
+  accountId Int
+  tokenId   Int?
+  symbol    String
+  side      String
+  amount    Float
+  price     Float
+  fee       Float        @default(0)
+  score     Int?
+  time      DateTime     @default(now())
+  account   PaperAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  token     Token?       @relation(fields: [tokenId], references: [id], onDelete: SetNull)
+
+  @@index([accountId, time])
+}
+
+model ScanRun {
+  id                    String    @id @default(cuid())
+  manual                Boolean   @default(false)
+  status                String
+  startedAt             DateTime
+  finishedAt            DateTime?
+  durationMs            Int?
+  tokensScanned         Int       @default(0)
+  transactionsProcessed Int       @default(0)
+  errorCount            Int       @default(0)
+  provider              String
+
+  @@index([startedAt])
+  @@index([status])
+}

@@ -2,6 +2,15 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
+const {
+  readState,
+  persistState,
+  recordTrade,
+  recordWatchlistEvent,
+  createScanRun,
+  finishScanRun,
+  disconnectDb
+} = require("./db");
 
 const PORT = Number(process.env.PORT || 5000);
 const ROOT = __dirname;
@@ -88,9 +97,8 @@ function loadState() {
 }
 let state = loadState();
 
-function saveState() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+async function saveState() {
+  await persistState(state);
 }
 
 function send(res, status, body, headers = {}) {
@@ -156,6 +164,12 @@ async function runScan(manual = false) {
   if (state.scanRunning) return { ok: false, message: "A scan is already running." };
   state.scanRunning = true;
   const started = Date.now();
+  const scanRun = await createScanRun({
+    manual,
+    status: "RUNNING",
+    startedAt: new Date(started),
+    provider: state.provider
+  });
   try {
     if (state.mode === "live") {
       state.tokens = await fetchLiveTokens();
@@ -175,13 +189,29 @@ async function runScan(manual = false) {
     state.system.tokensPerScan = state.tokens.length;
     state.system.transactionsPerScan = state.mode === "demo" ? 128 : null;
     state.scanRunning = false;
-    saveState();
+    await finishScanRun(scanRun.id, {
+      status: "SUCCESS",
+      finishedAt: new Date(),
+      durationMs: Date.now() - started,
+      tokensScanned: state.tokens.length,
+      transactionsProcessed: state.mode === "demo" ? 128 : 0,
+      errorCount: 0
+    });
+    await saveState();
     return { ok: true, manual, duration: Date.now() - started, tokens: state.tokens.length };
   } catch (error) {
     state.scanRunning = false;
     state.system.lastScanStatus = "FAILED";
     state.system.errors += 1;
-    saveState();
+    await finishScanRun(scanRun.id, {
+      status: "FAILED",
+      finishedAt: new Date(),
+      durationMs: Date.now() - started,
+      tokensScanned: 0,
+      transactionsProcessed: 0,
+      errorCount: 1
+    });
+    await saveState();
     return { ok: false, message: state.mode === "live" ? "Provider temporarily unavailable. Data remains unchanged." : error.message };
   }
 }
@@ -199,7 +229,8 @@ async function handleApi(req, res, url) {
     if (!item) return send(res, 404, { error: "Token not found" });
     if (!state.watchlist.includes(item.mint)) state.watchlist.push(item.mint);
     state.watchlistHistory.push({ mint: item.mint, action: "ADDED", at: new Date().toISOString() });
-    saveState();
+    await saveState();
+    await recordWatchlistEvent(item.mint, "ADDED");
     return send(res, 200, { ok: true, watchlist: state.watchlist });
   }
   if (req.method === "DELETE" && url.pathname.startsWith("/api/watchlist/")) {
@@ -208,7 +239,8 @@ async function handleApi(req, res, url) {
     if (item) {
       state.watchlist = state.watchlist.filter(mint => mint !== item.mint);
       state.watchlistHistory.push({ mint: item.mint, action: "REMOVED_FROM_ACTIVE_VIEW", at: new Date().toISOString() });
-      saveState();
+      await saveState();
+      await recordWatchlistEvent(item.mint, "REMOVED_FROM_ACTIVE_VIEW");
     }
     return send(res, 200, { ok: true, watchlist: state.watchlist });
   }
@@ -219,6 +251,7 @@ async function handleApi(req, res, url) {
       if (!item) return send(res, 404, { error: "Token not found" });
       const price = parseFloat(String(item.price).replace("$", ""));
       if (!Number.isFinite(price)) return send(res, 422, { error: "Current price is unavailable; paper trade cannot be simulated." });
+      let tradeRecord;
       if (body.side === "BUY") {
         const amount = 100;
         if (state.portfolio.cash < amount) return send(res, 422, { error: "Insufficient virtual cash." });
@@ -229,6 +262,7 @@ async function handleApi(req, res, url) {
         state.portfolio.trades += 1;
         state.portfolio.positions.push(position);
         state.portfolio.history.unshift({ symbol: item.symbol, side: "BUY", amount, price, fee, score: item.radar, time: Date.now() });
+        tradeRecord = { mint: item.mint, symbol: item.symbol, side: "BUY", amount, price, fee, score: item.radar, time: Date.now() };
       } else if (body.side === "SELL") {
         const position = state.portfolio.positions.find(p => p.mint === item.mint);
         if (!position) return send(res, 422, { error: "No open paper position for this token." });
@@ -239,8 +273,10 @@ async function handleApi(req, res, url) {
         state.portfolio.fees += fee;
         state.portfolio.history.unshift({ symbol: item.symbol, side: "SELL", amount: value, price, fee, score: item.radar, time: Date.now() });
         state.portfolio.positions = state.portfolio.positions.filter(p => p !== position);
+        tradeRecord = { mint: item.mint, symbol: item.symbol, side: "SELL", amount: value, price, fee, score: item.radar, time: Date.now() };
       } else return send(res, 400, { error: "Unsupported trade side." });
-      saveState();
+      await saveState();
+      await recordTrade(tradeRecord);
       return send(res, 200, { ok: true, state: jsonState() });
     } catch (error) { return send(res, 400, { error: error.message }); }
   }
@@ -256,7 +292,7 @@ async function handleApi(req, res, url) {
         state.nextScanAt = Date.now() + AUTO_SCAN_MS;
       }
       if (body.mode === "live") { state.provider = "DexScreener"; state.system.rpc = "LIVE PROVIDER"; state.system.market = "LIVE PROVIDER"; }
-      saveState();
+      await saveState();
       return send(res, 200, { ok: true, mode: state.mode, provider: state.provider });
     } catch (error) { return send(res, 400, { error: error.message }); }
   }
@@ -282,6 +318,26 @@ const server = http.createServer((req, res) => {
   serveStatic(req, res, url);
 });
 
-setInterval(() => { if (!state.scanRunning) runScan(false).catch(() => {}); }, AUTO_SCAN_MS);
-setInterval(() => { state.system.lastAnalysis = new Date().toISOString(); saveState(); }, ANALYSIS_MS);
-server.listen(PORT, "0.0.0.0", () => console.log(`Solana 20× Radar listening on 0.0.0.0:${PORT} · mode=${state.mode}`));
+async function start() {
+  try {
+    state = await readState(state);
+    state.system.database = "POSTGRESQL / PRISMA";
+    await saveState();
+    setInterval(() => { if (!state.scanRunning) runScan(false).catch(error => console.error("Automatic scan failed", error)); }, AUTO_SCAN_MS);
+    setInterval(() => {
+      state.system.lastAnalysis = new Date().toISOString();
+      saveState().catch(error => console.error("Analysis checkpoint failed", error));
+    }, ANALYSIS_MS);
+    server.listen(PORT, "0.0.0.0", () => console.log(`Solana 20× Radar listening on 0.0.0.0:${PORT} · mode=${state.mode} · database=postgresql/prisma`));
+  } catch (error) {
+    console.error("Unable to initialize PostgreSQL/Prisma", error);
+    process.exitCode = 1;
+  }
+}
+
+process.on("SIGTERM", async () => {
+  await disconnectDb();
+  process.exit(0);
+});
+
+start();

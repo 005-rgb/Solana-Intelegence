@@ -17,10 +17,25 @@ No API keys are hard-coded or sent to the browser. The application never asks fo
 
 ## Architecture
 
-- `server.js`: server-side HTTP API, provider boundary, 30-second scheduler, durable local state, scan and paper-trade logic.
+- `server.js`: server-side HTTP API, provider boundary, 30-second scheduler, scan and paper-trade logic.
+- `db.js`: Prisma repository layer for PostgreSQL-backed state, watchlist events, paper trades, and scan runs.
+- `prisma/schema.prisma`: PostgreSQL schema and indexes for tokens, signals, watchlists, paper trading, and scan observability.
 - `public/`: responsive institutional research UI.
-- `.data/radar-state.json`: local durable development state; do not treat this as a production database.
 
-## Current limitation
+## Database
 
-The imported workspace did not include a database or provider credentials. The app therefore ships with a durable local storage adapter and explicit demo/live boundaries. For production, connect PostgreSQL and an indexed Solana/RPC provider before treating values as live intelligence.
+The app uses Replit's PostgreSQL database through Prisma 6.19.0:
+
+```bash
+npm run db:generate
+npm run db:push
+```
+
+`DATABASE_URL` is read server-side from the Replit environment. The existing local JSON state is used only as a one-time seed when the Prisma database is empty; after boot, runtime reads and writes PostgreSQL.
+
+## Data modes
+
+- **DEMO MODE** (default): controlled dataset for development and UI/engine validation. It is explicitly labeled and is not production market data.
+- **LIVE MODE**: set `RADAR_MODE=live` and run a scan. The server calls `DEXSCREENER_API_URL` or its public default endpoint. Unavailable fields remain `UNKNOWN`.
+
+No API keys are hard-coded or sent to the browser. The application never asks for seed phrases/private keys and only supports simulated paper trading.
