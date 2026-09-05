@@ -8,6 +8,19 @@ npm run dev
 
 The server binds to `0.0.0.0:5000`.
 
+Required environment variables:
+
+- `DATABASE_URL`: PostgreSQL connection string used by Prisma.
+- `SOLANA_RPC_URL`: Helius or another Solana JSON-RPC endpoint used for live token security verification.
+
+After importing or changing the schema, initialize the local database client with:
+
+```bash
+npm install
+npm run db:generate
+npm run db:push
+```
+
 ## Live data and virtual trading
 
 - DexScreener is the only market-data provider and the application always runs in LIVE mode.
