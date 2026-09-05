@@ -1,0 +1,364 @@
+Kesimpulan audit
+Belum 100% completed untuk Phase 0, 0A, 1, dan 1A secara keseluruhan.
+
+Status objektifnya:
+
+Fase	Status audit	Kesimpulan
+Phase 0	Completed secara implementasi	Baseline, counter, rejection codes, persistence, dan fail-closed board sudah nyata
+Phase 0A	Completed untuk core controls	Lease, recovery, idempotency, request ID, rate limit, mutation protection, dan outbox sudah ada
+Phase 1	Partial	Multi-source discovery dan observation lineage sudah nyata, tetapi source validation dan provider resilience belum lengkap
+Phase 1A	Partial	Taxonomy contract dan persistence sudah nyata, tetapi live pool/vault evidence belum benar-benar tersedia dari provider
+Bukti real work
+Validasi yang berhasil:
+
+npm test: 12/12 test lulus
+npm run db:generate: berhasil
+npx prisma validate: berhasil
+Workflow Start application: running
+Preview UI: berhasil tampil
+/api/state: HTTP 200
+Database PostgreSQL aktif dan schema sudah tersinkron
+Scan runtime benar-benar mengambil data DexScreener:
+22 mint diperiksa
+49 pair unik ditemukan
+pair/price/liquidity coverage tercatat
+ScanRun tersimpan di database
+TokenObservation disiapkan untuk persistence
+Ini bukan mock atau placeholder. Server benar-benar memanggil DexScreener, Solana RPC, Prisma, dan menyimpan audit data.
+
+Phase 0 — Baseline dan auditability
+Yang sudah benar
+Implementasi nyata tersedia di:
+
+radar-core.js
+server.js
+db.js
+prisma/schema.prisma
+Sudah ada:
+
+baseline-v1
+ScanRun durable
+recordsChecked
+accepted/rejected/unresolved counters
+rejection reason codes
+filter configuration tersimpan
+provider/RPC freshness
+timeout state
+correlation ID dan request ID
+source metrics
+TokenObservation immutable
+failed scan tidak mengganti board sebelumnya
+score tetap UNKNOWN, tidak dipalsukan
+Test yang membuktikan:
+
+unknown security gagal closed
+liquidity kosong tidak dianggap nol
+accepted/rejected/unresolved reconcile
+failed scan mempertahankan board lama
+duplicate mint dan pair deterministic
+Verdict Phase 0
+Completed secara implementasi dan acceptance dasar.
+
+Namun, runtime saat ini belum menghasilkan kandidat aman karena RPC security gagal. Itu bukan pelanggaran fail-closed; justru fail-closed-nya bekerja.
+
+Runtime terbaru menunjukkan:
+
+recordsChecked: 22
+accepted: 0
+rejected: 0
+unresolved: 22
+rpcStatus: FAILED
+qualityStatus: FAILED
+securityUnknown: 22
+tokensPersisted: 0
+
+Artinya provider market berhasil, tetapi security evidence belum tersedia.
+
+Phase 0A — Platform safety
+Yang sudah benar
+Di server dan database sudah ada:
+
+PostgreSQL-backed distributed scan lease
+pencegahan scan overlap
+startup recovery untuk scan RUNNING yang orphan
+mutation lease
+idempotency key untuk scan dan trade
+request ID
+rate limiting
+same-origin mutation check
+optional RADAR_AUTH_TOKEN
+security headers
+body size limit
+request timeout
+AbortSignal untuk request provider/RPC
+atomic alert plus AlertOutbox
+unique idempotency database constraint
+transaksi database untuk mutation penting
+Test test/phase0a.test.js berhasil membuktikan:
+
+scan lease exclusive
+mutation lease exclusive
+orphan scan berubah menjadi INTERRUPTED
+duplicate scan idempotency ditolak/replay dengan benar
+alert dan outbox dibuat atomically
+duplicate paper trade menghasilkan P2002
+Catatan coverage
+Beberapa kontrol sudah ada di kode tetapi belum diuji secara HTTP end-to-end dalam test suite, misalnya:
+
+rate limit response
+origin rejection
+authorization token rejection
+body terlalu besar
+timeout cancellation melalui endpoint
+Verdict Phase 0A
+Core implementation completed dan test database lulus.
+
+Secara strict acceptance, saya akan menyebutnya:
+
+Completed untuk database/concurrency safety, tetapi coverage HTTP/security integration masih partial.
+
+Phase 1 — Discovery dan canonical observations
+Yang sudah benar
+Discovery sudah benar-benar diperluas dari satu feed menjadi:
+
+DexScreener boost feed
+DexScreener token profile feed
+active watchlist mints
+Sudah ada:
+
+deduplication mint
+deduplication pair
+Solana-only filtering
+watchlist priority
+source overlap metrics
+source-only candidate metrics
+multi-pair retention
+deterministic primary pair selection
+primary/secondary pair role
+source endpoint
+source request/correlation ID
+response hash
+provider timestamps
+immutable TokenObservation
+pair identity terpisah dari mint identity
+Runtime membuktikan:
+
+boost_feed_seen: 13
+profile_feed_seen: 12
+unique_mints_before_dedup: 22
+unique_mints_after_dedup: 22
+unique_pairs_before_dedup: 49
+unique_pairs_after_dedup: 49
+pairFailures: 0
+
+Jadi Phase 1 bukan sekadar dokumentasi; discovery multi-source dan persistence memang berjalan.
+
+Gap penting Phase 1
+1. Provider schema validation belum lengkap
+readFeed() saat ini pada dasarnya hanya memeriksa:
+
+HTTP response
+JSON parse
+apakah payload array
+chain ID
+token address
+Belum ada validasi lengkap untuk:
+
+field type
+negative numbers
+non-finite values
+timestamp bounds
+clock skew
+pair identity consistency
+invalid record status
+schema revision
+malformed record yang harus disimpan sebagai INVALID
+Contoh masalah:
+
+payload JSON valid tetapi bukan array
+
+dapat diperlakukan sebagai feed kosong, bukan sebagai INVALID atau provider schema error.
+
+2. Missing fields belum sepenuhnya mengikuti kontrak canonical
+Beberapa field yang hilang disimpan sebagai {}:
+
+volume: {}
+txns: {}
+makers: {}
+priceChange: {}
+
+Blueprint Phase 1 mensyaratkan missing field disimpan sebagai null plus quality reason, bukan object kosong yang bisa terlihat seperti field tersedia.
+
+3. Pair freshness belum benar-benar lengkap
+Primary pair dipilih dengan mempertimbangkan:
+
+liquidity
+updatedAt
+pairCreatedAt
+address tie-break
+Tetapi pada canonical detail primary pair, updatedAt tidak dibawa secara konsisten. providerUpdatedAt lebih banyak berasal dari boost/profile feed, bukan timestamp pair yang dipilih.
+
+Akibatnya, freshness pair belum sepenuhnya dapat diaudit.
+
+4. Bounded concurrency dan resilience provider belum lengkap
+Pair requests dijalankan dengan:
+
+Promise.all(...)
+
+hingga discovery limit. Belum ada:
+
+bounded concurrency untuk pair fetch
+Retry-After handling untuk DexScreener
+exponential backoff provider yang eksplisit
+circuit breaker
+per-endpoint health counters lengkap
+schema error counters
+Verdict Phase 1
+Partial but real.
+
+Discovery dan persistence sudah real dan usable, tetapi source-contract validation dan provider resilience belum memenuhi seluruh blueprint Phase 1.
+
+Phase 1A — Pair, pool, dan account taxonomy
+Yang sudah benar
+Implementasi nyata sudah ada di radar-core.js, server.js, db.js, schema, dan UI.
+
+Sudah ada account classes:
+
+EOA_OR_WALLET
+ASSOCIATED_TOKEN_ACCOUNT
+AMM_POOL
+POOL_VAULT
+PROGRAM_OWNED
+ESCROW_OR_LOCK
+TREASURY
+UNKNOWN_ACCOUNT
+Sudah ada:
+
+taxonomy version
+explicit pool evidence normalization
+account classification
+top account concentration
+top wallet concentration
+pool-adjusted wallet concentration
+confidence cap
+ACCOUNT_CONCENTRATION_ONLY
+enrichment RPC terbatas untuk top accounts
+owner account resolution
+persistence pada TokenObservation
+UI label yang menyebut token account, bukan wallet holder
+adversarial test: pool sebagai largest account
+adversarial test: unknown owner tetap unknown
+adversarial test: executable owner dianggap program-owned
+UI juga sudah berubah dari konsep “largest holder” menjadi:
+
+Largest token account
+Concentration basis
+Top wallet concentration
+ACCOUNT_CONCENTRATION_ONLY
+
+Ini adalah perbaikan substantif dan fail-closed.
+
+Gap penting Phase 1A
+1. Live pool evidence belum benar-benar tersedia
+Adapter DexScreener saat ini hanya membentuk pool evidence dari:
+
+pair address
+dex ID
+optional pair.poolEvidence
+optional pair.pool
+Dalam response normal DexScreener, belum ada evidence live yang cukup untuk:
+
+pool program ID
+base vault
+quote vault
+LP mint
+LP supply
+LP holder distribution
+LP burn/lock
+withdraw authority
+pool creation/update slot
+Jadi pada data live normal, sistem akan tetap berada pada:
+
+ACCOUNT_CONCENTRATION_ONLY
+
+Ini aman, tetapi berarti taxonomy pool/vault belum benar-benar selesai secara live.
+
+Test pool yang ada membuktikan algorithm-nya bekerja menggunakan fixture, bukan bahwa provider live mampu menemukan pool account.
+
+2. Klasifikasi wallet masih berpotensi terlalu agresif
+Saat ini owner diklasifikasikan sebagai EOA_OR_WALLET bila:
+
+owner account tidak executable
+owner account dimiliki System Program
+Itu belum selalu membuktikan bahwa address tersebut adalah wallet EOA. PDA tertentu juga bisa memiliki karakteristik system-owned dan non-executable.
+
+Untuk standar paling ketat, kondisi seperti itu sebaiknya tetap:
+
+UNKNOWN_ACCOUNT
+
+kecuali ada evidence tambahan yang membedakan wallet nyata dari PDA/system account.
+
+3. Beberapa class hanya tersedia sebagai explicit evidence
+ESCROW_OR_LOCK dan TREASURY sudah didefinisikan, tetapi belum ada live provider yang mengisi evidence tersebut. Jadi class tersebut belum aktif dalam discovery normal.
+
+4. Belum ada integration test penuh RPC taxonomy
+Test yang ada menguji pure taxonomy function. Belum ada test yang menjalankan keseluruhan alur:
+
+RPC largest accounts
+→ getAccountInfo token account
+→ resolve owner account
+→ build taxonomy
+→ persist observation
+→ expose through API/UI
+
+Verdict Phase 1A
+Contract dan fail-closed behavior completed. Live taxonomy evidence belum completed.
+
+Penilaian yang paling akurat:
+
+Phase 1A logic/persistence: completed.
+Phase 1A live pool intelligence: partial.
+
+Apakah ini benar-benar real work?
+Ya, bagian berikut benar-benar real work:
+
+live provider fetch
+live Solana RPC request path
+Prisma schema dan database persistence
+distributed locking
+scan recovery
+immutable observation model
+source metrics
+account taxonomy engine
+RPC enrichment path
+UI labels dan evidence display
+adversarial tests
+runtime preview
+Yang belum boleh disebut completed penuh:
+
+provider schema validation Phase 1
+provider resilience lengkap
+actual live pool/vault/LP classification
+successful end-to-end RPC security run di environment saat ini
+integration test penuh untuk RPC taxonomy
+Final verdict
+Phase 0:  ✅ Completed
+Phase 0A: ✅ Core completed, HTTP coverage partial
+Phase 1:  ⚠️ Partial
+Phase 1A: ⚠️ Logic completed, live pool evidence partial
+
+Jadi jawaban jujurnya:
+
+Tidak tepat jika semua fase 0 sampai 1A disebut 100% completed.
+Phase 0 dan core Phase 0A sudah nyata dan selesai. Phase 1 dan 1A sudah memiliki fondasi real yang kuat, tetapi masih ada gap penting sebelum bisa dinyatakan fully completed menurut blueprint precision tinggi.
+
+
+
+Worked for 1 minute
+segera lakukan perbaikan dan pemenuhan dengan presisi tinggi
+
+Free
+1 minute ago
+
+Worked for 1 second
+You've reached your daily free quota limit. It will reset at 12:00 AM UTC.
