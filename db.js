@@ -152,16 +152,62 @@ async function seedState(state) {
   });
 }
 
-async function readState(fallback) {
+async function migrateToLive() {
   const radar = await prisma.radarState.findUnique({ where: { id: 1 } });
+  if (!radar || (radar.mode === "live" && radar.provider === "DexScreener")) return;
+
+  await prisma.$transaction(async tx => {
+    await tx.watchlistEvent.deleteMany({});
+    await tx.watchlistEntry.deleteMany({});
+    await tx.paperPosition.deleteMany({ where: { accountId: 1 } });
+    await tx.paperTrade.deleteMany({ where: { accountId: 1 } });
+    await tx.token.deleteMany({ where: { providerUrl: null } });
+    await tx.whaleActivityPoint.deleteMany({ where: { source: "demo" } });
+    await tx.alert.deleteMany({});
+    await tx.pattern.deleteMany({});
+    await tx.scanRun.deleteMany({});
+    await tx.paperAccount.upsert({
+      where: { id: 1 },
+      update: { starting: 100000, cash: 100000, realized: 0, fees: 0, trades: 0 },
+      create: { id: 1, starting: 100000, cash: 100000, realized: 0, fees: 0, trades: 0 }
+    });
+    await tx.radarState.update({
+      where: { id: 1 },
+      data: {
+        mode: "live",
+        provider: "DexScreener",
+        lastScan: null,
+        nextScanAt: new Date(Date.now() + 30000),
+        scanRunning: false,
+        watchlistHistory: [],
+        system: {
+          scheduler: "RUNNING · 30s",
+          worker: "READY",
+          database: "POSTGRESQL / PRISMA",
+          rpc: "LIVE PROVIDER",
+          market: "LIVE PROVIDER",
+          lastScanStatus: "NOT RUN YET",
+          avgDuration: "—",
+          tokensPerScan: 0,
+          transactionsPerScan: 0,
+          errors: 0
+        }
+      }
+    });
+  });
+}
+
+async function readState(fallback) {
+  let radar = await prisma.radarState.findUnique({ where: { id: 1 } });
   if (!radar) {
     await seedState(fallback);
-    return fallback;
+    radar = await prisma.radarState.findUnique({ where: { id: 1 } });
+  } else if (radar.mode !== "live" || radar.provider !== "DexScreener") {
+    await migrateToLive();
+    radar = await prisma.radarState.findUnique({ where: { id: 1 } });
   }
 
-  const tokenFilter = radar.mode === "live"
-    ? { providerUrl: { not: null } }
-    : { mint: { in: (fallback.tokens || []).map(item => item.mint) } };
+  const tokenFilter = { providerUrl: { not: null } };
   const [tokens, activeWatchlist, events, alerts, patterns, account, whalePoints, scanRuns] = await Promise.all([
     prisma.token.findMany({ where: tokenFilter, orderBy: [{ radar: "desc" }, { updatedAt: "desc" }] }),
     prisma.watchlistEntry.findMany({ where: { active: true, token: tokenFilter }, include: { token: true } }),
@@ -169,15 +215,11 @@ async function readState(fallback) {
     prisma.alert.findMany({ orderBy: { createdAt: "desc" }, take: 20 }),
     prisma.pattern.findMany({ orderBy: { match: "desc" } }),
     prisma.paperAccount.findUnique({ where: { id: 1 }, include: { positions: { include: { token: true } }, history: { orderBy: { time: "desc" }, take: 100 } } }),
-    prisma.whaleActivityPoint.findMany({ where: { source: radar.mode === "live" ? "live" : "demo" }, orderBy: { recordedAt: "asc" }, take: 96 }),
+    prisma.whaleActivityPoint.findMany({ where: { source: "live" }, orderBy: { recordedAt: "asc" }, take: 96 }),
     prisma.scanRun.findMany({ orderBy: { startedAt: "desc" }, take: 100 })
   ]);
 
-  let activityRows = whalePoints;
-  if (!activityRows.length && radar.mode === "demo" && fallback.whaleActivity?.length) {
-    await prisma.whaleActivityPoint.createMany({ data: fallback.whaleActivity.map(whalePointData) });
-    activityRows = await prisma.whaleActivityPoint.findMany({ where: { source: "demo" }, orderBy: { recordedAt: "asc" }, take: 96 });
-  }
+  const activityRows = whalePoints;
 
   const dbPortfolio = account ? {
     starting: account.starting,
@@ -208,8 +250,8 @@ async function readState(fallback) {
 
   return {
     ...fallback,
-    mode: radar.mode,
-    provider: radar.provider,
+    mode: "live",
+    provider: "DexScreener",
     lastScan: radar.lastScan?.toISOString() || null,
     nextScanAt: radar.nextScanAt?.getTime() || Date.now() + 30000,
     scanRunning: false,

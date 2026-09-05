@@ -21,15 +21,6 @@ const STATE_FILE = path.join(DATA_DIR, "radar-state.json");
 const AUTO_SCAN_MS = 30_000;
 const ANALYSIS_MS = 6 * 60 * 60 * 1000;
 
-const DEMO_TOKENS = [
-  token("NOVA", "Nova Protocol", "$0.0842", 8420000, 1184000, 94, 91, 89, 86, 78, 21, 88, "+18.42%", "+$312.4K", "+12.8%", "ACCUMULATING", "2h 14m", "Early whale accumulation and organic holder growth.", "low", 92, "5×"),
-  token("DRIFT", "Driftwood", "$0.0128", 1280000, 426000, 88, 86, 82, 91, 94, 38, 71, "+42.18%", "+$184.1K", "+28.4%", "BREAKOUT", "41m", "Volume and holder velocity accelerating across multiple windows.", "moderate", 82, "10×"),
-  token("KITE", "Kite Finance", "$0.2910", 29100000, 3840000, 84, 79, 88, 77, 72, 29, 90, "+9.08%", "+$96.7K", "+6.1%", "ACTIVE", "3h 06m", "High-quality smart money history with improving liquidity.", "low", 87, "2×"),
-  token("ORBIT", "Orbit Cats", "$0.00391", 391000, 118000, 76, 81, 69, 88, 83, 57, 64, "+71.32%", "+$58.2K", "+44.7%", "HYPED", "18m", "Social velocity is high, but activity coverage is incomplete.", "high", 64, "5×"),
-  token("MESA", "Mesa Markets", "$0.0467", 4670000, 910000, 73, 76, 75, 68, 61, 34, 85, "+4.21%", "+$42.8K", "+3.7%", "COOLING", "5h 48m", "Strong distribution quality; momentum has cooled from its peak.", "moderate", 90, "2×"),
-  token("VOLT", "Volt Labs", "$0.00174", 174000, 31000, 61, 54, 42, 73, 67, 79, 49, "-12.64%", "-$8.7K", "-2.3%", "DISTRIBUTING", "9m", "Liquidity and whale flow are deteriorating; monitor for pre-rug signals.", "very-high", 58, "—")
-];
-
 function token(symbol, name, price, marketCap, liquidity, radar, opportunity, smartMoney, momentum, hype, risk, confidence, priceChange, whaleFlow, holderGrowth, status, age, rationale, riskLabel, dataQuality, potential) {
   const mint = `${symbol.toLowerCase()}${"7".repeat(28)}${symbol.length}`;
   return {
@@ -49,69 +40,30 @@ function token(symbol, name, price, marketCap, liquidity, radar, opportunity, sm
 }
 
 function freshState() {
-  const whaleActivity = [38, 52, 46, 61, 58, 74, 69, 82, 77, 96, 91, 108].map((netFlow, index) => {
-    const buyVolume = 118000 + index * 7200 + (index % 3) * 4100;
-    const sellVolume = buyVolume - netFlow * 1000;
-    return {
-      at: new Date(Date.now() - (11 - index) * 30 * 60 * 1000).toISOString(),
-      buyVolume,
-      sellVolume,
-      netFlow: netFlow * 1000,
-      totalVolume: buyVolume + sellVolume,
-      source: "demo",
-      dataQuality: 100
-    };
-  });
   return {
-    mode: process.env.RADAR_MODE === "live" ? "live" : "demo",
-    provider: process.env.RADAR_MODE === "live" ? "DexScreener" : "Controlled Demo Dataset",
+    mode: "live",
+    provider: "DexScreener",
     lastScan: null,
     nextScanAt: Date.now() + AUTO_SCAN_MS,
     scanRunning: false,
-    tokens: DEMO_TOKENS,
-    whaleActivity,
+    tokens: [],
+    whaleActivity: [],
     scanRuns: [],
-    watchlist: [DEMO_TOKENS[0].mint, DEMO_TOKENS[2].mint],
+    watchlist: [],
     watchlistHistory: [],
-    alerts: [
-      { type: "SIGNAL ACCELERATION", token: "NOVA", text: "Radar score moved 82 → 94 across 4 observations.", tone: "green", time: "12m ago" },
-      { type: "LIQUIDITY DROP", token: "VOLT", text: "Liquidity decreased 18.4% in the latest window.", tone: "red", time: "26m ago" },
-      { type: "WHALE ACCUMULATION", token: "DRIFT", text: "5 tracked wallets added exposure during breakout.", tone: "blue", time: "41m ago" },
-      { type: "PRE-RUG WATCH", token: "ORBIT", text: "High hype with low organic activity. Evidence is incomplete.", tone: "yellow", time: "1h ago" }
-    ],
-    patterns: [
-      { id: "ACCUM-014", name: "Organic accumulation", desc: "Whale inflow + holder expansion + rising liquidity", match: 87, sample: 143, outcome: "2× 63% · 5× 31% · 10× 12%", tone: "green" },
-      { id: "RUG-024", name: "Pre-rug concentration", desc: "Insider concentration rising while LP contracts", match: 72, sample: 38, outcome: "Failure rate 68%", tone: "red" },
-      { id: "HYPE-009", name: "False hype", desc: "Social velocity + bot probability + low holder quality", match: 61, sample: 96, outcome: "Failure rate 54%", tone: "yellow" }
-    ],
+    alerts: [],
+    patterns: [],
     portfolio: {
-      starting: 100000, cash: 98600, realized: 0, fees: 0, trades: 14, positions: [
-        { mint: DEMO_TOKENS[0].mint, symbol: "NOVA", name: "Nova Protocol", invested: 100, quantity: 1187.65, entry: 0.0842, peakPnl: 34.2, openedAt: Date.now() - 1000 * 60 * 90 },
-        { mint: DEMO_TOKENS[2].mint, symbol: "KITE", name: "Kite Finance", invested: 100, quantity: 343.64, entry: 0.291, peakPnl: 8.7, openedAt: Date.now() - 1000 * 60 * 240 },
-        { mint: DEMO_TOKENS[4].mint, symbol: "MESA", name: "Mesa Markets", invested: 100, quantity: 2141.33, entry: 0.0467, peakPnl: 5.4, openedAt: Date.now() - 1000 * 60 * 360 }
-      ],
-      history: [
-        { symbol: "NOVA", side: "BUY", amount: 100, price: 0.0842, score: 94, time: Date.now() - 1000 * 60 * 90 },
-        { symbol: "KITE", side: "BUY", amount: 100, price: 0.291, score: 84, time: Date.now() - 1000 * 60 * 240 },
-        { symbol: "MESA", side: "BUY", amount: 100, price: 0.0467, score: 73, time: Date.now() - 1000 * 60 * 360 }
-      ]
+      starting: 100000, cash: 100000, realized: 0, fees: 0, trades: 0, positions: [], history: []
     },
     system: {
-      scheduler: "RUNNING · 30s", worker: "READY", database: "LOCAL PERSISTENCE", rpc: "DEMO PROVIDER", market: "DEMO PROVIDER",
+      scheduler: "RUNNING · 30s", worker: "READY", database: "POSTGRESQL / PRISMA", rpc: "LIVE PROVIDER", market: "LIVE PROVIDER",
       lastScanStatus: "NOT RUN YET", avgDuration: "—", tokensPerScan: 0, transactionsPerScan: 0, errors: 0
     }
   };
 }
 
-function loadState() {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    return { ...freshState(), ...parsed, portfolio: { ...freshState().portfolio, ...(parsed.portfolio || {}) }, system: { ...freshState().system, ...(parsed.system || {}) } };
-  } catch {
-    return freshState();
-  }
-}
-let state = loadState();
+let state = freshState();
 
 async function saveState() {
   await persistState(state);
@@ -146,27 +98,6 @@ function formatAge(ms) {
   const minutes = Math.max(0, Math.floor(ms / 60000));
   if (minutes < 60) return `${minutes}m`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-}
-function parseFlow(value) {
-  const match = String(value || "").replace(/[$,]/g, "").match(/([+-]?\d+(?:\.\d+)?)([KMB]?)/i);
-  if (!match) return null;
-  const multiplier = { K: 1e3, M: 1e6, B: 1e9 }[match[2].toUpperCase()] || 1;
-  return Number(match[1]) * multiplier;
-}
-function buildWhaleActivityPoint(at) {
-  const flows = state.tokens.map(item => parseFlow(item.whaleFlow)).filter(value => value != null);
-  if (!flows.length) return null;
-  const buyVolume = flows.filter(value => value > 0).reduce((sum, value) => sum + value, 0);
-  const sellVolume = flows.filter(value => value < 0).reduce((sum, value) => sum + Math.abs(value), 0);
-  return {
-    at: new Date(at).toISOString(),
-    buyVolume,
-    sellVolume,
-    netFlow: buyVolume - sellVolume,
-    totalVolume: buyVolume + sellVolume,
-    source: state.mode === "live" ? "live" : "demo",
-    dataQuality: state.mode === "live" ? null : 100
-  };
 }
 function tokenById(id) {
   return state.tokens.find(item => item.mint === id || item.symbol.toLowerCase() === String(id).toLowerCase());
@@ -242,37 +173,25 @@ async function runScan(manual = false) {
     provider: state.provider
   });
   try {
-    if (state.mode === "live") {
-      state.tokens = await fetchLiveTokens();
-      state.provider = "DexScreener";
-      state.system.rpc = "LIVE PROVIDER";
-      state.system.market = "LIVE PROVIDER";
-    } else {
-      state.tokens = state.tokens.map((item, index) => {
-        const drift = ((started / 30000 + index) % 5) - 2;
-        return { ...item, radar: Math.round(Math.max(1, Math.min(99, item.radar + drift))), updatedAt: new Date().toISOString() };
-      });
-    }
-    const whalePoint = state.mode === "live" ? null : buildWhaleActivityPoint(started);
-    if (whalePoint) {
-      state.whaleActivity = [...(state.whaleActivity || []), whalePoint].slice(-96);
-      await recordWhaleActivity(whalePoint);
-    } else {
-      state.whaleActivity = [];
-    }
+    state.mode = "live";
+    state.provider = "DexScreener";
+    state.tokens = await fetchLiveTokens();
+    state.system.rpc = "LIVE PROVIDER";
+    state.system.market = "LIVE PROVIDER";
+    state.whaleActivity = [];
     state.lastScan = new Date().toISOString();
     state.nextScanAt = Date.now() + AUTO_SCAN_MS;
     state.system.lastScanStatus = "SUCCESS";
     state.system.avgDuration = `${Date.now() - started}ms`;
     state.system.tokensPerScan = state.tokens.length;
-    state.system.transactionsPerScan = state.mode === "demo" ? 128 : null;
+    state.system.transactionsPerScan = 0;
     state.scanRunning = false;
     await finishScanRun(scanRun.id, {
       status: "SUCCESS",
       finishedAt: new Date(),
       durationMs: Date.now() - started,
       tokensScanned: state.tokens.length,
-      transactionsProcessed: state.mode === "demo" ? 128 : 0,
+      transactionsProcessed: 0,
       errorCount: 0
     });
     await saveState();
@@ -290,7 +209,7 @@ async function runScan(manual = false) {
       errorCount: 1
     });
     await saveState();
-    return { ok: false, message: state.mode === "live" ? "Provider temporarily unavailable. Data remains unchanged." : error.message };
+    return { ok: false, message: "DexScreener provider temporarily unavailable. Data remains unchanged." };
   }
 }
 
@@ -359,20 +278,7 @@ async function handleApi(req, res, url) {
     } catch (error) { return send(res, 400, { error: error.message }); }
   }
   if (req.method === "POST" && url.pathname === "/api/settings") {
-    try {
-      const body = await readBody(req);
-      if (body.mode === "demo" || body.mode === "live") state.mode = body.mode;
-      if (body.mode === "demo") {
-        state.provider = "Controlled Demo Dataset";
-        state.system.rpc = "DEMO PROVIDER";
-        state.system.market = "DEMO PROVIDER";
-        state.tokens = DEMO_TOKENS.map(item => ({ ...item, updatedAt: new Date().toISOString() }));
-        state.nextScanAt = Date.now() + AUTO_SCAN_MS;
-      }
-      if (body.mode === "live") { state.provider = "DexScreener"; state.system.rpc = "LIVE PROVIDER"; state.system.market = "LIVE PROVIDER"; }
-      await saveState();
-      return send(res, 200, { ok: true, mode: state.mode, provider: state.provider });
-    } catch (error) { return send(res, 400, { error: error.message }); }
+    return send(res, 410, { error: "Mode switching has been removed. DexScreener LIVE MODE is always active." });
   }
   send(res, 404, { error: "API route not found" });
 }

@@ -9,7 +9,7 @@ datasource db {
 
 model RadarState {
   id               Int       @id @default(1)
-  mode             String    @default("demo")
+  mode             String    @default("live")
   provider         String
   lastScan         DateTime?
   nextScanAt       DateTime?
