@@ -23,7 +23,11 @@ const STATE_FILE = path.join(DATA_DIR, "radar-state.json");
 const AUTO_SCAN_MS = 15_000;
 const LIVE_SCAN_TIMEOUT_MS = 20_000;
 const ANALYSIS_MS = 6 * 60 * 60 * 1000;
-let lastFilterReport = { checked: 0, accepted: 0, rejected: 0, reasons: [] };
+let lastFilterReport = {
+  checked: 0, accepted: 0, rejected: 0, unresolved: 0, reasons: [],
+  providerRecords: 0, pairRequests: 0, pairFailures: 0, providerAgeMs: null,
+  rpcStatus: "NOT RUN", qualityStatus: "NOT RUN", filterConfig: null
+};
 
 function token(symbol, name, price, marketCap, liquidity, radar, opportunity, smartMoney, momentum, hype, risk, confidence, priceChange, whaleFlow, holderGrowth, status, age, rationale, riskLabel, dataQuality, potential) {
   const mint = `${symbol.toLowerCase()}${"7".repeat(28)}${symbol.length}`;
@@ -126,6 +130,16 @@ const SOLANA_RPC_URLS = process.env.SOLANA_RPC_URL
   : ["https://solana-rpc.publicnode.com", "https://api.mainnet-beta.solana.com"];
 const MAX_TOP_HOLDER_PERCENT = 80;
 const MIN_LIQUIDITY_USD = 10_000;
+const FILTER_CONFIG = {
+  version: "baseline-v1",
+  mintAuthority: "RENOUNCED",
+  freezeAuthority: "RENOUNCED",
+  largestHolderMaximum: `${MAX_TOP_HOLDER_PERCENT}%`,
+  minimumLiquidityUsd: MIN_LIQUIDITY_USD,
+  positive24hChange: true,
+  ctoFlag: false
+};
+lastFilterReport.filterConfig = FILTER_CONFIG;
 let rpcInFlight = 0;
 const rpcWaiters = [];
 
@@ -428,6 +442,8 @@ async function fetchLiveTokens() {
   const endpoint = process.env.DEXSCREENER_API_URL || "https://api.dexscreener.com/token-boosts/latest/v1";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 7000);
+  let pairRequests = 0;
+  let pairFailures = 0;
   try {
     const response = await fetch(endpoint, { signal: controller.signal, headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error(`Provider HTTP ${response.status}`);
@@ -441,6 +457,7 @@ async function fetchLiveTokens() {
       boostedEntries.push(item);
       if (boostedEntries.length === 10) break;
     }
+    pairRequests = boostedEntries.length;
     const pairResponses = await Promise.all(boostedEntries.map(async item => {
       const mint = item.tokenAddress;
       if (!mint) return { pairs: [] };
@@ -452,6 +469,7 @@ async function fetchLiveTokens() {
         if (!pairResponse.ok) return { pairs: [] };
         return await pairResponse.json();
       } catch {
+        pairFailures += 1;
         return { pairs: [] };
       }
     }));
@@ -577,29 +595,76 @@ async function fetchLiveTokens() {
         };
       });
     const reasonCounts = new Map();
+    const addReason = (code, reason) => {
+      const current = reasonCounts.get(code) || { code, reason, count: 0 };
+      current.count += 1;
+      reasonCounts.set(code, current);
+    };
+    let unresolved = 0;
     for (const item of secured) {
       const reasons = [];
-      if (!item.security.verified) reasons.push(...item.security.reasons);
-      if (item.price === "UNKNOWN") reasons.push("Provider price is unavailable.");
-      if (Number(item.liquidity) < MIN_LIQUIDITY_USD) reasons.push(`Liquidity is below $${MIN_LIQUIDITY_USD.toLocaleString("en-US")}.`);
+      let hasUnknown = false;
+      if (!item.security.verified) {
+        const code = item.security.status === "UNVERIFIED" ? "SECURITY_UNKNOWN" : "SECURITY_REJECTED";
+        item.security.reasons.forEach(reason => addReason(code, reason));
+        reasons.push(...item.security.reasons);
+        hasUnknown ||= item.security.status === "UNVERIFIED";
+      }
+      if (item.price === "UNKNOWN") {
+        addReason("PRICE_UNKNOWN", "Provider price is unavailable.");
+        reasons.push("Provider price is unavailable.");
+        hasUnknown = true;
+      }
+      const liquidity = Number(item.liquidity);
+      if (!Number.isFinite(liquidity)) {
+        addReason("LIQUIDITY_UNKNOWN", "Provider liquidity is unavailable.");
+        reasons.push("Provider liquidity is unavailable.");
+        hasUnknown = true;
+      } else if (liquidity < MIN_LIQUIDITY_USD) {
+        addReason("LIQUIDITY_BELOW_MINIMUM", `Liquidity is below $${MIN_LIQUIDITY_USD.toLocaleString("en-US")}.`);
+        reasons.push(`Liquidity is below $${MIN_LIQUIDITY_USD.toLocaleString("en-US")}.`);
+      }
       const change = Number(String(item.priceChange || "").replace("%", ""));
-      if (!Number.isFinite(change) || change <= 0) reasons.push("Provider 24h change is not positive.");
-      if (item.details.providerMetadata.cto === true) reasons.push("Provider marked the token as CTO.");
-      for (const reason of new Set(reasons)) reasonCounts.set(reason, (reasonCounts.get(reason) || 0) + 1);
+      if (!Number.isFinite(change)) {
+        addReason("PRICE_CHANGE_UNKNOWN", "Provider 24h change is unavailable.");
+        reasons.push("Provider 24h change is unavailable.");
+        hasUnknown = true;
+      } else if (change <= 0) {
+        addReason("PRICE_CHANGE_NOT_POSITIVE", "Provider 24h change is not positive.");
+        reasons.push("Provider 24h change is not positive.");
+      }
+      if (item.details.providerMetadata.cto === true) {
+        addReason("CTO_FLAG", "Provider marked the token as CTO.");
+        reasons.push("Provider marked the token as CTO.");
+      }
+      if (!item.security.verified || item.price === "UNKNOWN" || item.details.providerMetadata.cto === true || !Number.isFinite(liquidity) || !Number.isFinite(change) || liquidity < MIN_LIQUIDITY_USD || change <= 0) {
+        if (hasUnknown) unresolved += 1;
+      }
     }
+    const providerAgeMs = fresh.reduce((maxAge, item) => {
+      const updatedAt = Date.parse(item.details?.providerMetadata?.providerUpdatedAt || "");
+      return Number.isFinite(updatedAt) ? Math.max(maxAge, Math.max(0, Date.now() - updatedAt)) : maxAge;
+    }, 0) || null;
+    const rpcStatuses = securityResults.map(result => result.status);
+    const rpcStatus = rpcStatuses.length && rpcStatuses.every(status => status !== "UNVERIFIED")
+      ? "LIVE"
+      : rpcStatuses.some(status => status !== "UNVERIFIED")
+        ? "PARTIAL"
+        : "FAILED";
+    const qualityStatus = pairFailures > 0 ? "PARTIAL" : "FULL";
     lastFilterReport = {
       checked: secured.length,
       accepted: safeTokens.length,
-      rejected: secured.length - safeTokens.length,
-      reasons: [...reasonCounts.entries()].sort((left, right) => right[1] - left[1]).slice(0, 6).map(([reason, count]) => ({ reason, count })),
-      rules: {
-        mintAuthority: "RENOUNCED",
-        freezeAuthority: "RENOUNCED",
-        largestHolderMaximum: `${MAX_TOP_HOLDER_PERCENT}%`,
-        minimumLiquidityUsd: MIN_LIQUIDITY_USD,
-        positive24hChange: true,
-        ctoFlag: false
-      }
+      rejected: secured.length - safeTokens.length - unresolved,
+      unresolved,
+      reasons: [...reasonCounts.values()].sort((left, right) => right.count - left.count).slice(0, 8),
+      providerRecords: entries.length,
+      pairRequests,
+      pairFailures,
+      providerAgeMs,
+      rpcStatus,
+      qualityStatus,
+      filterConfig: FILTER_CONFIG
     };
     if (!safeTokens.length) throw new Error("No token passed the LIVE security and upward-evidence filters.");
     return safeTokens;
@@ -613,13 +678,28 @@ async function runScan(manual = false) {
   state.scanRunning = true;
   const started = Date.now();
   let scanRun = null;
+  const scanAudit = () => ({
+    recordsChecked: lastFilterReport.checked || 0,
+    acceptedCount: lastFilterReport.accepted || 0,
+    rejectedCount: lastFilterReport.rejected || 0,
+    unresolvedCount: lastFilterReport.unresolved || 0,
+    rejectionReasons: lastFilterReport.reasons || [],
+    filterConfig: lastFilterReport.filterConfig || FILTER_CONFIG,
+    providerAgeMs: lastFilterReport.providerAgeMs ?? null,
+    providerRecords: lastFilterReport.providerRecords || 0,
+    pairRequests: lastFilterReport.pairRequests || 0,
+    pairFailures: lastFilterReport.pairFailures || 0,
+    rpcStatus: lastFilterReport.rpcStatus || "NOT RUN",
+    qualityStatus: lastFilterReport.qualityStatus || "NOT RUN"
+  });
   try {
     scanRun = await Promise.race([
       createScanRun({
         manual,
         status: "RUNNING",
         startedAt: new Date(started),
-        provider: state.provider
+        provider: state.provider,
+        ...scanAudit()
       }),
       new Promise((_, reject) => setTimeout(() => reject(new Error("Scan run could not be registered in the database.")), 8000))
     ]);
@@ -643,6 +723,8 @@ async function runScan(manual = false) {
     state.system.tokensPerScan = state.tokens.length;
     state.system.transactionsPerScan = 0;
     state.system.securityFilter = lastFilterReport;
+    state.system.lastScanQuality = lastFilterReport.qualityStatus;
+    state.system.lastScanRunId = scanRun.id;
     delete state.system.lastScanError;
     state.scanRunning = false;
     await finishScanRun(scanRun.id, {
@@ -651,7 +733,8 @@ async function runScan(manual = false) {
       durationMs: Date.now() - started,
       tokensScanned: state.tokens.length,
       transactionsProcessed: 0,
-      errorCount: 0
+      errorCount: 0,
+      ...scanAudit()
     });
     await saveState();
     return { ok: true, manual, duration: Date.now() - started, tokens: state.tokens.length };
@@ -663,6 +746,8 @@ async function runScan(manual = false) {
     state.system.tokensPerScan = 0;
     state.system.securityFilter = lastFilterReport;
     state.system.lastScanError = error.message;
+    state.system.lastScanQuality = filtered ? lastFilterReport.qualityStatus : "FAILED";
+    if (scanRun?.id) state.system.lastScanRunId = scanRun.id;
     if (!filtered) state.system.errors += 1;
     if (scanRun) await finishScanRun(scanRun.id, {
         status: filtered ? "FILTERED" : "FAILED",
@@ -670,7 +755,8 @@ async function runScan(manual = false) {
         durationMs: Date.now() - started,
         tokensScanned: 0,
         transactionsProcessed: 0,
-        errorCount: filtered ? 0 : 1
+        errorCount: filtered ? 0 : 1,
+        ...scanAudit()
       });
     await saveState();
     return { ok: false, message: filtered ? "No token passed the active security filters. No token was added to Radar." : "DexScreener provider temporarily unavailable. Data remains unchanged.", securityFilter: lastFilterReport };

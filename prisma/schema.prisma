@@ -160,6 +160,18 @@ model ScanRun {
   transactionsProcessed Int       @default(0)
   errorCount            Int       @default(0)
   provider              String
+  recordsChecked       Int       @default(0)
+  acceptedCount        Int       @default(0)
+  rejectedCount        Int       @default(0)
+  unresolvedCount      Int       @default(0)
+  rejectionReasons     Json?
+  filterConfig         Json?
+  providerAgeMs        Int?
+  providerRecords      Int       @default(0)
+  pairRequests         Int       @default(0)
+  pairFailures         Int       @default(0)
+  rpcStatus            String?
+  qualityStatus        String?
 
   @@index([startedAt])
   @@index([status])
