@@ -358,8 +358,37 @@ async function finishScanRun(id, data) {
   return prisma.scanRun.update({ where: { id }, data });
 }
 
+async function persistPatterns(patterns) {
+  await prisma.$transaction(async tx => {
+    const ids = patterns.map(pattern => pattern.id);
+    await tx.pattern.deleteMany({ where: { patternId: { notIn: ids } } });
+    for (const pattern of patterns) {
+      await tx.pattern.upsert({
+        where: { patternId: pattern.id },
+        update: {
+          name: pattern.name,
+          detail: pattern.desc,
+          match: pattern.match,
+          sample: pattern.sample,
+          outcome: pattern.outcome,
+          tone: pattern.tone
+        },
+        create: {
+          patternId: pattern.id,
+          name: pattern.name,
+          detail: pattern.desc,
+          match: pattern.match,
+          sample: pattern.sample,
+          outcome: pattern.outcome,
+          tone: pattern.tone
+        }
+      });
+    }
+  });
+}
+
 async function disconnectDb() {
   await prisma.$disconnect();
 }
 
-module.exports = { prisma, readState, persistState, recordTrade, recordWatchlistEvent, recordWhaleActivity, createScanRun, finishScanRun, disconnectDb };
+module.exports = { prisma, readState, persistState, persistPatterns, recordTrade, recordWatchlistEvent, recordWhaleActivity, createScanRun, finishScanRun, disconnectDb };

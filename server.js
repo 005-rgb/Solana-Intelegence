@@ -10,6 +10,7 @@ const {
   recordWhaleActivity,
   createScanRun,
   finishScanRun,
+  persistPatterns,
   disconnectDb
 } = require("./db");
 
@@ -102,6 +103,38 @@ function formatAge(ms) {
 }
 function tokenById(id) {
   return state.tokens.find(item => item.mint === id || item.symbol.toLowerCase() === String(id).toLowerCase());
+}
+
+function derivePatterns(tokens, scanRuns = []) {
+  const sample = tokens.length;
+  const coverage = (label, values) => {
+    const available = values.filter(Boolean).length;
+    const match = sample ? Math.round((available / sample) * 100) : 0;
+    return {
+      id: label.id,
+      name: label.name,
+      desc: label.desc,
+      match,
+      sample,
+      outcome: sample ? `${available}/${sample} provider records contain ${label.field}.` : "No provider records are available.",
+      tone: match >= 75 ? "green" : match >= 40 ? "yellow" : "red"
+    };
+  };
+  const successfulScans = scanRuns.filter(run => run.status === "SUCCESS").length;
+  return [
+    coverage({ id: "LIVE-MARKET", name: "Market coverage", field: "price and liquidity", desc: "Records with provider price and liquidity values." }, tokens.map(token => token.price !== "UNKNOWN" && token.liquidity != null)),
+    coverage({ id: "LIVE-CAP", name: "Capital coverage", field: "market cap", desc: "Records with a provider market-cap value." }, tokens.map(token => token.marketCap != null)),
+    coverage({ id: "LIVE-EVIDENCE", name: "Evidence coverage", field: "provider evidence", desc: "Records with a persisted evidence trail from DexScreener." }, tokens.map(token => Array.isArray(token.details?.evidence) && token.details.evidence.length > 0)),
+    {
+      id: "SCAN-RELIABILITY",
+      name: "Scan reliability",
+      desc: "Completed provider scans compared with all persisted executions.",
+      match: scanRuns.length ? Math.round((successfulScans / scanRuns.length) * 100) : 0,
+      sample: scanRuns.length,
+      outcome: scanRuns.length ? `${successfulScans}/${scanRuns.length} persisted scans completed successfully.` : "No scan executions are available.",
+      tone: !scanRuns.length || successfulScans / scanRuns.length < 0.4 ? "red" : successfulScans === scanRuns.length ? "green" : "yellow"
+    }
+  ];
 }
 
 async function fetchLiveTokens() {
@@ -215,6 +248,8 @@ async function runScan(manual = false) {
     state.mode = "live";
     state.provider = "DexScreener";
     state.tokens = await fetchLiveTokens();
+    state.patterns = derivePatterns(state.tokens, state.scanRuns);
+    await persistPatterns(state.patterns);
     state.system.rpc = "LIVE PROVIDER";
     state.system.market = "LIVE PROVIDER";
     state.whaleActivity = [];
@@ -259,6 +294,12 @@ async function handleApi(req, res, url) {
     return item ? send(res, 200, { token: item, mode: state.mode }) : send(res, 404, { error: "Token not found" });
   }
   if (req.method === "POST" && url.pathname === "/api/scan") return send(res, 200, await runScan(true));
+  if (req.method === "POST" && url.pathname === "/api/analysis") {
+    state.patterns = derivePatterns(state.tokens, state.scanRuns);
+    await persistPatterns(state.patterns);
+    await saveState();
+    return send(res, 200, { ok: true, patterns: state.patterns.length, state: jsonState() });
+  }
   if (req.method === "POST" && url.pathname.startsWith("/api/watchlist/")) {
     const id = decodeURIComponent(url.pathname.split("/").pop());
     const item = tokenById(id);
@@ -345,6 +386,10 @@ async function start() {
     state.system.database = "POSTGRESQL / PRISMA";
     state.system.scheduler = "RUNNING · 30s";
     state.nextScanAt = Date.now() + AUTO_SCAN_MS;
+    if (!state.patterns.length && state.tokens.length) {
+      state.patterns = derivePatterns(state.tokens, state.scanRuns);
+      await persistPatterns(state.patterns);
+    }
     await saveState();
     setInterval(() => { if (!state.scanRunning) runScan(false).catch(error => console.error("Automatic scan failed", error)); }, AUTO_SCAN_MS);
     setInterval(() => {
