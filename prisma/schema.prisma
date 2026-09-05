@@ -258,6 +258,9 @@ model TokenObservation {
   freshnessMs        Int?
   dataQuality        String
   qualityReasons     Json
+  accountTaxonomy    Json?
+  poolEvidence       Json?
+  concentration      Json?
   rawPayload         Json
   createdAt          DateTime  @default(now())
   scanRun            ScanRun?  @relation(fields: [scanRunId], references: [id], onDelete: SetNull)

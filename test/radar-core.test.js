@@ -1,6 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
+  ACCOUNT_CLASSES,
+  buildAccountTaxonomy,
   FILTER_CONFIG,
   dedupeMintEntries,
   dedupePairs,
@@ -143,4 +145,74 @@ test("partial candidate data remains unresolved and cannot reconcile as accepted
   assert.equal(report.recordsChecked, 2);
   assert.equal(report.recordsChecked, report.accepted + report.rejected + report.unresolved);
   assert.deepEqual(report.reasons.map(reason => reason.code), ["LIQUIDITY_UNKNOWN", "SECURITY_UNKNOWN"]);
+});
+
+test("unresolved token account is never presented as wallet ownership", () => {
+  const taxonomy = buildAccountTaxonomy([
+    { rank: 1, address: "account-1", amount: "600", percent: 60 }
+  ]);
+  assert.equal(taxonomy.status, "ACCOUNT_CONCENTRATION_ONLY");
+  assert.equal(taxonomy.accounts[0].accountClass, ACCOUNT_CLASSES.UNKNOWN_ACCOUNT);
+  assert.equal(taxonomy.concentration.top_1_account_percent, 60);
+  assert.equal(taxonomy.concentration.top_1_wallet_percent, null);
+});
+
+test("pool as largest account is classified and excluded from wallet concentration", () => {
+  const taxonomy = buildAccountTaxonomy([
+    { rank: 1, address: "base-vault", amount: "600", percent: 60 },
+    { rank: 2, address: "wallet-account", amount: "200", percent: 20 }
+  ], {
+    poolEvidence: {
+      poolAddress: "amm-pool",
+      baseVault: "base-vault",
+      quoteVault: "quote-vault",
+      poolProgramId: "amm-program",
+      ammType: "test-amm",
+      source: "fixture"
+    },
+    accountInfoByAddress: {
+      "wallet-account": {
+        result: {
+          value: {
+            data: {
+              parsed: { info: { owner: "wallet-owner" } }
+            }
+          }
+        }
+      }
+    },
+    ownerInfoByAddress: {
+      "wallet-owner": { result: { value: { owner: "11111111111111111111111111111111", executable: false } } }
+    }
+  });
+  assert.equal(taxonomy.status, "CLASSIFIED_PARTIAL");
+  assert.equal(taxonomy.accounts[0].accountClass, ACCOUNT_CLASSES.POOL_VAULT);
+  assert.equal(taxonomy.accounts[1].accountClass, ACCOUNT_CLASSES.EOA_OR_WALLET);
+  assert.equal(taxonomy.concentration.top_1_account_percent, 60);
+  assert.equal(taxonomy.concentration.top_1_wallet_percent, 20);
+  assert.equal(taxonomy.concentration.pool_adjusted_top_1_wallet_percent, 20);
+  assert.equal(taxonomy.concentration.pool_accounts_observed, 1);
+});
+
+test("executable resolved owners remain program-owned, not wallets", () => {
+  const taxonomy = buildAccountTaxonomy([
+    { rank: 1, address: "program-token-account", amount: "500", percent: 50 }
+  ], {
+    accountInfoByAddress: {
+      "program-token-account": {
+        result: {
+          value: {
+            data: {
+              parsed: { info: { owner: "program-owner" } }
+            }
+          }
+        }
+      }
+    },
+    ownerInfoByAddress: {
+      "program-owner": { result: { value: { executable: true, owner: "program" } } }
+    }
+  });
+  assert.equal(taxonomy.accounts[0].accountClass, ACCOUNT_CLASSES.PROGRAM_OWNED);
+  assert.equal(taxonomy.concentration.top_1_wallet_percent, null);
 });

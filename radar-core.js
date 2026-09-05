@@ -1,6 +1,24 @@
 const BASELINE_DECISION_VERSION = "baseline-v1";
 const MAX_TOP_HOLDER_PERCENT = 80;
 const MIN_LIQUIDITY_USD = 10_000;
+const TAXONOMY_VERSION = "taxonomy-v1";
+
+const ACCOUNT_CLASSES = Object.freeze({
+  EOA_OR_WALLET: "EOA_OR_WALLET",
+  ASSOCIATED_TOKEN_ACCOUNT: "ASSOCIATED_TOKEN_ACCOUNT",
+  AMM_POOL: "AMM_POOL",
+  POOL_VAULT: "POOL_VAULT",
+  PROGRAM_OWNED: "PROGRAM_OWNED",
+  ESCROW_OR_LOCK: "ESCROW_OR_LOCK",
+  TREASURY: "TREASURY",
+  UNKNOWN_ACCOUNT: "UNKNOWN_ACCOUNT"
+});
+
+const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
+const TOKEN_PROGRAM_IDS = new Set([
+  "TokenkegQfeZyiNwAJbCqRbMqDqYj3aKf6gQf1Q2r7",
+  "TokenzQdBNbLqP5VEhdkYJ6Y1W3qL6u3x9a6J6wGv5"
+]);
 
 const FILTER_CONFIG = Object.freeze({
   version: BASELINE_DECISION_VERSION,
@@ -31,6 +49,248 @@ function numeric(value) {
   if (value == null || value === "") return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function normalizedAddressSet(values) {
+  return new Set((Array.isArray(values) ? values : [values])
+    .map(value => String(value || "").trim())
+    .filter(Boolean));
+}
+
+function normalizePoolEvidence(input = {}) {
+  const evidence = input && typeof input === "object" ? input : {};
+  const addresses = value => [...normalizedAddressSet(value)];
+  return {
+    taxonomyVersion: TAXONOMY_VERSION,
+    poolAddress: evidence.poolAddress || evidence.address || null,
+    poolProgramId: evidence.poolProgramId || evidence.programId || null,
+    ammType: evidence.ammType || evidence.dexId || null,
+    ammVersion: evidence.ammVersion || null,
+    baseVault: evidence.baseVault || null,
+    quoteVault: evidence.quoteVault || null,
+    vaultAddresses: addresses(evidence.vaultAddresses || [evidence.baseVault, evidence.quoteVault]),
+    programOwnedAddresses: addresses(evidence.programOwnedAddresses),
+    escrowAddresses: addresses(evidence.escrowAddresses || evidence.lockAddresses),
+    treasuryAddresses: addresses(evidence.treasuryAddresses),
+    lpMint: evidence.lpMint || null,
+    lpSupply: numeric(evidence.lpSupply),
+    lpHolderDistribution: evidence.lpHolderDistribution || null,
+    lpBurnStatus: evidence.lpBurnStatus || null,
+    lpLockProvider: evidence.lpLockProvider || null,
+    lpLockExpiry: evidence.lpLockExpiry || null,
+    withdrawAuthority: evidence.withdrawAuthority || null,
+    poolCreationSlot: evidence.poolCreationSlot ?? null,
+    poolLastUpdateSlot: evidence.poolLastUpdateSlot ?? null,
+    source: evidence.source || null,
+    status: evidence.status || (Object.values(evidence).some(Boolean) ? "PARTIAL" : "UNKNOWN")
+  };
+}
+
+function classifyAccount({
+  address,
+  accountInfo = null,
+  ownerInfo = null,
+  poolEvidence = {},
+  associatedTokenAccountAddresses = [],
+  explicitClass = null
+} = {}) {
+  const accountAddress = String(address || "").trim() || null;
+  const pool = normalizePoolEvidence(poolEvidence);
+  const poolAddresses = normalizedAddressSet([
+    pool.poolAddress,
+    pool.baseVault,
+    pool.quoteVault,
+    ...(pool.vaultAddresses || [])
+  ]);
+  const associatedAddresses = normalizedAddressSet(associatedTokenAccountAddresses);
+  const tokenValue = accountInfo?.result?.value || accountInfo?.value || accountInfo || null;
+  const tokenInfo = tokenValue?.data?.parsed?.info || accountInfo?.parsed?.info || {};
+  const ownerAddress = String(tokenInfo.owner || "").trim() || null;
+  const ownerValue = ownerInfo?.result?.value || ownerInfo?.value || ownerInfo || null;
+  const ownerProgramId = String(ownerValue?.owner || "").trim() || null;
+  const isOwnerExecutable = ownerValue?.executable === true;
+
+  if (explicitClass && Object.values(ACCOUNT_CLASSES).includes(explicitClass)) {
+    return {
+      address: accountAddress,
+      accountClass: explicitClass,
+      ownerAddress,
+      confidence: "EXPLICIT",
+      evidence: ["Explicit account class supplied by the source."]
+    };
+  }
+  if (accountAddress && pool.vaultAddresses.includes(accountAddress) || accountAddress && [pool.baseVault, pool.quoteVault].includes(accountAddress)) {
+    return {
+      address: accountAddress,
+      accountClass: ACCOUNT_CLASSES.POOL_VAULT,
+      ownerAddress,
+      confidence: "EXPLICIT",
+      evidence: ["Account address matches explicit pool vault evidence."]
+    };
+  }
+  if (accountAddress && pool.poolAddress === accountAddress) {
+    return {
+      address: accountAddress,
+      accountClass: ACCOUNT_CLASSES.AMM_POOL,
+      ownerAddress,
+      confidence: "EXPLICIT",
+      evidence: ["Account address matches explicit AMM pool evidence."]
+    };
+  }
+  if (accountAddress && associatedAddresses.has(accountAddress)) {
+    return {
+      address: accountAddress,
+      accountClass: ACCOUNT_CLASSES.ASSOCIATED_TOKEN_ACCOUNT,
+      ownerAddress,
+      confidence: "EXPLICIT",
+      evidence: ["Account address is present in the associated-token-account evidence set."]
+    };
+  }
+  if (accountInfo?.isAssociatedTokenAccount === true || tokenValue?.isAssociatedTokenAccount === true) {
+    return {
+      address: accountAddress,
+      accountClass: ACCOUNT_CLASSES.ASSOCIATED_TOKEN_ACCOUNT,
+      ownerAddress,
+      confidence: "EXPLICIT",
+      evidence: ["RPC/source marked the account as an associated token account."]
+    };
+  }
+  if (accountAddress && pool.programOwnedAddresses.includes(accountAddress)) {
+    return {
+      address: accountAddress,
+      accountClass: ACCOUNT_CLASSES.PROGRAM_OWNED,
+      ownerAddress,
+      confidence: "EXPLICIT",
+      evidence: ["Account address matches explicit program-owned evidence."]
+    };
+  }
+  if (accountAddress && pool.escrowAddresses.includes(accountAddress)) {
+    return {
+      address: accountAddress,
+      accountClass: ACCOUNT_CLASSES.ESCROW_OR_LOCK,
+      ownerAddress,
+      confidence: "EXPLICIT",
+      evidence: ["Account address matches explicit escrow or lock evidence."]
+    };
+  }
+  if (accountAddress && pool.treasuryAddresses.includes(accountAddress)) {
+    return {
+      address: accountAddress,
+      accountClass: ACCOUNT_CLASSES.TREASURY,
+      ownerAddress,
+      confidence: "EXPLICIT",
+      evidence: ["Account address matches explicit treasury evidence."]
+    };
+  }
+  if (isOwnerExecutable) {
+    return {
+      address: accountAddress,
+      accountClass: ACCOUNT_CLASSES.PROGRAM_OWNED,
+      ownerAddress,
+      confidence: "RPC",
+      evidence: ["Resolved owner account is executable."]
+    };
+  }
+  if (ownerAddress && poolAddresses.has(ownerAddress)) {
+    return {
+      address: accountAddress,
+      accountClass: ACCOUNT_CLASSES.AMM_POOL,
+      ownerAddress,
+      confidence: "EXPLICIT",
+      evidence: ["Resolved owner matches explicit pool evidence."]
+    };
+  }
+  if (ownerAddress && ownerProgramId === SYSTEM_PROGRAM_ID && ownerValue?.executable === false) {
+    return {
+      address: accountAddress,
+      accountClass: ACCOUNT_CLASSES.EOA_OR_WALLET,
+      ownerAddress,
+      confidence: "RPC",
+      evidence: ["Resolved owner is a non-executable system-owned account."]
+    };
+  }
+  if (ownerAddress && ownerProgramId && TOKEN_PROGRAM_IDS.has(ownerProgramId)) {
+    return {
+      address: accountAddress,
+      accountClass: ACCOUNT_CLASSES.UNKNOWN_ACCOUNT,
+      ownerAddress,
+      confidence: "LOW",
+      evidence: ["Owner was resolved, but its account type is not sufficient to prove wallet ownership."]
+    };
+  }
+  return {
+    address: accountAddress,
+    accountClass: ACCOUNT_CLASSES.UNKNOWN_ACCOUNT,
+    ownerAddress,
+    confidence: "UNKNOWN",
+    evidence: ["No explicit pool, vault, program, escrow, treasury, ATA, or wallet evidence was available."]
+  };
+}
+
+function topPercent(topHolders, count, predicate = () => true) {
+  const values = (Array.isArray(topHolders) ? topHolders : [])
+    .filter(predicate)
+    .slice(0, count)
+    .map(holder => numeric(holder?.percent))
+    .filter(value => value != null);
+  return values.length ? Number(values.reduce((sum, value) => sum + value, 0).toFixed(8)) : null;
+}
+
+function buildAccountTaxonomy(topHolders, {
+  poolEvidence = {},
+  accountInfoByAddress = {},
+  ownerInfoByAddress = {},
+  associatedTokenAccountAddresses = []
+} = {}) {
+  const holders = (Array.isArray(topHolders) ? topHolders : []).map(holder => {
+    const address = String(holder?.address || "").trim() || null;
+    const resolvedOwner = address
+      ? accountInfoByAddress[address]?.result?.value?.data?.parsed?.info?.owner
+        || accountInfoByAddress[address]?.value?.data?.parsed?.info?.owner
+      : null;
+    const classification = classifyAccount({
+      address,
+      accountInfo: address ? accountInfoByAddress[address] : null,
+      ownerInfo: resolvedOwner
+        ? ownerInfoByAddress[resolvedOwner]
+        : null,
+      poolEvidence,
+      associatedTokenAccountAddresses,
+      explicitClass: holder?.accountClass || holder?.class
+    });
+    return { ...holder, ...classification };
+  });
+  const resolvedWallet = holder => [
+    ACCOUNT_CLASSES.EOA_OR_WALLET,
+    ACCOUNT_CLASSES.ASSOCIATED_TOKEN_ACCOUNT
+  ].includes(holder.accountClass);
+  const knownClassCount = holders.filter(holder => holder.accountClass !== ACCOUNT_CLASSES.UNKNOWN_ACCOUNT).length;
+  const poolClassCount = holders.filter(holder => [ACCOUNT_CLASSES.AMM_POOL, ACCOUNT_CLASSES.POOL_VAULT].includes(holder.accountClass)).length;
+  const status = knownClassCount > 0 ? "CLASSIFIED_PARTIAL" : "ACCOUNT_CONCENTRATION_ONLY";
+
+  return {
+    taxonomyVersion: TAXONOMY_VERSION,
+    status,
+    confidenceCap: status === "ACCOUNT_CONCENTRATION_ONLY" ? 50 : knownClassCount === holders.length ? 100 : 70,
+    poolEvidence: normalizePoolEvidence(poolEvidence),
+    accounts: holders,
+    classCounts: holders.reduce((counts, holder) => {
+      counts[holder.accountClass] = (counts[holder.accountClass] || 0) + 1;
+      return counts;
+    }, {}),
+    concentration: {
+      top_1_account_percent: topPercent(holders, 1),
+      top_5_account_percent: topPercent(holders, 5),
+      top_10_account_percent: topPercent(holders, 10),
+      top_20_account_percent: topPercent(holders, 20),
+      top_1_wallet_percent: topPercent(holders, 1, resolvedWallet),
+      top_5_wallet_percent: topPercent(holders, 5, resolvedWallet),
+      top_10_wallet_percent: topPercent(holders, 10, resolvedWallet),
+      pool_adjusted_top_1_wallet_percent: topPercent(holders.filter(holder => ![ACCOUNT_CLASSES.AMM_POOL, ACCOUNT_CLASSES.POOL_VAULT].includes(holder.accountClass)), 1, resolvedWallet),
+      pool_adjusted_top_10_wallet_percent: topPercent(holders.filter(holder => ![ACCOUNT_CLASSES.AMM_POOL, ACCOUNT_CLASSES.POOL_VAULT].includes(holder.accountClass)), 10, resolvedWallet),
+      pool_accounts_observed: poolClassCount
+    }
+  };
 }
 
 function selectPrimaryPair(pairs) {
@@ -206,13 +466,18 @@ function selectBoardTokens(previousTokens, acceptedTokens) {
 }
 
 module.exports = {
+  ACCOUNT_CLASSES,
   BASELINE_DECISION_VERSION,
   FILTER_CONFIG,
   MAX_TOP_HOLDER_PERCENT,
   MIN_LIQUIDITY_USD,
+  TAXONOMY_VERSION,
+  buildAccountTaxonomy,
+  classifyAccount,
   dedupePairs,
   dedupeMintEntries,
   evaluateBaselineCandidate,
+  normalizePoolEvidence,
   normalizeDiscoveryUniverse,
   selectBoardTokens,
   selectPrimaryPair,

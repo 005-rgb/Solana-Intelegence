@@ -26,6 +26,7 @@ const {
 } = require("./db");
 const {
   BASELINE_DECISION_VERSION,
+  buildAccountTaxonomy,
   FILTER_CONFIG,
   MAX_TOP_HOLDER_PERCENT,
   MIN_LIQUIDITY_USD,
@@ -33,6 +34,7 @@ const {
   dedupeMintEntries,
   evaluateBaselineCandidate,
   normalizeDiscoveryUniverse,
+  normalizePoolEvidence,
   selectBoardTokens,
   selectPrimaryPair,
   summarizeBaselineCandidates
@@ -51,6 +53,8 @@ const BODY_TIMEOUT_MS = 5_000;
 const RATE_WINDOW_MS = 60_000;
 const API_RATE_LIMIT = 120;
 const MUTATION_RATE_LIMIT = 20;
+const MAX_TAXONOMY_HOLDERS_PER_TOKEN = 10;
+const MAX_TAXONOMY_ACCOUNT_REQUESTS = 120;
 const rateBuckets = new Map();
 let lastFilterReport = {
   checked: 0, accepted: 0, rejected: 0, unresolved: 0, reasons: [],
@@ -362,7 +366,8 @@ async function solanaRpcBatch(requests, signal) {
   }
 }
 
-function unverifiedSecurity(message) {
+function unverifiedSecurity(message, { poolEvidence = {} } = {}) {
+  const taxonomy = buildAccountTaxonomy([], { poolEvidence });
   return {
     verified: false,
     status: "UNVERIFIED",
@@ -371,13 +376,16 @@ function unverifiedSecurity(message) {
     holders: null,
     topHolderPercent: null,
     topHolders: [],
-    supply: null
+    supply: null,
+    poolEvidence: taxonomy.poolEvidence,
+    accountTaxonomy: taxonomy,
+    concentration: taxonomy.concentration
   };
 }
 
-function securityFromRpcResults(accountResponse, supplyResponse, largestResponse) {
+function securityFromRpcResults(accountResponse, supplyResponse, largestResponse, taxonomyOptions = {}) {
   const rpcError = [accountResponse, supplyResponse, largestResponse].find(item => item?.error);
-  if (rpcError) return unverifiedSecurity(rpcError.error.message || "Solana RPC request failed");
+  if (rpcError) return unverifiedSecurity(rpcError.error.message || "Solana RPC request failed", taxonomyOptions);
   try {
     const account = accountResponse?.result;
     const supply = supplyResponse?.result;
@@ -386,14 +394,14 @@ function securityFromRpcResults(accountResponse, supplyResponse, largestResponse
     const supplyAmount = supply?.value?.amount;
     const largestAccounts = largest?.value;
     if (!info || !supplyAmount || !Array.isArray(largestAccounts) || !largestAccounts.length) {
-      return unverifiedSecurity("Solana RPC security response is incomplete.");
+      return unverifiedSecurity("Solana RPC security response is incomplete.", taxonomyOptions);
     }
     const mintAuthorityRenounced = Boolean(info) && info.mintAuthority == null;
     const freezeAuthorityRenounced = Boolean(info) && info.freezeAuthority == null;
     const supplyRaw = BigInt(supplyAmount);
     const largestRaw = BigInt(largestAccounts[0]?.amount || "0");
     if (supplyRaw <= 0n || largestAccounts[0]?.amount == null) {
-      return unverifiedSecurity("Solana RPC supply or largest-holder data is invalid.");
+      return unverifiedSecurity("Solana RPC supply or largest-holder data is invalid.", taxonomyOptions);
     }
     const topHolderPercent = supplyRaw > 0n ? Number((largestRaw * 10000n) / supplyRaw) / 100 : null;
     const topHolders = Array.isArray(largest?.value)
@@ -407,6 +415,7 @@ function securityFromRpcResults(accountResponse, supplyResponse, largestResponse
         };
       })
       : [];
+    const accountTaxonomy = buildAccountTaxonomy(topHolders, taxonomyOptions);
     const reasons = [];
     if (!info) reasons.push("Mint account data is unavailable or not an SPL token mint.");
     else {
@@ -427,30 +436,94 @@ function securityFromRpcResults(accountResponse, supplyResponse, largestResponse
       },
       holders: largest?.value?.length || null,
       topHolderPercent,
-      topHolders,
-      supply: supply?.value?.uiAmountString || null
+      topHolders: accountTaxonomy.accounts,
+      supply: supply?.value?.uiAmountString || null,
+      poolEvidence: accountTaxonomy.poolEvidence,
+      accountTaxonomy,
+      concentration: accountTaxonomy.concentration
     };
   } catch (error) {
-    return unverifiedSecurity(error.message);
+    return unverifiedSecurity(error.message, taxonomyOptions);
   }
 }
 
-async function verifyTokensSecurity(mints, signal) {
-  const requests = mints.flatMap((mint, index) => [
-    { jsonrpc: "2.0", id: `${index}:account`, method: "getAccountInfo", params: [mint, { encoding: "jsonParsed", commitment: "confirmed" }] },
-    { jsonrpc: "2.0", id: `${index}:supply`, method: "getTokenSupply", params: [mint, { commitment: "confirmed" }] },
-    { jsonrpc: "2.0", id: `${index}:largest`, method: "getTokenLargestAccounts", params: [mint, { commitment: "confirmed" }] }
+async function verifyTokensSecurity(tokenRecords, signal) {
+  const records = (Array.isArray(tokenRecords) ? tokenRecords : []).map(record => typeof record === "string"
+    ? { mint: record, poolEvidence: {} }
+    : { mint: record?.mint, poolEvidence: record?.poolEvidence || {} });
+  const requests = records.flatMap((record, index) => [
+    { jsonrpc: "2.0", id: `${index}:account`, method: "getAccountInfo", params: [record.mint, { encoding: "jsonParsed", commitment: "confirmed" }] },
+    { jsonrpc: "2.0", id: `${index}:supply`, method: "getTokenSupply", params: [record.mint, { commitment: "confirmed" }] },
+    { jsonrpc: "2.0", id: `${index}:largest`, method: "getTokenLargestAccounts", params: [record.mint, { commitment: "confirmed" }] }
   ]);
   try {
     const responses = await solanaRpcBatch(requests, signal);
     const byId = new Map(responses.map(response => [String(response.id), response]));
-    return mints.map((_, index) => securityFromRpcResults(
-      byId.get(`${index}:account`),
-      byId.get(`${index}:supply`),
-      byId.get(`${index}:largest`)
+    const baseResults = records.map((record, index) => ({
+      account: byId.get(`${index}:account`),
+      supply: byId.get(`${index}:supply`),
+      largest: byId.get(`${index}:largest`),
+      poolEvidence: record.poolEvidence
+    }));
+    const holderRefs = [];
+    for (const result of baseResults) {
+      for (const holder of (result.largest?.result?.value || []).slice(0, MAX_TAXONOMY_HOLDERS_PER_TOKEN)) {
+        if (holder?.address && !holderRefs.some(ref => ref.address === holder.address)) {
+          holderRefs.push({ address: holder.address });
+        }
+        if (holderRefs.length >= MAX_TAXONOMY_ACCOUNT_REQUESTS) break;
+      }
+      if (holderRefs.length >= MAX_TAXONOMY_ACCOUNT_REQUESTS) break;
+    }
+    let accountInfoByAddress = {};
+    if (holderRefs.length) {
+      try {
+        const accountResponses = await solanaRpcBatch(holderRefs.map((ref, index) => ({
+          jsonrpc: "2.0",
+          id: `taxonomy:account:${index}`,
+          method: "getAccountInfo",
+          params: [ref.address, { encoding: "jsonParsed", commitment: "confirmed" }]
+        })), signal);
+        accountInfoByAddress = Object.fromEntries(accountResponses.map((response, index) => [
+          holderRefs[index].address,
+          response
+        ]));
+      } catch {
+        accountInfoByAddress = {};
+      }
+    }
+    const ownerRefs = [...new Set(Object.values(accountInfoByAddress)
+      .map(response => response?.result?.value?.data?.parsed?.info?.owner)
+      .filter(Boolean))].slice(0, MAX_TAXONOMY_ACCOUNT_REQUESTS);
+    let ownerInfoByAddress = {};
+    if (ownerRefs.length) {
+      try {
+        const ownerResponses = await solanaRpcBatch(ownerRefs.map((address, index) => ({
+          jsonrpc: "2.0",
+          id: `taxonomy:owner:${index}`,
+          method: "getAccountInfo",
+          params: [address, { encoding: "base64", commitment: "confirmed" }]
+        })), signal);
+        ownerInfoByAddress = Object.fromEntries(ownerResponses.map((response, index) => [
+          ownerRefs[index],
+          response
+        ]));
+      } catch {
+        ownerInfoByAddress = {};
+      }
+    }
+    return baseResults.map(result => securityFromRpcResults(
+      result.account,
+      result.supply,
+      result.largest,
+      {
+        poolEvidence: result.poolEvidence,
+        accountInfoByAddress,
+        ownerInfoByAddress
+      }
     ));
   } catch (error) {
-    return mints.map(() => unverifiedSecurity(error.message));
+    return records.map(record => unverifiedSecurity(error.message, { poolEvidence: record.poolEvidence }));
   }
 }
 
@@ -595,6 +668,17 @@ function timestampMs(value) {
   return Date.parse(String(value || ""));
 }
 
+function poolEvidenceFromItem(item) {
+  const pair = item?.details?.pair || {};
+  const supplied = pair.poolEvidence || pair.pool || pair.info?.poolEvidence || {};
+  return normalizePoolEvidence({
+    ...supplied,
+    poolAddress: supplied.poolAddress || supplied.address || pair.address || null,
+    ammType: supplied.ammType || supplied.dexId || pair.dexId || null,
+    source: supplied.source || "DexScreener pair identity"
+  });
+}
+
 function observationData(item, endpoint, sourceRequestId, observedAt, pairOverride = null, pairRole = "primary") {
   const pair = pairOverride || item.details?.pair || {};
   const providerMetadata = item.details?.providerMetadata || {};
@@ -629,6 +713,9 @@ function observationData(item, endpoint, sourceRequestId, observedAt, pairOverri
       : null,
     dataQuality: pair.address ? `${pairRole.toUpperCase()}_PAIR_SECURITY_SEPARATE` : "MISSING_PAIR",
     qualityReasons: decision.reasonCodes,
+    accountTaxonomy: item.details?.security?.accountTaxonomy || null,
+    poolEvidence: item.details?.security?.poolEvidence || poolEvidenceFromItem(item),
+    concentration: item.details?.security?.concentration || null,
     rawPayload
   };
 }
@@ -761,7 +848,10 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
       };
     });
     const rpcStartedAt = Date.now();
-    const securityResults = await verifyTokensSecurity(fresh.map(item => item.mint), signal);
+    const securityResults = await verifyTokensSecurity(fresh.map(item => ({
+      mint: item.mint,
+      poolEvidence: poolEvidenceFromItem(item)
+    })), signal);
     const rpcFreshnessMs = Date.now() - rpcStartedAt;
     const secured = fresh.map((item, index) => ({
       ...item,

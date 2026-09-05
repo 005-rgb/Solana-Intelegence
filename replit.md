@@ -60,6 +60,15 @@ If a provider or security scan fails, the last known good Radar board remains vi
 - Missing provider fields remain `null`/`UNKNOWN`; source endpoint, request ID, response hash, observation time, provider update time, and quality reasons are persisted.
 - The scan audit exposes source health, overlap, deduplicated mint/pair counts, pair policy, and primary/secondary observation lineage.
 
+## Phase 1A account taxonomy
+
+- Largest-account evidence is explicitly labeled `ACCOUNT_CONCENTRATION_ONLY` until holder account classification is available.
+- Account classes are fail-closed: `EOA_OR_WALLET`, `ASSOCIATED_TOKEN_ACCOUNT`, `AMM_POOL`, `POOL_VAULT`, `PROGRAM_OWNED`, `ESCROW_OR_LOCK`, `TREASURY`, and `UNKNOWN_ACCOUNT`.
+- Pool and vault labels require explicit pool evidence; a pair address alone cannot turn a token account into a wallet or pool owner.
+- A bounded top-holder RPC enrichment resolves account and owner evidence without weakening the existing security gates. Unresolved owners remain unknown.
+- Immutable `TokenObservation` rows persist account taxonomy, pool evidence, and separated account/wallet concentration metrics.
+- The UI calls the data token-account concentration and shows the taxonomy status; it does not present unresolved token accounts as wallet holders.
+
 ## Phase 0A platform safety
 
 The server keeps scan execution safe across restarts and concurrent callers:

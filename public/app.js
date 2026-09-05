@@ -407,6 +407,9 @@ function shortAddress(address) {
   const value = String(address || "");
   return value.length > 12 ? `${value.slice(0, 5)}…${value.slice(-4)}` : value || "UNKNOWN";
 }
+function accountClassLabel(value) {
+  return String(value || "UNKNOWN_ACCOUNT").replaceAll("_", " ");
+}
 function bubbleCoordinates(index) {
   if (index === 0) return { x: 50, y: 50 };
   const angle = ((index * 137.5) - 90) * Math.PI / 180;
@@ -419,8 +422,10 @@ function bubbleCoordinates(index) {
 function bubbleMapMarkup(item, compactMode = false) {
   const security = item?.details?.security || {};
   const holders = Array.isArray(security.topHolders) ? security.topHolders.filter(holder => holder && holder.address) : [];
+  const taxonomy = security.accountTaxonomy || {};
+  const taxonomyStatus = taxonomy.status || "ACCOUNT_CONCENTRATION_ONLY";
   if (!holders.length) {
-    return `<section class="card bubble-map-card"><div class="card-head"><div><div class="card-title">Holder bubble map</div><div class="card-kicker">Top accounts from Solana RPC</div></div><span class="badge badge-yellow">UNKNOWN</span></div><div class="empty"><strong>Holder map unavailable</strong><span>The configured RPC did not return largest-holder account data for this token.</span></div></section>`;
+    return `<section class="card bubble-map-card"><div class="card-head"><div><div class="card-title">Account concentration map</div><div class="card-kicker">Top token accounts from Solana RPC</div></div><span class="badge badge-yellow">${esc(taxonomyStatus)}</span></div><div class="empty"><strong>Account map unavailable</strong><span>The configured RPC did not return largest-account data for this token.</span></div></section>`;
   }
   const largestPercent = Math.max(Number(holders[0]?.percent) || 0, 1);
   const coordinates = holders.map((holder, index) => ({ ...holder, ...bubbleCoordinates(index) }));
@@ -429,16 +434,16 @@ function bubbleMapMarkup(item, compactMode = false) {
     const percent = Number(holder.percent);
     const size = Math.round(Math.max(30, Math.min(98, 31 + Math.sqrt(Math.max(percent, 0) / largestPercent) * 67)));
     const tone = index === 0 ? "primary" : index < 4 ? "accent" : "muted";
-    return `<div class="holder-bubble holder-bubble-${tone}" style="--bubble-x:${holder.x}%;--bubble-y:${holder.y}%;--bubble-size:${size}px" title="Rank ${holder.rank} · ${esc(holder.address)} · ${Number.isFinite(percent) ? percent.toFixed(2) : "UNKNOWN"}% of supply"><strong>${Number.isFinite(percent) ? `${percent.toFixed(1)}%` : "?"}</strong><small>${esc(shortAddress(holder.address))}</small></div>`;
+    return `<div class="holder-bubble holder-bubble-${tone}" style="--bubble-x:${holder.x}%;--bubble-y:${holder.y}%;--bubble-size:${size}px" title="Rank ${holder.rank} · ${esc(holder.address)} · ${esc(accountClassLabel(holder.accountClass))} · ${Number.isFinite(percent) ? percent.toFixed(2) : "UNKNOWN"}% of supply"><strong>${Number.isFinite(percent) ? `${percent.toFixed(1)}%` : "?"}</strong><small>${esc(shortAddress(holder.address))}</small></div>`;
   }).join("");
-  const table = holders.slice(0, compactMode ? 8 : 20).map(holder => `<tr><td>${holder.rank}</td><td><code>${esc(shortAddress(holder.address))}</code></td><td>${detailCount(holder.amount)}</td><td>${Number.isFinite(Number(holder.percent)) ? `${Number(holder.percent).toFixed(2)}%` : "UNKNOWN"}</td></tr>`).join("");
+  const table = holders.slice(0, compactMode ? 8 : 20).map(holder => `<tr><td>${holder.rank}</td><td><code>${esc(shortAddress(holder.address))}</code></td><td>${esc(accountClassLabel(holder.accountClass))}</td><td>${detailCount(holder.amount)}</td><td>${Number.isFinite(Number(holder.percent)) ? `${Number(holder.percent).toFixed(2)}%` : "UNKNOWN"}</td></tr>`).join("");
   return `<section class="card bubble-map-card ${compactMode ? "bubble-map-compact" : ""}">
-    <div class="card-head"><div><div class="card-title">Holder bubble map</div><div class="card-kicker">Top ${holders.length} token accounts · ${esc(item.symbol)} · live Solana RPC snapshot</div></div><span class="badge badge-blue">RPC LIVE</span></div>
+    <div class="card-head"><div><div class="card-title">Account concentration map</div><div class="card-kicker">Top ${holders.length} token accounts · ${esc(item.symbol)} · live Solana RPC snapshot</div></div><span class="badge badge-blue">${esc(taxonomyStatus)}</span></div>
     <div class="bubble-map-layout">
       <div class="bubble-map-canvas"><svg viewBox="0 0 100 100" aria-hidden="true"><g class="bubble-links">${lines}</g><circle class="bubble-map-orbit" cx="50" cy="50" r="13"></circle></svg>${bubbles}<div class="bubble-map-center">${tokenLogo(item)}<strong>${esc(item.symbol)}</strong></div><div class="bubble-map-legend"><span><i class="bubble-legend-primary"></i>Largest account</span><span><i class="bubble-legend-accent"></i>Top holders</span><span><i class="bubble-legend-muted"></i>Other accounts</span></div></div>
-      <div class="bubble-map-table-wrap"><div class="bubble-map-table-title">Largest accounts</div><table class="bubble-map-table"><thead><tr><th>#</th><th>Account</th><th>Amount</th><th>Supply</th></tr></thead><tbody>${table}</tbody></table></div>
+      <div class="bubble-map-table-wrap"><div class="bubble-map-table-title">Largest token accounts</div><table class="bubble-map-table"><thead><tr><th>#</th><th>Account</th><th>Class</th><th>Amount</th><th>Supply</th></tr></thead><tbody>${table}</tbody></table></div>
     </div>
-    <div class="data-note">This map shows token-account concentration from <strong>getTokenLargestAccounts</strong>. It does not infer wallet ownership or transfer relationships; that requires an indexed graph provider.</div>
+    <div class="data-note"><strong>${esc(taxonomyStatus)}</strong> · This map shows token-account concentration from <strong>getTokenLargestAccounts</strong>. It does not infer wallet ownership or transfer relationships unless an account class is explicitly evidenced.</div>
   </section>`;
 }
 function setBubbleMapToken(mint) {
@@ -474,6 +479,8 @@ async function showToken(id, reload = true) {
   const security = details.security || {};
   const pnl = tokenPnl(t);
   const holderPercent = security.topHolderPercent == null ? "UNKNOWN" : `${Number(security.topHolderPercent).toFixed(2)}%`;
+  const accountTaxonomy = security.accountTaxonomy || {};
+  const concentration = security.concentration || accountTaxonomy.concentration || {};
   const headerUrl = safeHttpUrl(profile.headerUrl || metadata.header);
   const profileDescription = profile.description || metadata.description || `${t.name} profile data was not supplied by DexScreener.`;
   const links = [...(profile.websites || []), ...(profile.socials || [])];
@@ -514,8 +521,10 @@ async function showToken(id, reload = true) {
         <div class="side-card-heading"><div><h3>Security verification</h3><span>Independent Solana RPC checks</span></div><span class="security-status ${security.verified ? "verified" : "rejected"}">${esc(security.status || "UNKNOWN")}</span></div>
         <div class="health-row"><span>Mint authority</span><strong class="health-value ${security.authorities?.mint === "RENOUNCED" ? "health-ok" : "health-warn"}">${esc(security.authorities?.mint || "UNKNOWN")}</strong></div>
         <div class="health-row"><span>Freeze authority</span><strong class="health-value ${security.authorities?.freeze === "RENOUNCED" ? "health-ok" : "health-warn"}">${esc(security.authorities?.freeze || "UNKNOWN")}</strong></div>
-        <div class="health-row"><span>Largest holder</span><strong class="health-value ${security.topHolderPercent > 80 ? "health-warn" : "health-ok"}">${holderPercent}</strong></div>
+         <div class="health-row"><span>Largest token account</span><strong class="health-value ${security.topHolderPercent > 80 ? "health-warn" : "health-ok"}">${holderPercent}</strong></div>
         <div class="health-row"><span>Holder accounts checked</span><strong class="health-value">${security.holders ?? "UNKNOWN"}</strong></div>
+         <div class="health-row"><span>Concentration basis</span><strong class="health-value health-warn">${esc(accountTaxonomy.status || "ACCOUNT_CONCENTRATION_ONLY")}</strong></div>
+         <div class="health-row"><span>Top wallet concentration</span><strong class="health-value">${concentration.top_1_wallet_percent == null ? "UNKNOWN" : `${Number(concentration.top_1_wallet_percent).toFixed(2)}%`}</strong></div>
         <ul class="security-reasons">${securityReasons.map(reason => `<li>${esc(reason)}</li>`).join("")}</ul>
         <div class="side-divider"></div>
         <div class="side-card-heading"><div><h3>Pair identity</h3><span>Selected by highest live liquidity</span></div></div>

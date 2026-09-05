@@ -621,7 +621,10 @@ async function recordTokenObservations(observations, scanRunId) {
       scanRunId: scanRunId || null,
       observedAt: toDate(observation.observedAt),
       providerUpdatedAt: observation.providerUpdatedAt ? toDate(observation.providerUpdatedAt) : null,
-      pairCreatedAt: observation.pairCreatedAt ? toDate(observation.pairCreatedAt) : null
+      pairCreatedAt: observation.pairCreatedAt ? toDate(observation.pairCreatedAt) : null,
+      accountTaxonomy: observation.accountTaxonomy || null,
+      poolEvidence: observation.poolEvidence || null,
+      concentration: observation.concentration || null
     }))
   });
 }
