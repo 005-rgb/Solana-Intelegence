@@ -228,6 +228,7 @@ function unverifiedSecurity(message) {
     authorities: { mint: "UNKNOWN", freeze: "UNKNOWN", metadata: "UNKNOWN" },
     holders: null,
     topHolderPercent: null,
+    topHolders: [],
     supply: null
   };
 }
@@ -245,6 +246,17 @@ function securityFromRpcResults(accountResponse, supplyResponse, largestResponse
     const supplyRaw = BigInt(supply?.value?.amount || "0");
     const largestRaw = BigInt(largest?.value?.[0]?.amount || "0");
     const topHolderPercent = supplyRaw > 0n ? Number((largestRaw * 10000n) / supplyRaw) / 100 : null;
+    const topHolders = Array.isArray(largest?.value)
+      ? largest.value.slice(0, 20).map((holder, index) => {
+        const amountRaw = BigInt(holder?.amount || "0");
+        return {
+          rank: index + 1,
+          address: holder?.address || null,
+          amount: holder?.uiAmountString || holder?.uiAmount || null,
+          percent: supplyRaw > 0n ? Number((amountRaw * 10000n) / supplyRaw) / 100 : null
+        };
+      })
+      : [];
     const reasons = [];
     if (!info) reasons.push("Mint account data is unavailable or not an SPL token mint.");
     else {
@@ -265,6 +277,7 @@ function securityFromRpcResults(accountResponse, supplyResponse, largestResponse
       },
       holders: largest?.value?.length || null,
       topHolderPercent,
+      topHolders,
       supply: supply?.value?.uiAmountString || null
     };
   } catch (error) {

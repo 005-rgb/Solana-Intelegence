@@ -5,6 +5,7 @@ let selectedToken = null;
 let whaleRange = "6h";
 let radarSort = "radar";
 let radarStatus = "all";
+let bubbleMapTokenMint = null;
 let refreshInFlight = false;
 
 const NAV_GROUPS = [
@@ -25,7 +26,8 @@ const NAV_GROUPS = [
     ["patterns", "⌁", "Patterns"],
     ["backtest", "◫", "Backtest"],
     ["model", "◎", "Model Intelligence"],
-    ["token-search", "⌕", "Token Search"]
+    ["token-search", "⌕", "Token Search"],
+    ["bubble-map", "◉", "Bubble Map"]
   ]],
   ["System", [
     ["settings", "⚙", "Settings"],
@@ -299,6 +301,7 @@ function render() {
     backtest,
     model: modelIntelligence,
     "token-search": tokenSearch,
+    "bubble-map": bubbleMapPage,
     settings,
     health
   };
@@ -352,6 +355,56 @@ function externalLinks(links, emptyText = "No external links supplied by DexScre
 }
 function detailStat(label, value, className = "") {
   return `<div class="detail-stat ${className}"><label>${esc(label)}</label><strong>${value}</strong></div>`;
+}
+function shortAddress(address) {
+  const value = String(address || "");
+  return value.length > 12 ? `${value.slice(0, 5)}…${value.slice(-4)}` : value || "UNKNOWN";
+}
+function bubbleCoordinates(index) {
+  if (index === 0) return { x: 50, y: 50 };
+  const angle = ((index * 137.5) - 90) * Math.PI / 180;
+  const radius = Math.min(38, 11 + index * 1.55);
+  return {
+    x: Math.max(8, Math.min(92, 50 + Math.cos(angle) * radius)),
+    y: Math.max(10, Math.min(90, 50 + Math.sin(angle) * radius * 0.72))
+  };
+}
+function bubbleMapMarkup(item, compactMode = false) {
+  const security = item?.details?.security || {};
+  const holders = Array.isArray(security.topHolders) ? security.topHolders.filter(holder => holder && holder.address) : [];
+  if (!holders.length) {
+    return `<section class="card bubble-map-card"><div class="card-head"><div><div class="card-title">Holder bubble map</div><div class="card-kicker">Top accounts from Solana RPC</div></div><span class="badge badge-yellow">UNKNOWN</span></div><div class="empty"><strong>Holder map unavailable</strong><span>The configured RPC did not return largest-holder account data for this token.</span></div></section>`;
+  }
+  const largestPercent = Math.max(Number(holders[0]?.percent) || 0, 1);
+  const coordinates = holders.map((holder, index) => ({ ...holder, ...bubbleCoordinates(index) }));
+  const lines = coordinates.slice(1, 14).map(holder => `<line x1="50" y1="50" x2="${holder.x}" y2="${holder.y}"></line>`).join("");
+  const bubbles = coordinates.map((holder, index) => {
+    const percent = Number(holder.percent);
+    const size = Math.round(Math.max(30, Math.min(98, 31 + Math.sqrt(Math.max(percent, 0) / largestPercent) * 67)));
+    const tone = index === 0 ? "primary" : index < 4 ? "accent" : "muted";
+    return `<div class="holder-bubble holder-bubble-${tone}" style="--bubble-x:${holder.x}%;--bubble-y:${holder.y}%;--bubble-size:${size}px" title="Rank ${holder.rank} · ${esc(holder.address)} · ${Number.isFinite(percent) ? percent.toFixed(2) : "UNKNOWN"}% of supply"><strong>${Number.isFinite(percent) ? `${percent.toFixed(1)}%` : "?"}</strong><small>${esc(shortAddress(holder.address))}</small></div>`;
+  }).join("");
+  const table = holders.slice(0, compactMode ? 8 : 20).map(holder => `<tr><td>${holder.rank}</td><td><code>${esc(shortAddress(holder.address))}</code></td><td>${detailCount(holder.amount)}</td><td>${Number.isFinite(Number(holder.percent)) ? `${Number(holder.percent).toFixed(2)}%` : "UNKNOWN"}</td></tr>`).join("");
+  return `<section class="card bubble-map-card ${compactMode ? "bubble-map-compact" : ""}">
+    <div class="card-head"><div><div class="card-title">Holder bubble map</div><div class="card-kicker">Top ${holders.length} token accounts · ${esc(item.symbol)} · live Solana RPC snapshot</div></div><span class="badge badge-blue">RPC LIVE</span></div>
+    <div class="bubble-map-layout">
+      <div class="bubble-map-canvas"><svg viewBox="0 0 100 100" aria-hidden="true"><g class="bubble-links">${lines}</g><circle class="bubble-map-orbit" cx="50" cy="50" r="13"></circle></svg>${bubbles}<div class="bubble-map-center">${tokenLogo(item)}<strong>${esc(item.symbol)}</strong></div><div class="bubble-map-legend"><span><i class="bubble-legend-primary"></i>Largest account</span><span><i class="bubble-legend-accent"></i>Top holders</span><span><i class="bubble-legend-muted"></i>Other accounts</span></div></div>
+      <div class="bubble-map-table-wrap"><div class="bubble-map-table-title">Largest accounts</div><table class="bubble-map-table"><thead><tr><th>#</th><th>Account</th><th>Amount</th><th>Supply</th></tr></thead><tbody>${table}</tbody></table></div>
+    </div>
+    <div class="data-note">This map shows token-account concentration from <strong>getTokenLargestAccounts</strong>. It does not infer wallet ownership or transfer relationships; that requires an indexed graph provider.</div>
+  </section>`;
+}
+function setBubbleMapToken(mint) {
+  bubbleMapTokenMint = mint;
+  render();
+}
+function bubbleMapPage() {
+  const tokens = snapshot.tokens || [];
+  const selected = tokens.find(item => item.mint === bubbleMapTokenMint) || tokens[0];
+  if (!selected) {
+    return head("On-chain research", "Bubble Map", "Visualize holder concentration from the latest Solana RPC security snapshot.", "") + `<section class="card page-panel"><div class="empty"><strong>No verified token data yet</strong><span>Run a live scan to populate the holder bubble map.</span></div></section>`;
+  }
+  return head("On-chain research", "Bubble Map", "Visualize the largest token accounts and concentration before reviewing a trade.", `<label class="filter-control">Token <select onchange="setBubbleMapToken(this.value)">${tokens.map(item => `<option value="${esc(item.mint)}" ${item.mint === selected.mint ? "selected" : ""}>${esc(item.symbol)} · ${esc(item.name)}</option>`).join("")}</select></label>`) + bubbleMapMarkup(selected);
 }
 async function showToken(id, reload = true) {
   const tokenId = decodeURIComponent(id);
@@ -427,7 +480,7 @@ async function showToken(id, reload = true) {
         <p class="review-copy">${esc(t.rationale || "No provider-backed review is available.")}</p>
         <button class="btn ${snapshot.watchlist.includes(t.mint) ? "btn-danger" : "btn-quiet"}" style="width:100%" onclick="toggleWatch('${encodeURIComponent(t.mint)}')">${snapshot.watchlist.includes(t.mint) ? "Remove from active watchlist" : "☆ Add to permanent watchlist"}</button>
       </aside>
-    </div>`);
+    </div>${bubbleMapMarkup(t)}`);
 }
 async function toggleWatch(id) { const item = snapshot.watchlist.includes(decodeURIComponent(id)); try { await api(`/api/watchlist/${id}`, { method: item ? "DELETE":"POST" }); toast(item ? "Removed from active view; history preserved." : "Added to permanent watchlist."); await refresh(); } catch(e) { toast(e.message,true); } }
 async function removeWatch(id) { try { await api(`/api/watchlist/${id}`, { method:"DELETE" }); toast("Removed from active view; historical record preserved."); await refresh(); } catch(e){toast(e.message,true);} }
@@ -440,7 +493,7 @@ window.addEventListener("hashchange", () => {
   const page = window.location.hash.slice(1);
   if (NAV.some(([id]) => id === page)) { activePage = page; render(); }
 });
-window.go=go; window.scan=scan; window.showToken=showToken; window.toggleWatch=toggleWatch; window.removeWatch=removeWatch; window.trade=trade; window.setWhaleRange=setWhaleRange; window.setRadarSort=setRadarSort; window.setRadarStatus=setRadarStatus; window.analyzePatterns=analyzePatterns; window.setTokenSearch=setTokenSearch;
+window.go=go; window.scan=scan; window.showToken=showToken; window.toggleWatch=toggleWatch; window.removeWatch=removeWatch; window.trade=trade; window.setWhaleRange=setWhaleRange; window.setRadarSort=setRadarSort; window.setRadarStatus=setRadarStatus; window.analyzePatterns=analyzePatterns; window.setTokenSearch=setTokenSearch; window.setBubbleMapToken=setBubbleMapToken;
 refresh().catch(error => { app.innerHTML = `<div class="empty" style="margin:40px"><strong>Unable to load radar</strong>${esc(error.message)}</div>`; });
 setInterval(() => {
   const label = document.querySelector("#next-scan-label");
