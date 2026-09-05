@@ -24,7 +24,7 @@ npm run db:push
 ## Live data and virtual trading
 
 - DexScreener is the only market-data provider and the application always runs in LIVE mode.
-- The server scans DexScreener every 30 seconds and keeps only Solana records.
+- The server scans DexScreener every 15 seconds and keeps only Solana records.
 - Token boost metadata is combined with the provider's live token-pair data when available, including price, liquidity, market cap, 24-hour change, and pair URL.
 - Missing provider fields remain `UNKNOWN`; the app does not invent market values.
 - Paper trading uses virtual funds only: a $100,000 starting balance, fixed $100 entries, and a simulated 0.3% fee. No wallet, private key, signing, or real-fund transaction is supported.

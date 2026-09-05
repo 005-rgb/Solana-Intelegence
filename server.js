@@ -20,7 +20,7 @@ const ROOT = __dirname;
 const PUBLIC = path.join(ROOT, "public");
 const DATA_DIR = path.join(ROOT, ".data");
 const STATE_FILE = path.join(DATA_DIR, "radar-state.json");
-const AUTO_SCAN_MS = 30_000;
+const AUTO_SCAN_MS = 15_000;
 const LIVE_SCAN_TIMEOUT_MS = 20_000;
 const ANALYSIS_MS = 6 * 60 * 60 * 1000;
 let lastFilterReport = { checked: 0, accepted: 0, rejected: 0, reasons: [] };
@@ -59,7 +59,7 @@ function freshState() {
       starting: 100000, cash: 100000, realized: 0, fees: 0, trades: 0, positions: [], history: []
     },
     system: {
-      scheduler: "RUNNING · 30s", worker: "READY", database: "POSTGRESQL / PRISMA", rpc: "LIVE PROVIDER", market: "LIVE PROVIDER",
+      scheduler: "RUNNING · 15s", worker: "READY", database: "POSTGRESQL / PRISMA", rpc: "LIVE PROVIDER", market: "LIVE PROVIDER",
       lastScanStatus: "NOT RUN YET", avgDuration: "—", tokensPerScan: 0, transactionsPerScan: 0, errors: 0,
       securityFilter: lastFilterReport
     }
@@ -102,6 +102,20 @@ function formatAge(ms) {
   const minutes = Math.max(0, Math.floor(ms / 60000));
   if (minutes < 60) return `${minutes}m`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+function providerLinks(...groups) {
+  const seen = new Set();
+  return groups.flatMap(group => Array.isArray(group) ? group : [])
+    .map(link => ({
+      label: link?.label || link?.type || "Link",
+      type: link?.type || null,
+      url: typeof link?.url === "string" ? link.url : ""
+    }))
+    .filter(link => {
+      if (!/^https?:\/\//i.test(link.url) || seen.has(link.url)) return false;
+      seen.add(link.url);
+      return true;
+    });
 }
 function tokenById(id) {
   return state.tokens.find(item => item.mint === id || item.symbol.toLowerCase() === String(id).toLowerCase());
@@ -435,16 +449,32 @@ async function fetchLiveTokens() {
         : [];
       const pair = pairs.sort((left, right) => Number(right.liquidity?.usd || 0) - Number(left.liquidity?.usd || 0))[0] || null;
       const shortMint = mint.slice(0, 4).toUpperCase();
-      const symbol = `SOL-${shortMint}`;
-      const description = String(item.description || "").split(/\r?\n/).map(line => line.trim()).find(Boolean) || `Solana token ${shortMint}`;
-      const links = Array.isArray(item.links) ? item.links.filter(link => link && typeof link.url === "string").map(link => ({ label: link.label || link.type || "Link", type: link.type || null, url: link.url })) : [];
+      const baseToken = pair?.baseToken || {};
+      const pairInfo = pair?.info || {};
+      const symbol = baseToken.symbol || item.symbol || `SOL-${shortMint}`;
+      const name = baseToken.name || item.name || String(item.description || "").split(/\r?\n/).map(line => line.trim()).find(Boolean) || `Solana token ${shortMint}`;
+      const description = item.description || pairInfo.description || null;
+      const links = providerLinks(
+        item.links,
+        pairInfo.websites,
+        pairInfo.socials
+      );
+      const websites = providerLinks(item.links, pairInfo.websites).filter(link => link.type !== "twitter" && link.type !== "telegram" && link.type !== "discord");
+      const socials = providerLinks(item.links, pairInfo.socials).filter(link => !websites.some(site => site.url === link.url));
+      const imageUrl = /^https?:\/\//i.test(String(item.icon || "")) ? item.icon : pairInfo.imageUrl || null;
+      const headerUrl = /^https?:\/\//i.test(String(item.header || "")) ? item.header : pairInfo.header || null;
       const providerMetadata = {
         chainId: item.chainId,
-        icon: item.icon || null,
-        header: item.header || null,
+        symbol,
+        name,
+        icon: imageUrl,
+        header: headerUrl,
         openGraph: item.openGraph || null,
-        description: item.description || null,
+        description,
         links,
+        websites,
+        socials,
+        pairInfo,
         cto: typeof item.cto === "boolean" ? item.cto : null,
         boostAmount: item.amount ?? null,
         totalBoostAmount: item.totalAmount ?? null,
@@ -463,12 +493,12 @@ async function fetchLiveTokens() {
       const marketCap = Number.isFinite(Number(pair?.marketCap)) ? Number(pair.marketCap) : null;
       const liquidity = Number.isFinite(Number(pair?.liquidity?.usd)) ? Number(pair.liquidity.usd) : null;
       const priceChange = pair?.priceChange?.h24 != null ? `${Number(pair.priceChange.h24).toFixed(2)}%` : "UNKNOWN";
-      const base = token(symbol, description, price, marketCap, liquidity, null, null, null, null, null, null, null, priceChange, "UNKNOWN", "UNKNOWN", providerMetadata.cto ? "CTO FLAG" : "PROVIDER", providerAge, "Pending independent Solana security verification.", "unknown", null, "UNKNOWN");
+      const base = token(symbol, name, price, marketCap, liquidity, null, null, null, null, null, null, null, priceChange, "UNKNOWN", "UNKNOWN", providerMetadata.cto ? "CTO FLAG" : "PROVIDER", providerAge, "Pending independent Solana security verification.", "unknown", null, "UNKNOWN");
       return {
         ...base,
         mint,
         symbol,
-        name: description,
+        name,
         providerUrl: pair?.url || item.url || `https://dexscreener.com/solana/${mint}`,
         details: {
           ...base.details,
@@ -480,10 +510,27 @@ async function fetchLiveTokens() {
             url: pair.url || null,
             baseToken: pair.baseToken || null,
             quoteToken: pair.quoteToken || null,
-            volume24h: pair.volume?.h24 ?? null,
-            liquidityUsd: pair.liquidity?.usd ?? null
+            pairCreatedAt: pair.pairCreatedAt || null,
+            labels: Array.isArray(pair.labels) ? pair.labels : [],
+            priceUsd: pair.priceUsd ?? null,
+            fdv: pair.fdv ?? null,
+            marketCap: pair.marketCap ?? null,
+            liquidityUsd: pair.liquidity?.usd ?? null,
+            volume: pair.volume || {},
+            priceChange: pair.priceChange || {},
+            txns: pair.txns || {},
+            makers: pair.makers || {},
+            info: pair.info || null
           } : null,
           providerMetadata,
+          profile: {
+            description,
+            imageUrl,
+            headerUrl,
+            websites,
+            socials,
+            openGraph: item.openGraph || null
+          },
           evidence
         }
       };
@@ -714,7 +761,7 @@ async function start() {
   try {
     state = await readState(state);
     state.system.database = "POSTGRESQL / PRISMA";
-    state.system.scheduler = "RUNNING · 30s";
+    state.system.scheduler = "RUNNING · 15s";
     state.nextScanAt = Date.now() + AUTO_SCAN_MS;
     if (!state.patterns.length && state.tokens.length) {
       state.patterns = derivePatterns(state.tokens, state.scanRuns);

@@ -55,7 +55,7 @@ function toast(message, error = false) { const el = document.createElement("div"
 async function api(path, options = {}) { const response = await fetch(path, { headers: { "Content-Type":"application/json" }, ...options }); const data = await response.json(); if (!response.ok) throw new Error(data.error || "Request failed"); return data; }
 
 function layout(content) {
-  app.innerHTML = `<div class="app-shell">
+  const rendered = `<div class="app-shell">
     <aside class="sidebar">
       <div class="brand"><div class="brand-mark">20</div><div><div class="brand-name">Solana Radar</div><div class="brand-sub">Intelligence OS</div></div></div>
        ${NAV_GROUPS.map(([group, items]) => `<div class="nav-section">${group}</div>${items.map(navItem).join("")}`).join("")}
@@ -67,6 +67,7 @@ function layout(content) {
       <div class="main">${content}</div>
     </main>
   </div>`;
+  app.innerHTML = rendered.replaceAll("30s", "15s").replaceAll("30 seconds", "15 seconds");
   document.querySelector("#global-search")?.addEventListener("keydown", e => { if (e.key === "Enter") { const query = e.target.value.trim().toLowerCase(); const found = snapshot.tokens.find(t => t.symbol.toLowerCase() === query || t.name.toLowerCase().includes(query) || t.mint.toLowerCase() === query); if (found) showToken(found.mint); else toast("No matching token in the current provider dataset.", true); } });
 }
 function navItem([id, icon, label]) { const count = id === "alerts" ? (snapshot?.alerts?.length || 0) : 0; return `<button class="nav-item ${activePage === id ? "active":""}" onclick="go('${id}')"><span class="nav-icon">${icon}</span><span>${label}</span>${count ? `<span class="nav-count">${count > 99 ? "99+" : count}</span>` : ""}</button>`; }
@@ -319,6 +320,114 @@ async function showToken(id, reload = true) {
   const holderPercent = security.topHolderPercent == null ? "UNKNOWN" : `${Number(security.topHolderPercent).toFixed(2)}%`;
   layout(head("Token intelligence", `${esc(t.symbol)} / ${esc(t.name)}`, "Filtered LIVE token profile with security verification, provider evidence, and virtual P/L.", tokenActions(t)) +
     `<div class="token-detail"><section class="card detail-hero"><div class="detail-heading"><div class="big-token">${tokenLogo(t, true)}<div><h2>${esc(t.symbol)}</h2><p>${esc(t.name)} · ${esc(t.mint)}</p></div></div><div class="score-hero"><strong>${t.radar ?? "?"}</strong><span>Radar score</span></div></div><div class="detail-stats"><div class="detail-stat"><label>Opportunity</label><strong>${t.opportunity ?? "UNKNOWN"}</strong></div><div class="detail-stat"><label>Smart money</label><strong>${t.smartMoney ?? "UNKNOWN"}</strong></div><div class="detail-stat"><label>Confidence</label><strong>${t.confidence ?? "UNKNOWN"}${t.confidence != null ? "%" : ""}</strong></div><div class="detail-stat"><label>Risk</label><strong class="${t.risk > 55 ? "negative" : ""}">${t.risk ?? "UNKNOWN"}</strong></div><div class="detail-stat"><label>Market cap</label><strong>${compact(t.marketCap)}</strong></div><div class="detail-stat"><label>Liquidity</label><strong>${compact(t.liquidity)}</strong></div><div class="detail-stat"><label>Price</label><strong>${esc(t.price)}</strong></div><div class="detail-stat"><label>P/L</label><strong class="${pnl.className}">${pnl.text}</strong></div></div><div class="data-note">Security: ${esc(security.status || "UNKNOWN")} · Largest holder: ${holderPercent} · ${statusBadge(t)}</div></section><section class="card evidence"><h3>Radar review</h3><p class="review-copy">${esc(t.rationale || "No provider-backed review is available.")}</p><h3>Security checks</h3><div class="health-row"><span>Mint authority</span><strong class="health-value health-ok">${esc(t.details?.authorities?.mint)}</strong></div><div class="health-row"><span>Freeze authority</span><strong class="health-value health-ok">${esc(t.details?.authorities?.freeze)}</strong></div><div class="health-row"><span>Largest holder</span><strong class="health-value ${security.topHolderPercent > 80 ? "health-warn" : "health-ok"}">${holderPercent}</strong></div><h3 style="margin-top:26px">Provider evidence</h3><ul>${evidence.map(item => `<li>${esc(item)}</li>`).join("") || "<li>No evidence supplied by the provider.</li>"}</ul><button class="btn btn-quiet" style="margin-top:18px;width:100%" onclick="go('radar')">Back to Radar</button></section></div>`);
+}
+function detailNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+function detailMoney(value, digits = 2) {
+  const number = detailNumber(value);
+  return number == null ? "UNKNOWN" : money(number, digits);
+}
+function detailCount(value) {
+  const number = detailNumber(value);
+  return number == null ? "UNKNOWN" : number.toLocaleString("en-US", { maximumFractionDigits: 2 });
+}
+function detailPercent(value) {
+  const number = detailNumber(value);
+  return number == null ? "UNKNOWN" : `${number >= 0 ? "+" : ""}${number.toFixed(2)}%`;
+}
+function providerLinkLabel(link) {
+  const type = String(link?.type || link?.label || "Link").toLowerCase();
+  if (type.includes("twitter") || type === "x") return "𝕏 Twitter";
+  if (type.includes("telegram")) return "◈ Telegram";
+  if (type.includes("discord")) return "◉ Discord";
+  if (type.includes("website") || type.includes("web")) return "◉ Website";
+  return link?.label || "Open link";
+}
+function externalLinks(links, emptyText = "No external links supplied by DexScreener.") {
+  const safeLinks = (Array.isArray(links) ? links : []).filter(link => safeHttpUrl(link?.url));
+  if (!safeLinks.length) return `<span class="detail-muted">${emptyText}</span>`;
+  return safeLinks.map(link => `<a class="provider-link" href="${esc(safeHttpUrl(link.url))}" target="_blank" rel="noopener noreferrer">${esc(providerLinkLabel(link))} ↗</a>`).join("");
+}
+function detailStat(label, value, className = "") {
+  return `<div class="detail-stat ${className}"><label>${esc(label)}</label><strong>${value}</strong></div>`;
+}
+async function showToken(id, reload = true) {
+  const tokenId = decodeURIComponent(id);
+  const data = reload ? await api(`/api/tokens/${encodeURIComponent(tokenId)}`) : { token: snapshot.tokens.find(item => item.mint === tokenId) };
+  if (!data.token) {
+    toast("Token is no longer present in the latest filtered provider data.", true);
+    selectedToken = null;
+    render();
+    return;
+  }
+  selectedToken = data.token;
+  const t = selectedToken;
+  const details = t.details || {};
+  const metadata = details.providerMetadata || {};
+  const profile = details.profile || {};
+  const pair = details.pair || {};
+  const pairChanges = pair.priceChange || {};
+  const pairVolume = pair.volume || {};
+  const pairTxns = pair.txns || {};
+  const security = details.security || {};
+  const pnl = tokenPnl(t);
+  const holderPercent = security.topHolderPercent == null ? "UNKNOWN" : `${Number(security.topHolderPercent).toFixed(2)}%`;
+  const headerUrl = safeHttpUrl(profile.headerUrl || metadata.header);
+  const profileDescription = profile.description || metadata.description || `${t.name} profile data was not supplied by DexScreener.`;
+  const links = [...(profile.websites || []), ...(profile.socials || [])];
+  const quote = pair.quoteToken?.symbol || pair.quoteToken?.name || "UNKNOWN";
+  const pairCreated = pair.pairCreatedAt ? new Date(pair.pairCreatedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "UNKNOWN";
+  const securityReasons = Array.isArray(security.reasons) && security.reasons.length ? security.reasons : ["No additional security explanation was supplied."];
+  const marketStats = [
+    detailStat("Price USD", esc(t.price)),
+    detailStat("Liquidity", compact(t.liquidity)),
+    detailStat("FDV", detailMoney(pair.fdv, 0)),
+    detailStat("Market cap", compact(t.marketCap)),
+    detailStat("5m", detailPercent(pairChanges.m5)),
+    detailStat("1h", detailPercent(pairChanges.h1)),
+    detailStat("6h", detailPercent(pairChanges.h6)),
+    detailStat("24h", detailPercent(pairChanges.h24), Number(pairChanges.h24) >= 0 ? "positive" : "negative"),
+    detailStat("Volume 24h", detailMoney(pairVolume.h24, 0)),
+    detailStat("Transactions 24h", detailCount((pairTxns.h24?.buys || 0) + (pairTxns.h24?.sells || 0))),
+    detailStat("Buys / sells", `${detailCount(pairTxns.h24?.buys)} / ${detailCount(pairTxns.h24?.sells)}`),
+    detailStat("Traders", detailCount(pair.makers?.h24))
+  ].join("");
+  layout(head("Token intelligence", `${esc(t.symbol)} / ${esc(t.name)}`, "DexScreener LIVE identity, market profile, external links, pair data, and independent Solana security checks.", tokenActions(t)) +
+    `<div class="token-detail token-profile-detail">
+      <section class="card detail-hero token-main-card">
+        ${headerUrl ? `<div class="detail-banner"><img src="${esc(headerUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer"><span>DEXSCREENER PROFILE</span></div>` : ""}
+        <div class="detail-heading">
+          <div class="big-token">${tokenLogo(t, true)}<div><h2>${esc(t.name)} <span class="token-symbol">${esc(t.symbol)}</span></h2><p class="token-mint">${esc(t.mint)}</p></div></div>
+          <div class="score-hero"><strong>${t.radar ?? "?"}</strong><span>Radar score</span></div>
+        </div>
+        <div class="token-link-row">${externalLinks(links)}</div>
+        <div class="detail-section-title"><span>Live market data</span><small>DexScreener · refreshed every 30s</small></div>
+        <div class="detail-stats market-stats">${marketStats}</div>
+        <div class="detail-section-title"><span>Project profile</span><small>${esc(metadata.providerUpdatedAt ? `Provider update ${new Date(metadata.providerUpdatedAt).toLocaleString()}` : "Provider timestamp unavailable")}</small></div>
+        <p class="token-description">${esc(profileDescription)}</p>
+        <div class="profile-meta"><span>Base token <strong>${esc(pair.baseToken?.symbol || t.symbol)}</strong></span><span>Quote token <strong>${esc(quote)}</strong></span><span>DEX <strong>${esc(pair.dexId || "UNKNOWN")}</strong></span><span>Pair created <strong>${esc(pairCreated)}</strong></span></div>
+        ${pair.url ? `<a class="pair-link" href="${esc(safeHttpUrl(pair.url))}" target="_blank" rel="noopener noreferrer">Open live pair on DexScreener ↗</a>` : ""}
+      </section>
+      <aside class="card evidence token-side-card">
+        <div class="side-card-heading"><div><h3>Security verification</h3><span>Independent Solana RPC checks</span></div><span class="security-status ${security.verified ? "verified" : "rejected"}">${esc(security.status || "UNKNOWN")}</span></div>
+        <div class="health-row"><span>Mint authority</span><strong class="health-value ${security.authorities?.mint === "RENOUNCED" ? "health-ok" : "health-warn"}">${esc(security.authorities?.mint || "UNKNOWN")}</strong></div>
+        <div class="health-row"><span>Freeze authority</span><strong class="health-value ${security.authorities?.freeze === "RENOUNCED" ? "health-ok" : "health-warn"}">${esc(security.authorities?.freeze || "UNKNOWN")}</strong></div>
+        <div class="health-row"><span>Largest holder</span><strong class="health-value ${security.topHolderPercent > 80 ? "health-warn" : "health-ok"}">${holderPercent}</strong></div>
+        <div class="health-row"><span>Holder accounts checked</span><strong class="health-value">${security.holders ?? "UNKNOWN"}</strong></div>
+        <ul class="security-reasons">${securityReasons.map(reason => `<li>${esc(reason)}</li>`).join("")}</ul>
+        <div class="side-divider"></div>
+        <div class="side-card-heading"><div><h3>Pair identity</h3><span>Selected by highest live liquidity</span></div></div>
+        <div class="pair-identity"><span>Pair address</span><code>${esc(pair.address || "UNKNOWN")}</code></div>
+        <div class="pair-identity"><span>Mint address</span><code>${esc(t.mint)}</code></div>
+        <div class="pair-identity"><span>Provider status</span><strong>${statusBadge(t)}</strong></div>
+        <div class="side-divider"></div>
+        <div class="side-card-heading"><div><h3>Radar review</h3><span>Evidence, not a guarantee</span></div></div>
+        <p class="review-copy">${esc(t.rationale || "No provider-backed review is available.")}</p>
+        <button class="btn ${snapshot.watchlist.includes(t.mint) ? "btn-danger" : "btn-quiet"}" style="width:100%" onclick="toggleWatch('${encodeURIComponent(t.mint)}')">${snapshot.watchlist.includes(t.mint) ? "Remove from active watchlist" : "☆ Add to permanent watchlist"}</button>
+      </aside>
+    </div>`);
 }
 async function toggleWatch(id) { const item = snapshot.watchlist.includes(decodeURIComponent(id)); try { await api(`/api/watchlist/${id}`, { method: item ? "DELETE":"POST" }); toast(item ? "Removed from active view; history preserved." : "Added to permanent watchlist."); await refresh(); } catch(e) { toast(e.message,true); } }
 async function removeWatch(id) { try { await api(`/api/watchlist/${id}`, { method:"DELETE" }); toast("Removed from active view; historical record preserved."); await refresh(); } catch(e){toast(e.message,true);} }

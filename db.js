@@ -180,11 +180,11 @@ async function ensureLiveOnly() {
         mode: "live",
         provider: "DexScreener",
         lastScan: null,
-        nextScanAt: new Date(Date.now() + 30000),
+        nextScanAt: new Date(Date.now() + 15000),
         scanRunning: false,
         watchlistHistory: [],
         system: {
-          scheduler: "RUNNING · 30s",
+          scheduler: "RUNNING · 15s",
           worker: "READY",
           database: "POSTGRESQL / PRISMA",
           rpc: "LIVE PROVIDER",
