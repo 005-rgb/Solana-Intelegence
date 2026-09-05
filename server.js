@@ -761,7 +761,7 @@ async function runScan(manual = false) {
       status: "SUCCESS",
       finishedAt,
       durationMs,
-      tokensScanned: state.tokens.length,
+      tokensScanned: lastFilterReport.recordsChecked || 0,
       transactionsProcessed: 0,
       errorCount: 0,
       ...scanAudit()
@@ -769,7 +769,7 @@ async function runScan(manual = false) {
     appendScanRunToState(scanRun, "SUCCESS", scanAudit(), {
       finishedAt: finishedAt.toISOString(),
       durationMs,
-      tokensScanned: state.tokens.length,
+        tokensScanned: lastFilterReport.recordsChecked || 0,
       transactionsProcessed: 0,
       errorCount: 0
     });
@@ -808,7 +808,7 @@ async function runScan(manual = false) {
         status,
         finishedAt,
         durationMs,
-        tokensScanned: 0,
+        tokensScanned: lastFilterReport.recordsChecked || 0,
         transactionsProcessed: 0,
         errorCount: filtered ? 0 : 1,
         timedOut,
@@ -819,7 +819,7 @@ async function runScan(manual = false) {
       appendScanRunToState(scanRun, status, audit, {
         finishedAt: finishedAt.toISOString(),
         durationMs,
-        tokensScanned: 0,
+        tokensScanned: lastFilterReport.recordsChecked || 0,
         transactionsProcessed: 0,
         errorCount: filtered ? 0 : 1
       });

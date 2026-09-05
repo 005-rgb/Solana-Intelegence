@@ -78,14 +78,14 @@ test("duplicate mints and pairs resolve deterministically", () => {
   assert.deepEqual(entries.map(item => item.tokenAddress), ["B", "A", "C"]);
 
   const pair = selectPrimaryPair([
-    { chainId: "solana", pairAddress: "z", liquidity: { usd: 1000 }, pairCreatedAt: 2 },
-    { chainId: "solana", pairAddress: "a", liquidity: { usd: 1000 }, pairCreatedAt: 2 },
-    { chainId: "solana", pairAddress: "newer", liquidity: { usd: 1000 }, pairCreatedAt: 3 },
-    { chainId: "ethereum", pairAddress: "largest", liquidity: { usd: 999999 }, pairCreatedAt: 4 }
+    { chainId: "solana", pairAddress: "z", priceUsd: "1", liquidity: { usd: 1000 }, pairCreatedAt: 2 },
+    { chainId: "solana", pairAddress: "a", priceUsd: "1", liquidity: { usd: 1000 }, pairCreatedAt: 2 },
+    { chainId: "solana", pairAddress: "newer", priceUsd: "1", liquidity: { usd: 1000 }, pairCreatedAt: 3 },
+    { chainId: "ethereum", pairAddress: "largest", priceUsd: "1", liquidity: { usd: 999999 }, pairCreatedAt: 4 }
   ]);
   assert.equal(pair.pairAddress, "newer");
   assert.equal(selectPrimaryPair([
-    { chainId: "solana", pairAddress: "z", liquidity: { usd: 1000 }, pairCreatedAt: 2 },
-    { chainId: "solana", pairAddress: "a", liquidity: { usd: 1000 }, pairCreatedAt: 2 }
+    { chainId: "solana", pairAddress: "z", priceUsd: "1", liquidity: { usd: 1000 }, pairCreatedAt: 2 },
+    { chainId: "solana", pairAddress: "a", priceUsd: "1", liquidity: { usd: 1000 }, pairCreatedAt: 2 }
   ]).pairAddress, "a");
 });
