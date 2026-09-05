@@ -35,7 +35,7 @@ function numeric(value) {
 
 function selectPrimaryPair(pairs) {
   return [...(Array.isArray(pairs) ? pairs : [])]
-    .filter(pair => pair && pair.chainId === "solana")
+    .filter(pair => pair && pair.chainId === "solana" && numeric(pair.priceUsd) != null && numeric(pair.liquidity?.usd) != null)
     .sort((left, right) => {
       const liquidityDifference = (numeric(right.liquidity?.usd) ?? -1) - (numeric(left.liquidity?.usd) ?? -1);
       if (liquidityDifference) return liquidityDifference;
@@ -43,6 +43,15 @@ function selectPrimaryPair(pairs) {
       if (createdDifference) return createdDifference;
       return String(left.pairAddress || "").localeCompare(String(right.pairAddress || ""));
     })[0] || null;
+}
+
+function dedupePairs(pairs) {
+  const seen = new Set();
+  return (Array.isArray(pairs) ? pairs : []).filter(pair => {
+    if (!pair || pair.chainId !== "solana" || !pair.pairAddress || seen.has(pair.pairAddress)) return false;
+    seen.add(pair.pairAddress);
+    return true;
+  });
 }
 
 function dedupeMintEntries(entries, limit = 10) {
@@ -53,6 +62,54 @@ function dedupeMintEntries(entries, limit = 10) {
     seen.add(mint);
     return true;
   }).slice(0, limit);
+}
+
+function normalizeDiscoveryUniverse({ boostEntries = [], profileEntries = [], watchlistMints = [], limit = 30 } = {}) {
+  const merged = new Map();
+  const sourceLists = [
+    ["boost_feed", boostEntries],
+    ["new_pair_feed", profileEntries],
+    ["watchlist", watchlistMints.map(tokenAddress => ({ tokenAddress }))]
+  ];
+  for (const [source, entries] of sourceLists) {
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      const mint = String(entry?.tokenAddress || "").trim();
+      if (!mint || (entry.chainId && entry.chainId !== "solana")) continue;
+      const current = merged.get(mint) || {
+        tokenAddress: mint,
+        sources: [],
+        sourceEntries: {}
+      };
+      if (!current.sources.includes(source)) current.sources.push(source);
+      if (!current.sourceEntries[source]) current.sourceEntries[source] = entry;
+      merged.set(mint, current);
+    }
+  }
+  const entries = [...merged.values()].slice(0, limit);
+  const sourceMetrics = {
+    boost_feed_seen: new Set((Array.isArray(boostEntries) ? boostEntries : []).map(item => item?.tokenAddress).filter(Boolean)).size,
+    profile_feed_seen: new Set((Array.isArray(profileEntries) ? profileEntries : []).map(item => item?.tokenAddress).filter(Boolean)).size,
+    new_pair_feed_seen: new Set((Array.isArray(profileEntries) ? profileEntries : []).map(item => item?.tokenAddress).filter(Boolean)).size,
+    watchlist_seen: new Set((Array.isArray(watchlistMints) ? watchlistMints : []).filter(Boolean)).size,
+    unique_mints_before_dedup: new Set(sourceLists.flatMap(([, values]) => values.map(item => item?.tokenAddress).filter(Boolean))).size,
+    unique_mints_after_dedup: entries.length,
+    source_overlap: {},
+    source_only_candidates: { boost_feed: 0, new_pair_feed: 0, watchlist: 0 }
+  };
+  for (const entry of entries) {
+    const sources = entry.sources;
+    if (sources.length > 1) {
+      for (let index = 0; index < sources.length; index += 1) {
+        for (let next = index + 1; next < sources.length; next += 1) {
+          const key = [sources[index], sources[next]].sort().join("+");
+          sourceMetrics.source_overlap[key] = (sourceMetrics.source_overlap[key] || 0) + 1;
+        }
+      }
+    } else if (sources.length === 1) {
+      sourceMetrics.source_only_candidates[sources[0]] += 1;
+    }
+  }
+  return { entries, sourceMetrics };
 }
 
 function securityReasonCodes(security) {
@@ -146,8 +203,10 @@ module.exports = {
   FILTER_CONFIG,
   MAX_TOP_HOLDER_PERCENT,
   MIN_LIQUIDITY_USD,
+  dedupePairs,
   dedupeMintEntries,
   evaluateBaselineCandidate,
+  normalizeDiscoveryUniverse,
   selectBoardTokens,
   selectPrimaryPair,
   summarizeBaselineCandidates
