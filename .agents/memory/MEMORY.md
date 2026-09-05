@@ -1,0 +1,1 @@
+- [Solana RPC verification](solana-rpc-verification.md) — public RPC rate limits require batched, fail-closed security checks and visible filter diagnostics.

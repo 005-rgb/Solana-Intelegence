@@ -352,6 +352,18 @@ async function recordWhaleActivity(point) {
   });
 }
 
+async function recordAlert(alert) {
+  return prisma.alert.create({
+    data: {
+      type: alert.type,
+      token: alert.token,
+      text: alert.text,
+      tone: alert.tone,
+      timeLabel: alert.time
+    }
+  });
+}
+
 async function createScanRun(data) {
   return prisma.scanRun.create({ data });
 }
@@ -393,4 +405,4 @@ async function disconnectDb() {
   await prisma.$disconnect();
 }
 
-module.exports = { prisma, readState, persistState, persistPatterns, recordTrade, recordWatchlistEvent, recordWhaleActivity, createScanRun, finishScanRun, disconnectDb };
+module.exports = { prisma, readState, persistState, persistPatterns, recordTrade, recordWatchlistEvent, recordWhaleActivity, recordAlert, createScanRun, finishScanRun, disconnectDb };

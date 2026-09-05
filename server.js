@@ -8,6 +8,7 @@ const {
   recordTrade,
   recordWatchlistEvent,
   recordWhaleActivity,
+  recordAlert,
   createScanRun,
   finishScanRun,
   persistPatterns,
@@ -340,6 +341,30 @@ function buildTokenReview(item, security) {
     : `No upward prediction is issued because the provider did not report a positive 24h change. ${reasons.join(" ")}`;
 }
 
+function potentialAlert(item) {
+  const security = item.details?.security || {};
+  const holder = security.topHolderPercent == null ? "UNKNOWN" : `${security.topHolderPercent.toFixed(2)}%`;
+  const change = item.priceChange || "UNKNOWN";
+  const liquidity = Number(item.liquidity);
+  const liquidityText = Number.isFinite(liquidity) ? `$${liquidity.toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "UNKNOWN";
+  return {
+    type: "POTENTIAL TOKEN",
+    token: item.symbol,
+    tone: "green",
+    time: new Date().toISOString(),
+    text: `${item.symbol} passed all active safety filters and shows upward evidence. Review: ${item.rationale} Key checks — mint ${security.authorities?.mint || "UNKNOWN"}, freeze ${security.authorities?.freeze || "UNKNOWN"}, largest holder ${holder}, liquidity ${liquidityText}, 24h ${change}. This is a research alert, not a guarantee.`
+  };
+}
+
+async function publishPotentialAlerts(previousTokens, currentTokens) {
+  const previousMints = new Set(previousTokens.map(item => item.mint));
+  const newCandidates = currentTokens.filter(item => !previousMints.has(item.mint));
+  const alerts = newCandidates.map(potentialAlert);
+  if (!alerts.length) return;
+  state.alerts = [...alerts, ...(state.alerts || [])].slice(0, 20);
+  await Promise.all(alerts.map(alert => recordAlert(alert).catch(error => console.error("Potential-token alert persistence failed", error.message))));
+}
+
 function derivePatterns(tokens, scanRuns = []) {
   const sample = tokens.length;
   const coverage = (label, values) => {
@@ -527,19 +552,25 @@ async function runScan(manual = false) {
   if (state.scanRunning) return { ok: false, message: "A scan is already running." };
   state.scanRunning = true;
   const started = Date.now();
-  const scanRun = await createScanRun({
-    manual,
-    status: "RUNNING",
-    startedAt: new Date(started),
-    provider: state.provider
-  });
+  let scanRun = null;
   try {
+    scanRun = await Promise.race([
+      createScanRun({
+        manual,
+        status: "RUNNING",
+        startedAt: new Date(started),
+        provider: state.provider
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Scan run could not be registered in the database.")), 8000))
+    ]);
     state.mode = "live";
     state.provider = "DexScreener";
+    const previousTokens = state.tokens;
     state.tokens = await Promise.race([
       fetchLiveTokens(),
       new Promise((_, reject) => setTimeout(() => reject(new Error("LIVE scan timed out before provider verification completed.")), LIVE_SCAN_TIMEOUT_MS))
     ]);
+    await publishPotentialAlerts(previousTokens, state.tokens);
     state.patterns = derivePatterns(state.tokens, state.scanRuns);
     await persistPatterns(state.patterns);
     state.system.rpc = "LIVE PROVIDER";
@@ -552,6 +583,7 @@ async function runScan(manual = false) {
     state.system.tokensPerScan = state.tokens.length;
     state.system.transactionsPerScan = 0;
     state.system.securityFilter = lastFilterReport;
+    delete state.system.lastScanError;
     state.scanRunning = false;
     await finishScanRun(scanRun.id, {
       status: "SUCCESS",
@@ -566,18 +598,20 @@ async function runScan(manual = false) {
   } catch (error) {
     state.scanRunning = false;
     const filtered = error.message === "No token passed the LIVE security and upward-evidence filters.";
+    state.nextScanAt = Date.now() + AUTO_SCAN_MS;
     state.system.lastScanStatus = filtered ? "FILTERED · 0 SAFE TOKENS" : "FAILED";
     state.system.tokensPerScan = 0;
     state.system.securityFilter = lastFilterReport;
+    state.system.lastScanError = error.message;
     if (!filtered) state.system.errors += 1;
-    await finishScanRun(scanRun.id, {
-      status: filtered ? "FILTERED" : "FAILED",
-      finishedAt: new Date(),
-      durationMs: Date.now() - started,
-      tokensScanned: 0,
-      transactionsProcessed: 0,
-      errorCount: filtered ? 0 : 1
-    });
+    if (scanRun) await finishScanRun(scanRun.id, {
+        status: filtered ? "FILTERED" : "FAILED",
+        finishedAt: new Date(),
+        durationMs: Date.now() - started,
+        tokensScanned: 0,
+        transactionsProcessed: 0,
+        errorCount: filtered ? 0 : 1
+      });
     await saveState();
     return { ok: false, message: filtered ? "No token passed the active security filters. No token was added to Radar." : "DexScreener provider temporarily unavailable. Data remains unchanged.", securityFilter: lastFilterReport };
   }
