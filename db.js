@@ -210,7 +210,7 @@ async function readState(fallback) {
   radar = await prisma.radarState.findUnique({ where: { id: 1 } });
 
   const tokenFilter = { providerUrl: { not: null } };
-  const [tokens, activeWatchlist, events, alerts, patterns, account, whalePoints, scanRuns] = await Promise.all([
+  const [dbTokens, activeWatchlist, events, alerts, patterns, account, whalePoints, scanRuns] = await Promise.all([
     prisma.token.findMany({ where: tokenFilter, orderBy: [{ radar: "desc" }, { updatedAt: "desc" }] }),
     prisma.watchlistEntry.findMany({ where: { active: true, token: tokenFilter }, include: { token: true } }),
     prisma.watchlistEvent.findMany({ include: { token: true }, orderBy: { createdAt: "asc" } }),
@@ -221,6 +221,8 @@ async function readState(fallback) {
     prisma.scanRun.findMany({ orderBy: { startedAt: "desc" }, take: 100 })
   ]);
 
+  const tokens = dbTokens.filter(token => token.details?.security?.verified === true);
+  const safeMints = new Set(tokens.map(token => token.mint));
   const activityRows = whalePoints;
 
   const dbPortfolio = account ? {
@@ -229,7 +231,7 @@ async function readState(fallback) {
     realized: account.realized,
     fees: account.fees,
     trades: account.trades,
-    positions: account.positions.map(position => ({
+    positions: account.positions.filter(position => safeMints.has(position.token.mint)).map(position => ({
       mint: position.token.mint,
       symbol: position.token.symbol,
       name: position.token.name,
@@ -258,8 +260,8 @@ async function readState(fallback) {
     nextScanAt: radar.nextScanAt?.getTime() || Date.now() + 30000,
     scanRunning: false,
     tokens: tokens.map(fromToken),
-    watchlist: activeWatchlist.map(item => item.token.mint),
-    watchlistHistory: events.map(event => ({ mint: event.token.mint, action: event.action, at: event.createdAt.toISOString() })),
+    watchlist: activeWatchlist.filter(item => safeMints.has(item.token.mint)).map(item => item.token.mint),
+    watchlistHistory: events.filter(event => safeMints.has(event.token.mint)).map(event => ({ mint: event.token.mint, action: event.action, at: event.createdAt.toISOString() })),
     alerts: alerts.map(alert => ({ type: alert.type, token: alert.token, text: alert.text, tone: alert.tone, time: alert.timeLabel || alert.createdAt.toISOString() })),
     patterns: patterns.map(pattern => ({ id: pattern.patternId, name: pattern.name, desc: pattern.detail, match: pattern.match, sample: pattern.sample, outcome: pattern.outcome, tone: pattern.tone })),
     whaleActivity: activityRows.map(fromWhalePoint),

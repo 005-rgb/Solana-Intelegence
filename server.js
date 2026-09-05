@@ -21,6 +21,7 @@ const DATA_DIR = path.join(ROOT, ".data");
 const STATE_FILE = path.join(DATA_DIR, "radar-state.json");
 const AUTO_SCAN_MS = 30_000;
 const ANALYSIS_MS = 6 * 60 * 60 * 1000;
+let lastFilterReport = { checked: 0, accepted: 0, rejected: 0, reasons: [] };
 
 function token(symbol, name, price, marketCap, liquidity, radar, opportunity, smartMoney, momentum, hype, risk, confidence, priceChange, whaleFlow, holderGrowth, status, age, rationale, riskLabel, dataQuality, potential) {
   const mint = `${symbol.toLowerCase()}${"7".repeat(28)}${symbol.length}`;
@@ -29,13 +30,11 @@ function token(symbol, name, price, marketCap, liquidity, radar, opportunity, sm
     priceChange, whaleFlow, holderGrowth, status, age, rationale, riskLabel, dataQuality, potential,
     updatedAt: new Date().toISOString(),
     details: {
-      holders: Math.round(marketCap / 4100), top10: risk > 60 ? 48.2 : 31.4, volume24h: Math.round(liquidity * 3.8),
-      liquidityQuality: Math.max(12, 100 - risk), earlyness: Math.max(20, 100 - radar / 2), patternMatch: Math.min(94, radar - 3),
-      consensus: risk < 40 ? "6/7 engines" : "3/7 engines", social: symbol === "NOVA" ? "AVAILABLE" : "INSUFFICIENT DATA",
-      authorities: { mint: risk > 55 ? "ACTIVE" : "REVOKED", freeze: risk > 70 ? "ACTIVE" : "REVOKED", metadata: "UNKNOWN" },
-      evidence: risk < 40
-        ? ["7 tracked wallets accumulated in the last 15m", `Whale net flow ${whaleFlow}`, `Holder growth ${holderGrowth}`, "Liquidity depth remains adequate"]
-        : ["Holder concentration above model threshold", "Sell pressure rising in the latest window", "Provider evidence is incomplete"]
+      holders: null, top10: null, volume24h: null, liquidityQuality: null, earlyness: null, patternMatch: null,
+      consensus: "UNKNOWN", social: "UNKNOWN",
+      authorities: { mint: "UNKNOWN", freeze: "UNKNOWN", metadata: "UNKNOWN" },
+      security: { verified: false, status: "PENDING", reasons: ["Mint authority, freeze authority, and holder concentration have not been verified."] },
+      evidence: ["Awaiting independent Solana RPC security verification."]
     }
   };
 }
@@ -59,7 +58,8 @@ function freshState() {
     },
     system: {
       scheduler: "RUNNING · 30s", worker: "READY", database: "POSTGRESQL / PRISMA", rpc: "LIVE PROVIDER", market: "LIVE PROVIDER",
-      lastScanStatus: "NOT RUN YET", avgDuration: "—", tokensPerScan: 0, transactionsPerScan: 0, errors: 0
+      lastScanStatus: "NOT RUN YET", avgDuration: "—", tokensPerScan: 0, transactionsPerScan: 0, errors: 0,
+      securityFilter: lastFilterReport
     }
   };
 }
@@ -103,6 +103,93 @@ function formatAge(ms) {
 }
 function tokenById(id) {
   return state.tokens.find(item => item.mint === id || item.symbol.toLowerCase() === String(id).toLowerCase());
+}
+
+const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+const MAX_TOP_HOLDER_PERCENT = 80;
+const MIN_LIQUIDITY_USD = 10_000;
+
+async function solanaRpc(method, params) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 7000);
+  try {
+    const response = await fetch(SOLANA_RPC_URL, {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params })
+    });
+    if (!response.ok) throw new Error(`Solana RPC HTTP ${response.status}`);
+    const payload = await response.json();
+    if (payload.error) throw new Error(payload.error.message || "Solana RPC request failed");
+    return payload.result;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function verifyTokenSecurity(mint) {
+  try {
+    const [account, supply, largest] = await Promise.all([
+      solanaRpc("getAccountInfo", [mint, { encoding: "jsonParsed", commitment: "confirmed" }]),
+      solanaRpc("getTokenSupply", [mint, { commitment: "confirmed" }]),
+      solanaRpc("getTokenLargestAccounts", [mint, { commitment: "confirmed" }])
+    ]);
+    const info = account?.value?.data?.parsed?.info;
+    const mintAuthorityRenounced = Boolean(info) && info.mintAuthority == null;
+    const freezeAuthorityRenounced = Boolean(info) && info.freezeAuthority == null;
+    const supplyRaw = BigInt(supply?.value?.amount || "0");
+    const largestRaw = BigInt(largest?.value?.[0]?.amount || "0");
+    const topHolderPercent = supplyRaw > 0n ? Number((largestRaw * 10000n) / supplyRaw) / 100 : null;
+    const reasons = [];
+    if (!info) reasons.push("Mint account data is unavailable or not an SPL token mint.");
+    else {
+      if (!mintAuthorityRenounced) reasons.push("Mint authority is still active.");
+      if (!freezeAuthorityRenounced) reasons.push("Freeze authority is still active.");
+    }
+    if (topHolderPercent == null) reasons.push("Token supply or largest-holder data is unavailable.");
+    else if (topHolderPercent > MAX_TOP_HOLDER_PERCENT) reasons.push(`Largest holder controls ${topHolderPercent.toFixed(2)}% of supply.`);
+    const verified = mintAuthorityRenounced && freezeAuthorityRenounced && topHolderPercent != null && topHolderPercent <= MAX_TOP_HOLDER_PERCENT;
+    return {
+      verified,
+      status: verified ? "VERIFIED" : "REJECTED",
+      reasons: reasons.length ? reasons : ["Mint and freeze authorities are renounced; largest-holder concentration is within the 80% limit."],
+      authorities: {
+        mint: mintAuthorityRenounced ? "RENOUNCED" : "ACTIVE",
+        freeze: freezeAuthorityRenounced ? "RENOUNCED" : "ACTIVE",
+        metadata: "UNKNOWN"
+      },
+      holders: largest?.value?.length || null,
+      topHolderPercent,
+      supply: supply?.value?.uiAmountString || null
+    };
+  } catch (error) {
+    return {
+      verified: false,
+      status: "UNVERIFIED",
+      reasons: [`Security verification failed: ${error.message}`],
+      authorities: { mint: "UNKNOWN", freeze: "UNKNOWN", metadata: "UNKNOWN" },
+      holders: null,
+      topHolderPercent: null,
+      supply: null
+    };
+  }
+}
+
+function buildTokenReview(item, security) {
+  const change = Number(String(item.priceChange || "").replace("%", ""));
+  const positiveChange = Number.isFinite(change) && change > 0;
+  const liquidity = Number(item.liquidity);
+  const reasons = [
+    "Passed mint-authority, freeze-authority, and largest-holder security filters.",
+    `Largest-holder concentration: ${security.topHolderPercent.toFixed(2)}% (limit ${MAX_TOP_HOLDER_PERCENT}%).`,
+    `Verified liquidity: $${liquidity.toLocaleString("en-US", { maximumFractionDigits: 0 })}.`
+  ];
+  if (positiveChange) reasons.push(`Positive provider-reported 24h change: ${change.toFixed(2)}%.`);
+  if (item.details?.providerMetadata?.boostAmount != null) reasons.push(`DexScreener boost amount: ${item.details.providerMetadata.boostAmount}.`);
+  return positiveChange
+    ? `Upward bias is based on positive 24h provider momentum, available liquidity, and the verified security checks above. This is evidence, not a guarantee. ${reasons.join(" ")}`
+    : `No upward prediction is issued because the provider did not report a positive 24h change. ${reasons.join(" ")}`;
 }
 
 function derivePatterns(tokens, scanRuns = []) {
@@ -203,7 +290,7 @@ async function fetchLiveTokens() {
       const marketCap = Number.isFinite(Number(pair?.marketCap)) ? Number(pair.marketCap) : null;
       const liquidity = Number.isFinite(Number(pair?.liquidity?.usd)) ? Number(pair.liquidity.usd) : null;
       const priceChange = pair?.priceChange?.h24 != null ? `${Number(pair.priceChange.h24).toFixed(2)}%` : "UNKNOWN";
-      const base = token(symbol, description, price, marketCap, liquidity, null, null, null, null, null, null, null, priceChange, "UNKNOWN", "UNKNOWN", providerMetadata.cto ? "CTO FLAG" : "PROVIDER", providerAge, "DexScreener live token and pair data; intelligence fields remain UNKNOWN when the provider does not supply them.", "unknown", null, "UNKNOWN");
+      const base = token(symbol, description, price, marketCap, liquidity, null, null, null, null, null, null, null, priceChange, "UNKNOWN", "UNKNOWN", providerMetadata.cto ? "CTO FLAG" : "PROVIDER", providerAge, "Pending independent Solana security verification.", "unknown", null, "UNKNOWN");
       return {
         ...base,
         mint,
@@ -220,15 +307,68 @@ async function fetchLiveTokens() {
             url: pair.url || null,
             baseToken: pair.baseToken || null,
             quoteToken: pair.quoteToken || null,
-            volume24h: pair.volume?.h24 ?? null
+            volume24h: pair.volume?.h24 ?? null,
+            liquidityUsd: pair.liquidity?.usd ?? null
           } : null,
           providerMetadata,
           evidence
         }
       };
     });
-    if (!fresh.length) throw new Error("Provider returned no token records");
-    return fresh;
+    const secured = await Promise.all(fresh.map(async item => ({ ...item, security: await verifyTokenSecurity(item.mint) })));
+    const safeTokens = secured
+      .filter(item => {
+        const change = Number(String(item.priceChange || "").replace("%", ""));
+        return item.security.verified &&
+          item.price !== "UNKNOWN" &&
+          Number(item.liquidity) >= MIN_LIQUIDITY_USD &&
+          Number.isFinite(change) &&
+          change > 0 &&
+          item.details.providerMetadata.cto !== true;
+      })
+      .map(item => {
+        const rationale = buildTokenReview(item, item.security);
+        return {
+          ...item,
+          rationale,
+          potential: "UPWARD BIAS",
+          details: {
+            ...item.details,
+            holders: item.security.holders,
+            holderConcentration: item.security.topHolderPercent,
+            authorities: item.security.authorities,
+            security: item.security,
+            evidence: [...item.details.evidence, ...item.security.reasons, rationale]
+          }
+        };
+      });
+    const reasonCounts = new Map();
+    for (const item of secured) {
+      const reasons = [];
+      if (!item.security.verified) reasons.push(...item.security.reasons);
+      if (item.price === "UNKNOWN") reasons.push("Provider price is unavailable.");
+      if (Number(item.liquidity) < MIN_LIQUIDITY_USD) reasons.push(`Liquidity is below $${MIN_LIQUIDITY_USD.toLocaleString("en-US")}.`);
+      const change = Number(String(item.priceChange || "").replace("%", ""));
+      if (!Number.isFinite(change) || change <= 0) reasons.push("Provider 24h change is not positive.");
+      if (item.details.providerMetadata.cto === true) reasons.push("Provider marked the token as CTO.");
+      for (const reason of new Set(reasons)) reasonCounts.set(reason, (reasonCounts.get(reason) || 0) + 1);
+    }
+    lastFilterReport = {
+      checked: secured.length,
+      accepted: safeTokens.length,
+      rejected: secured.length - safeTokens.length,
+      reasons: [...reasonCounts.entries()].sort((left, right) => right[1] - left[1]).slice(0, 6).map(([reason, count]) => ({ reason, count })),
+      rules: {
+        mintAuthority: "RENOUNCED",
+        freezeAuthority: "RENOUNCED",
+        largestHolderMaximum: `${MAX_TOP_HOLDER_PERCENT}%`,
+        minimumLiquidityUsd: MIN_LIQUIDITY_USD,
+        positive24hChange: true,
+        ctoFlag: false
+      }
+    };
+    if (!safeTokens.length) throw new Error("No token passed the LIVE security and upward-evidence filters.");
+    return safeTokens;
   } finally {
     clearTimeout(timeout);
   }
@@ -259,6 +399,7 @@ async function runScan(manual = false) {
     state.system.avgDuration = `${Date.now() - started}ms`;
     state.system.tokensPerScan = state.tokens.length;
     state.system.transactionsPerScan = 0;
+    state.system.securityFilter = lastFilterReport;
     state.scanRunning = false;
     await finishScanRun(scanRun.id, {
       status: "SUCCESS",
@@ -272,18 +413,21 @@ async function runScan(manual = false) {
     return { ok: true, manual, duration: Date.now() - started, tokens: state.tokens.length };
   } catch (error) {
     state.scanRunning = false;
-    state.system.lastScanStatus = "FAILED";
-    state.system.errors += 1;
+    const filtered = error.message === "No token passed the LIVE security and upward-evidence filters.";
+    state.system.lastScanStatus = filtered ? "FILTERED · 0 SAFE TOKENS" : "FAILED";
+    state.system.tokensPerScan = 0;
+    state.system.securityFilter = lastFilterReport;
+    if (!filtered) state.system.errors += 1;
     await finishScanRun(scanRun.id, {
-      status: "FAILED",
+      status: filtered ? "FILTERED" : "FAILED",
       finishedAt: new Date(),
       durationMs: Date.now() - started,
       tokensScanned: 0,
       transactionsProcessed: 0,
-      errorCount: 1
+      errorCount: filtered ? 0 : 1
     });
     await saveState();
-    return { ok: false, message: "DexScreener provider temporarily unavailable. Data remains unchanged." };
+    return { ok: false, message: filtered ? "No token passed the active security filters. No token was added to Radar." : "DexScreener provider temporarily unavailable. Data remains unchanged.", securityFilter: lastFilterReport };
   }
 }
 
