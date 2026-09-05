@@ -11,6 +11,8 @@ const {
   selectBoardTokens,
   selectPrimaryPair,
   summarizeBaselineCandidates
+  , validateProviderFeed
+  , validateProviderPair
 } = require("../radar-core");
 
 function verifiedItem(overrides = {}) {
@@ -187,10 +189,10 @@ test("pool as largest account is classified and excluded from wallet concentrati
   });
   assert.equal(taxonomy.status, "CLASSIFIED_PARTIAL");
   assert.equal(taxonomy.accounts[0].accountClass, ACCOUNT_CLASSES.POOL_VAULT);
-  assert.equal(taxonomy.accounts[1].accountClass, ACCOUNT_CLASSES.EOA_OR_WALLET);
+  assert.equal(taxonomy.accounts[1].accountClass, ACCOUNT_CLASSES.UNKNOWN_ACCOUNT);
   assert.equal(taxonomy.concentration.top_1_account_percent, 60);
-  assert.equal(taxonomy.concentration.top_1_wallet_percent, 20);
-  assert.equal(taxonomy.concentration.pool_adjusted_top_1_wallet_percent, 20);
+  assert.equal(taxonomy.concentration.top_1_wallet_percent, null);
+  assert.equal(taxonomy.concentration.pool_adjusted_top_1_wallet_percent, null);
   assert.equal(taxonomy.concentration.pool_accounts_observed, 1);
 });
 
@@ -215,4 +217,51 @@ test("executable resolved owners remain program-owned, not wallets", () => {
   });
   assert.equal(taxonomy.accounts[0].accountClass, ACCOUNT_CLASSES.PROGRAM_OWNED);
   assert.equal(taxonomy.concentration.top_1_wallet_percent, null);
+});
+
+test("system-owned non-executable owner remains unknown without wallet evidence", () => {
+  const taxonomy = buildAccountTaxonomy([
+    { rank: 1, address: "possible-pda", amount: "500", percent: 50 }
+  ], {
+    accountInfoByAddress: {
+      "possible-pda": {
+        result: { value: { data: { parsed: { info: { owner: "system-owner" } } } } }
+      }
+    },
+    ownerInfoByAddress: {
+      "system-owner": { result: { value: { owner: "11111111111111111111111111111111", executable: false } } }
+    }
+  });
+  assert.equal(taxonomy.accounts[0].accountClass, ACCOUNT_CLASSES.UNKNOWN_ACCOUNT);
+  assert.equal(taxonomy.concentration.top_1_wallet_percent, null);
+});
+
+test("provider feed validation rejects malformed records and future timestamps", () => {
+  const now = Date.parse("2026-09-05T00:00:00.000Z");
+  const result = validateProviderFeed([
+    { tokenAddress: "valid", chainId: "solana", updatedAt: now - 1000, amount: "2" },
+    { tokenAddress: "bad-number", chainId: "solana", amount: -1 },
+    { tokenAddress: "future", chainId: "solana", updatedAt: now + 10 * 60 * 1000 },
+    { tokenAddress: "wrong-chain", chainId: "ethereum" }
+  ], { now });
+  assert.equal(result.ok, true);
+  assert.equal(result.entries.length, 2);
+  assert.equal(result.invalidRecords, 2);
+  assert.ok(result.errors.includes("boost_amount_invalid"));
+  assert.ok(result.errors.includes("updated_at_invalid_or_out_of_bounds"));
+  assert.equal(validateProviderFeed({ data: [] }, { now }).ok, false);
+});
+
+test("provider pair validation preserves missing values as null but rejects unsafe values", () => {
+  const now = Date.parse("2026-09-05T00:00:00.000Z");
+  const valid = validateProviderPair({ chainId: "solana", pairAddress: "pair-1", priceUsd: null, liquidity: null }, { now });
+  assert.equal(valid.valid, true);
+  assert.equal(valid.pair.priceUsd, null);
+  assert.equal(validateProviderPair({ chainId: "solana", pairAddress: "pair-2", priceUsd: "-1" }, { now }).valid, false);
+  assert.equal(validateProviderPair({
+    chainId: "solana",
+    pairAddress: "pair-3",
+    priceUsd: "1",
+    pairCreatedAt: now + 10 * 60 * 1000
+  }, { now }).valid, false);
 });

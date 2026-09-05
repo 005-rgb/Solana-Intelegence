@@ -2,6 +2,8 @@ const BASELINE_DECISION_VERSION = "baseline-v1";
 const MAX_TOP_HOLDER_PERCENT = 80;
 const MIN_LIQUIDITY_USD = 10_000;
 const TAXONOMY_VERSION = "taxonomy-v1";
+const PROVIDER_SCHEMA_VERSION = "dexscreener-v1";
+const PROVIDER_MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 const ACCOUNT_CLASSES = Object.freeze({
   EOA_OR_WALLET: "EOA_OR_WALLET",
@@ -49,6 +51,131 @@ function numeric(value) {
   if (value == null || value === "") return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function nonNegativeNumeric(value) {
+  const number = numeric(value);
+  return number != null && number >= 0 ? number : null;
+}
+
+function providerTimestamp(value, now = Date.now()) {
+  if (value == null || value === "") return null;
+  const timestamp = typeof value === "number" ? value : /^\d{10,}$/.test(String(value).trim()) ? Number(value) : Date.parse(String(value));
+  if (!Number.isFinite(timestamp) || timestamp < 0 || timestamp > now + PROVIDER_MAX_CLOCK_SKEW_MS) return null;
+  return timestamp;
+}
+
+function invalidProviderRecord(reason, record = null) {
+  return { valid: false, reason, record: record && typeof record === "object" ? record : null };
+}
+
+function validateProviderFeed(payload, { now = Date.now() } = {}) {
+  if (!Array.isArray(payload)) {
+    return {
+      ok: false,
+      schemaVersion: PROVIDER_SCHEMA_VERSION,
+      entries: [],
+      invalidRecords: 0,
+      errors: ["Provider payload must be an array."]
+    };
+  }
+  const entries = [];
+  const invalid = [];
+  for (const record of payload) {
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      invalid.push(invalidProviderRecord("record_not_object", record));
+      continue;
+    }
+    const tokenAddress = typeof record.tokenAddress === "string" ? record.tokenAddress.trim() : "";
+    if (!tokenAddress) {
+      invalid.push(invalidProviderRecord("token_address_missing_or_invalid", record));
+      continue;
+    }
+    if (record.chainId != null && typeof record.chainId !== "string") {
+      invalid.push(invalidProviderRecord("chain_id_invalid", record));
+      continue;
+    }
+    // Non-Solana records are valid provider records; discovery applies the
+    // chain filter separately so source denominators remain auditable.
+    const updatedAt = record.updatedAt == null ? null : providerTimestamp(record.updatedAt, now);
+    if (record.updatedAt != null && updatedAt == null) {
+      invalid.push(invalidProviderRecord("updated_at_invalid_or_out_of_bounds", record));
+      continue;
+    }
+    const amount = record.amount == null ? null : nonNegativeNumeric(record.amount);
+    const totalAmount = record.totalAmount == null ? null : nonNegativeNumeric(record.totalAmount);
+    if ((record.amount != null && amount == null) || (record.totalAmount != null && totalAmount == null)) {
+      invalid.push(invalidProviderRecord("boost_amount_invalid", record));
+      continue;
+    }
+    entries.push({ ...record, tokenAddress, ...(updatedAt == null ? {} : { updatedAt }), ...(amount == null ? {} : { amount }), ...(totalAmount == null ? {} : { totalAmount }) });
+  }
+  return {
+    ok: true,
+    schemaVersion: PROVIDER_SCHEMA_VERSION,
+    entries,
+    invalidRecords: invalid.length,
+    invalid,
+    errors: invalid.map(item => item.reason),
+    invalidReasonCounts: invalid.reduce((counts, item) => {
+      counts[item.reason] = (counts[item.reason] || 0) + 1;
+      return counts;
+    }, {})
+  };
+}
+
+function validateProviderPair(pair, { now = Date.now() } = {}) {
+  if (!pair || typeof pair !== "object" || Array.isArray(pair)) return invalidProviderRecord("pair_not_object", pair);
+  if (typeof pair.pairAddress !== "string" || !pair.pairAddress.trim()) return invalidProviderRecord("pair_address_missing_or_invalid", pair);
+  if (pair.chainId !== "solana") return invalidProviderRecord("unsupported_pair_chain", pair);
+
+  const numericFields = [
+    ["priceUsd", "price_invalid", true],
+    ["marketCap", "market_cap_invalid", true],
+    ["fdv", "fdv_invalid", true],
+    ["liquidity.usd", "liquidity_invalid", true]
+  ];
+  for (const [field, reason, allowNull] of numericFields) {
+    const value = field === "liquidity.usd" ? pair.liquidity?.usd : pair[field];
+    if (value == null && allowNull) continue;
+    if (value == null || nonNegativeNumeric(value) == null) return invalidProviderRecord(reason, pair);
+  }
+  for (const field of ["updatedAt", "pairCreatedAt"]) {
+    if (pair[field] != null && providerTimestamp(pair[field], now) == null) return invalidProviderRecord(`${field}_invalid_or_out_of_bounds`, pair);
+  }
+  const updatedAt = pair.updatedAt == null ? null : providerTimestamp(pair.updatedAt, now);
+  const pairCreatedAt = pair.pairCreatedAt == null ? null : providerTimestamp(pair.pairCreatedAt, now);
+  if (updatedAt != null && pairCreatedAt != null && pairCreatedAt > updatedAt) return invalidProviderRecord("pair_created_after_updated", pair);
+  for (const field of ["volume", "txns", "makers", "priceChange"]) {
+    if (pair[field] != null && (typeof pair[field] !== "object" || Array.isArray(pair[field]))) {
+      return invalidProviderRecord(`${field}_invalid`, pair);
+    }
+    if (pair[field]) {
+      for (const [window, value] of Object.entries(pair[field])) {
+        if (value == null || typeof value !== "object" || Array.isArray(value)) {
+          if (value != null && numeric(value) == null) return invalidProviderRecord(`${field}_value_invalid`, pair);
+          continue;
+        }
+        for (const metric of Object.values(value)) {
+          if (metric != null && nonNegativeNumeric(metric) == null) return invalidProviderRecord(`${field}_${window}_value_invalid`, pair);
+        }
+      }
+    }
+  }
+  return {
+    valid: true,
+    schemaVersion: PROVIDER_SCHEMA_VERSION,
+    pair: {
+      ...pair,
+      pairAddress: pair.pairAddress.trim(),
+      priceUsd: pair.priceUsd == null ? null : numeric(pair.priceUsd),
+      marketCap: pair.marketCap == null ? null : nonNegativeNumeric(pair.marketCap),
+      fdv: pair.fdv == null ? null : nonNegativeNumeric(pair.fdv),
+      liquidity: pair.liquidity?.usd == null ? null : { ...pair.liquidity, usd: nonNegativeNumeric(pair.liquidity.usd) },
+      updatedAt,
+      pairCreatedAt
+    }
+  };
 }
 
 function normalizedAddressSet(values) {
@@ -200,13 +327,16 @@ function classifyAccount({
       evidence: ["Resolved owner matches explicit pool evidence."]
     };
   }
+  // A system-owned, non-executable address can also be a PDA. Without an
+  // explicit wallet/ATA proof it must remain unknown rather than inflate
+  // wallet concentration.
   if (ownerAddress && ownerProgramId === SYSTEM_PROGRAM_ID && ownerValue?.executable === false) {
     return {
       address: accountAddress,
-      accountClass: ACCOUNT_CLASSES.EOA_OR_WALLET,
+      accountClass: ACCOUNT_CLASSES.UNKNOWN_ACCOUNT,
       ownerAddress,
-      confidence: "RPC",
-      evidence: ["Resolved owner is a non-executable system-owned account."]
+      confidence: "LOW",
+      evidence: ["Resolved owner is system-owned but no evidence distinguishes an EOA from a PDA."]
     };
   }
   if (ownerAddress && ownerProgramId && TOKEN_PROGRAM_IDS.has(ownerProgramId)) {
@@ -471,6 +601,8 @@ module.exports = {
   FILTER_CONFIG,
   MAX_TOP_HOLDER_PERCENT,
   MIN_LIQUIDITY_USD,
+  PROVIDER_SCHEMA_VERSION,
+  PROVIDER_MAX_CLOCK_SKEW_MS,
   TAXONOMY_VERSION,
   buildAccountTaxonomy,
   classifyAccount,
@@ -479,6 +611,8 @@ module.exports = {
   evaluateBaselineCandidate,
   normalizePoolEvidence,
   normalizeDiscoveryUniverse,
+  validateProviderFeed,
+  validateProviderPair,
   selectBoardTokens,
   selectPrimaryPair,
   summarizeBaselineCandidates

@@ -37,7 +37,10 @@ const {
   normalizePoolEvidence,
   selectBoardTokens,
   selectPrimaryPair,
-  summarizeBaselineCandidates
+  summarizeBaselineCandidates,
+  validateProviderFeed,
+  validateProviderPair,
+  PROVIDER_SCHEMA_VERSION
 } = require("./radar-core");
 
 const PORT = Number(process.env.PORT || 5000);
@@ -55,7 +58,13 @@ const API_RATE_LIMIT = 120;
 const MUTATION_RATE_LIMIT = 20;
 const MAX_TAXONOMY_HOLDERS_PER_TOKEN = 10;
 const MAX_TAXONOMY_ACCOUNT_REQUESTS = 120;
+const PROVIDER_MAX_CONCURRENCY = Math.max(1, Math.min(8, Number(process.env.PROVIDER_MAX_CONCURRENCY || 4)));
+const PROVIDER_MAX_RETRIES = 2;
+const PROVIDER_RETRY_BASE_MS = 250;
+const PROVIDER_CIRCUIT_FAILURE_THRESHOLD = 3;
+const PROVIDER_CIRCUIT_COOLDOWN_MS = 30_000;
 const rateBuckets = new Map();
+const providerHealth = new Map();
 let lastFilterReport = {
   checked: 0, accepted: 0, rejected: 0, unresolved: 0, reasons: [],
   providerRecords: 0, pairRequests: 0, pairFailures: 0, providerAgeMs: null,
@@ -668,12 +677,104 @@ function timestampMs(value) {
   return Date.parse(String(value || ""));
 }
 
+function providerHealthFor(endpoint) {
+  const current = providerHealth.get(endpoint) || { failures: 0, openedAt: 0, lastStatus: null };
+  if (current.openedAt && Date.now() - current.openedAt >= PROVIDER_CIRCUIT_COOLDOWN_MS) {
+    current.openedAt = 0;
+    current.failures = 0;
+  }
+  providerHealth.set(endpoint, current);
+  return current;
+}
+
+function providerFailure(endpoint, status = null) {
+  const health = providerHealthFor(endpoint);
+  health.failures += 1;
+  health.lastStatus = status;
+  if (health.failures >= PROVIDER_CIRCUIT_FAILURE_THRESHOLD) health.openedAt = Date.now();
+}
+
+function providerSuccess(endpoint) {
+  providerHealth.set(endpoint, { failures: 0, openedAt: 0, lastStatus: null });
+}
+
+function retryAfterMs(response, attempt) {
+  const header = response?.headers?.get("retry-after");
+  const seconds = header == null ? NaN : Number(header);
+  return Number.isFinite(seconds) && seconds >= 0
+    ? Math.min(5_000, seconds * 1_000)
+    : Math.min(5_000, PROVIDER_RETRY_BASE_MS * (2 ** attempt));
+}
+
+async function fetchProviderJson(endpoint, { signal, timeoutMs = 5_000 } = {}) {
+  const health = providerHealthFor(endpoint);
+  if (health.openedAt) throw new Error(`Provider circuit open for ${new URL(endpoint).hostname}.`);
+  let lastError;
+  for (let attempt = 0; attempt <= PROVIDER_MAX_RETRIES; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(endpoint, {
+        signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
+        headers: { Accept: "application/json" }
+      });
+      if (response.status === 429 || response.status >= 500) {
+        lastError = new Error(`Provider HTTP ${response.status}`);
+        lastError.status = response.status;
+        providerFailure(endpoint, response.status);
+        if (attempt < PROVIDER_MAX_RETRIES) {
+          await new Promise(resolve => setTimeout(resolve, retryAfterMs(response, attempt)));
+          continue;
+        }
+        throw lastError;
+      }
+      if (!response.ok) {
+        lastError = new Error(`Provider HTTP ${response.status}`);
+        lastError.status = response.status;
+        providerFailure(endpoint, response.status);
+        throw lastError;
+      }
+      const payload = await response.json();
+      providerSuccess(endpoint);
+      return payload;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      lastError = error;
+      if (attempt >= PROVIDER_MAX_RETRIES || error.status >= 400 && error.status < 500 && error.status !== 429) {
+        providerFailure(endpoint, error.status || null);
+        throw error;
+      }
+      providerFailure(endpoint, error.status || null);
+      await new Promise(resolve => setTimeout(resolve, Math.min(5_000, PROVIDER_RETRY_BASE_MS * (2 ** attempt))));
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw lastError || new Error("Provider request failed.");
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  async function consume() {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, consume));
+  return results;
+}
+
 function poolEvidenceFromItem(item) {
   const pair = item?.details?.pair || {};
   const supplied = pair.poolEvidence || pair.pool || pair.info?.poolEvidence || {};
   return normalizePoolEvidence({
     ...supplied,
-    poolAddress: supplied.poolAddress || supplied.address || pair.address || null,
+    // A DexScreener pair address is not proof of a Solana AMM pool account.
+    // Only explicit provider evidence can classify pool/vault ownership.
+    poolAddress: supplied.poolAddress || supplied.address || null,
     ammType: supplied.ammType || supplied.dexId || pair.dexId || null,
     source: supplied.source || "DexScreener pair identity"
   });
@@ -689,27 +790,27 @@ function observationData(item, endpoint, sourceRequestId, observedAt, pairOverri
     pairAddress: pair.address || null,
     chainId: providerMetadata.chainId || "solana",
     dexId: pair.dexId || null,
-    baseToken: pair.baseToken || {},
-    quoteToken: pair.quoteToken || {},
+    baseToken: pair.baseToken || null,
+    quoteToken: pair.quoteToken || null,
     observedAt,
-    providerUpdatedAt: providerMetadata.providerUpdatedAt || null,
+    providerUpdatedAt: pair.updatedAt || providerMetadata.providerUpdatedAt || null,
     pairCreatedAt: pair.pairCreatedAt || null,
     priceUsd: Number.isFinite(Number(pair.priceUsd)) ? Number(pair.priceUsd) : null,
     marketCap: Number.isFinite(Number(pair.marketCap)) ? Number(pair.marketCap) : null,
     fdv: Number.isFinite(Number(pair.fdv)) ? Number(pair.fdv) : null,
     liquidityUsd: Number.isFinite(Number(pair.liquidityUsd)) ? Number(pair.liquidityUsd) : null,
-    volume: pair.volume || {},
-    transactions: pair.txns || {},
-    makers: pair.makers || {},
-    priceChange: pair.priceChange || {},
+    volume: pair.volume || null,
+    transactions: pair.txns || null,
+    makers: pair.makers || null,
+    priceChange: pair.priceChange || null,
     boostAmount: Number.isFinite(Number(providerMetadata.boostAmount)) ? Number(providerMetadata.boostAmount) : null,
     ctoFlag: typeof providerMetadata.cto === "boolean" ? providerMetadata.cto : null,
     source: "DexScreener",
     sourceEndpoint: endpoint,
     sourceRequestId,
     sourceResponseHash: crypto.createHash("sha256").update(JSON.stringify(rawPayload)).digest("hex"),
-    freshnessMs: Number.isFinite(timestampMs(providerMetadata.providerUpdatedAt))
-      ? Math.max(0, Date.now() - timestampMs(providerMetadata.providerUpdatedAt))
+    freshnessMs: Number.isFinite(timestampMs(pair.updatedAt || providerMetadata.providerUpdatedAt))
+      ? Math.max(0, Date.now() - timestampMs(pair.updatedAt || providerMetadata.providerUpdatedAt))
       : null,
     dataQuality: pair.address ? `${pairRole.toUpperCase()}_PAIR_SECURITY_SEPARATE` : "MISSING_PAIR",
     qualityReasons: decision.reasonCodes,
@@ -730,21 +831,34 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
   const sourceRequestId = correlationId || crypto.randomUUID();
   let pairRequests = 0;
   let pairFailures = 0;
+  let invalidFeedRecords = 0;
+  let invalidPairRecords = 0;
+  let schemaErrors = 0;
+  const invalidFeedReasonCounts = {};
+  const rpcFailureReasons = new Set();
   try {
     const requestSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
     const readFeed = async endpoint => {
       try {
-        const response = await fetch(endpoint, { signal: requestSignal, headers: { Accept: "application/json" } });
-        if (!response.ok) throw new Error(`Provider HTTP ${response.status}`);
-        const payload = await response.json();
+        const payload = await fetchProviderJson(endpoint, { signal: requestSignal });
+        const validation = validateProviderFeed(payload);
+        invalidFeedRecords += validation.invalidRecords || 0;
+        for (const [reason, count] of Object.entries(validation.invalidReasonCounts || {})) {
+          invalidFeedReasonCounts[reason] = (invalidFeedReasonCounts[reason] || 0) + count;
+        }
+        if (!validation.ok) {
+          schemaErrors += 1;
+          return { ok: false, entries: [], error: validation.errors.join("; "), schemaVersion: validation.schemaVersion };
+        }
         return {
           ok: true,
-          entries: Array.isArray(payload) ? payload.filter(item => item && (!item.chainId || item.chainId === "solana")) : [],
-          error: null
+          entries: validation.entries,
+          error: null,
+          schemaVersion: validation.schemaVersion
         };
       } catch (error) {
         if (signal?.aborted) throw error;
-        return { ok: false, entries: [], error: error.message };
+        return { ok: false, entries: [], error: error.message, schemaVersion: PROVIDER_SCHEMA_VERSION };
       }
     };
     const [boostFeed, profileFeed] = await Promise.all([readFeed(boostEndpoint), readFeed(profileEndpoint)]);
@@ -757,29 +871,34 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
       limit: Math.max(1, Math.min(100, Number(process.env.DEXSCREENER_DISCOVERY_LIMIT || 30)))
     });
     pairRequests = discovery.entries.length;
-    const pairResponses = await Promise.all(discovery.entries.map(async entry => {
+    const pairResponses = await mapWithConcurrency(discovery.entries, PROVIDER_MAX_CONCURRENCY, async entry => {
       const mint = entry.tokenAddress;
       try {
-        const pairResponse = await fetch(`${pairEndpoint}/${encodeURIComponent(mint)}`, {
-          signal: requestSignal,
-          headers: { Accept: "application/json" }
-        });
-        if (!pairResponse.ok) {
-          pairFailures += 1;
-          return { pairs: [] };
+        const payload = await fetchProviderJson(`${pairEndpoint}/${encodeURIComponent(mint)}`, { signal: requestSignal });
+        const raw = Array.isArray(payload?.pairs) ? payload.pairs : [];
+        const pairs = [];
+        for (const candidate of raw) {
+          const validation = validateProviderPair(candidate);
+          if (validation.valid) pairs.push(validation.pair);
+          else invalidPairRecords += 1;
         }
-        return await pairResponse.json();
+        if (!Array.isArray(payload?.pairs)) {
+          schemaErrors += 1;
+          pairFailures += 1;
+          return { pairs: [], schemaError: "Pair response must contain a pairs array." };
+        }
+        return { pairs, invalidPairs: raw.length - pairs.length };
       } catch {
         pairFailures += 1;
         return { pairs: [] };
       }
-    }));
+    });
     const rawPairs = pairResponses.flatMap(result => Array.isArray(result?.pairs) ? result.pairs : []);
     const allPairs = dedupePairs(rawPairs);
     const fresh = discovery.entries.map((entry, index) => {
       const mint = entry.tokenAddress || `live-${index}`;
       const pairs = dedupePairs(Array.isArray(pairResponses[index]?.pairs) ? pairResponses[index].pairs : []);
-      const pair = selectPrimaryPair(pairs);
+       const pair = selectPrimaryPair(pairs);
       const boost = entry.sourceEntries.boost_feed || {};
       const profile = entry.sourceEntries.new_pair_feed || {};
       const shortMint = mint.slice(0, 4).toUpperCase();
@@ -826,19 +945,19 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
           pair: pair ? {
             address: pair.pairAddress || null, dexId: pair.dexId || null, url: pair.url || null,
             baseToken: pair.baseToken || null, quoteToken: pair.quoteToken || null,
-            pairCreatedAt: pair.pairCreatedAt || null, labels: Array.isArray(pair.labels) ? pair.labels : [],
-            priceUsd: pair.priceUsd ?? null, fdv: pair.fdv ?? null, marketCap: pair.marketCap ?? null,
-            liquidityUsd: pair.liquidity?.usd ?? null, volume: pair.volume || {},
-            priceChange: pair.priceChange || {}, txns: pair.txns || {}, makers: pair.makers || {},
+             pairCreatedAt: pair.pairCreatedAt || null, updatedAt: pair.updatedAt || null, labels: Array.isArray(pair.labels) ? pair.labels : [],
+             priceUsd: pair.priceUsd ?? null, fdv: pair.fdv ?? null, marketCap: pair.marketCap ?? null,
+             liquidityUsd: pair.liquidity?.usd ?? null, volume: pair.volume || null,
+             priceChange: pair.priceChange || null, txns: pair.txns || null, makers: pair.makers || null,
             info: pair.info || null, pairCountForMint: pairs.length
           } : null,
           pairs: pairs.map(candidate => ({
             address: candidate.pairAddress || null, dexId: candidate.dexId || null, url: candidate.url || null,
             chainId: candidate.chainId || null, baseToken: candidate.baseToken || null, quoteToken: candidate.quoteToken || null,
-            pairCreatedAt: candidate.pairCreatedAt || null, updatedAt: candidate.updatedAt || null,
+             pairCreatedAt: candidate.pairCreatedAt || null, updatedAt: candidate.updatedAt || null,
             priceUsd: candidate.priceUsd ?? null, fdv: candidate.fdv ?? null, marketCap: candidate.marketCap ?? null,
-            liquidityUsd: candidate.liquidity?.usd ?? null, volume: candidate.volume || {},
-            priceChange: candidate.priceChange || {}, txns: candidate.txns || {}, makers: candidate.makers || {}
+             liquidityUsd: candidate.liquidity?.usd ?? null, volume: candidate.volume || null,
+             priceChange: candidate.priceChange || null, txns: candidate.txns || null, makers: candidate.makers || null
           })),
           primaryPairPolicy: "SOLANA_ONLY_WITH_PRICE_AND_LIQUIDITY_THEN_LIQUIDITY_UPDATED_CREATED_ADDRESS",
           providerMetadata,
@@ -852,6 +971,9 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
       mint: item.mint,
       poolEvidence: poolEvidenceFromItem(item)
     })), signal);
+    for (const reason of securityResults.flatMap(result => result?.status === "UNVERIFIED" ? result.reasons || [] : [])) {
+      rpcFailureReasons.add(String(reason).slice(0, 240));
+    }
     const rpcFreshnessMs = Date.now() - rpcStartedAt;
     const secured = fresh.map((item, index) => ({
       ...item,
@@ -905,6 +1027,17 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
           watchlist: { count: state.watchlist.length, ok: true }
         },
         primary_pair_policy: "SOLANA_ONLY_WITH_PRICE_AND_LIQUIDITY_THEN_LIQUIDITY_UPDATED_CREATED_ADDRESS"
+         ,
+         provider_schema_version: PROVIDER_SCHEMA_VERSION,
+         invalid_feed_records: invalidFeedRecords,
+         invalid_pair_records: invalidPairRecords,
+         schema_errors: schemaErrors,
+         invalid_feed_reason_counts: invalidFeedReasonCounts,
+         rpc_failure_reasons: [...rpcFailureReasons],
+         provider_health: Object.fromEntries([...providerHealth.entries()].map(([endpoint, health]) => [
+           endpoint,
+           { failures: health.failures, circuitOpen: Boolean(health.openedAt), lastStatus: health.lastStatus }
+         ]))
       }
     });
     lastFilterReport = {
