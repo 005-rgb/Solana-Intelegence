@@ -20,6 +20,7 @@ const PUBLIC = path.join(ROOT, "public");
 const DATA_DIR = path.join(ROOT, ".data");
 const STATE_FILE = path.join(DATA_DIR, "radar-state.json");
 const AUTO_SCAN_MS = 30_000;
+const LIVE_SCAN_TIMEOUT_MS = 20_000;
 const ANALYSIS_MS = 6 * 60 * 60 * 1000;
 let lastFilterReport = { checked: 0, accepted: 0, rejected: 0, reasons: [] };
 
@@ -173,7 +174,7 @@ async function solanaRpcBatch(requests) {
     for (const endpoint of SOLANA_RPC_URLS) {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 20_000);
+        const timeout = setTimeout(() => controller.abort(), 5_000);
         try {
           const response = await fetch(endpoint, {
             method: "POST",
@@ -183,8 +184,7 @@ async function solanaRpcBatch(requests) {
           });
           if (response.status === 429) {
             lastError = new Error(`Solana RPC HTTP 429 at ${new URL(endpoint).hostname}`);
-            await new Promise(resolve => setTimeout(resolve, 700 * (attempt + 1)));
-            continue;
+            break;
           }
           if (!response.ok) throw new Error(`Solana RPC HTTP ${response.status}`);
           const payload = await response.json();
@@ -536,7 +536,10 @@ async function runScan(manual = false) {
   try {
     state.mode = "live";
     state.provider = "DexScreener";
-    state.tokens = await fetchLiveTokens();
+    state.tokens = await Promise.race([
+      fetchLiveTokens(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("LIVE scan timed out before provider verification completed.")), LIVE_SCAN_TIMEOUT_MS))
+    ]);
     state.patterns = derivePatterns(state.tokens, state.scanRuns);
     await persistPatterns(state.patterns);
     state.system.rpc = "LIVE PROVIDER";
