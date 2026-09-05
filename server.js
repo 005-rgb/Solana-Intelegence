@@ -105,26 +105,174 @@ function tokenById(id) {
   return state.tokens.find(item => item.mint === id || item.symbol.toLowerCase() === String(id).toLowerCase());
 }
 
-const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+const SOLANA_RPC_URLS = process.env.SOLANA_RPC_URL
+  ? [process.env.SOLANA_RPC_URL]
+  : ["https://solana-rpc.publicnode.com", "https://api.mainnet-beta.solana.com"];
 const MAX_TOP_HOLDER_PERCENT = 80;
 const MIN_LIQUIDITY_USD = 10_000;
+let rpcInFlight = 0;
+const rpcWaiters = [];
+
+async function acquireRpcSlot() {
+  if (rpcInFlight < 1) {
+    rpcInFlight += 1;
+    return;
+  }
+  await new Promise(resolve => rpcWaiters.push(resolve));
+  rpcInFlight += 1;
+}
+
+function releaseRpcSlot() {
+  rpcInFlight -= 1;
+  rpcWaiters.shift()?.();
+}
 
 async function solanaRpc(method, params) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 7000);
+  await acquireRpcSlot();
   try {
-    const response = await fetch(SOLANA_RPC_URL, {
-      method: "POST",
-      signal: controller.signal,
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params })
-    });
-    if (!response.ok) throw new Error(`Solana RPC HTTP ${response.status}`);
-    const payload = await response.json();
-    if (payload.error) throw new Error(payload.error.message || "Solana RPC request failed");
-    return payload.result;
+    let lastError;
+    for (const endpoint of SOLANA_RPC_URLS) {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        try {
+          const response = await fetch(endpoint, {
+            method: "POST",
+            signal: controller.signal,
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params })
+          });
+          if (response.status === 429) {
+            lastError = new Error(`Solana RPC HTTP 429 at ${new URL(endpoint).hostname}`);
+            await new Promise(resolve => setTimeout(resolve, 700 * (attempt + 1)));
+            continue;
+          }
+          if (!response.ok) throw new Error(`Solana RPC HTTP ${response.status}`);
+          const payload = await response.json();
+          if (payload.error) throw new Error(payload.error.message || "Solana RPC request failed");
+          return payload.result;
+        } catch (error) {
+          lastError = error;
+          if (attempt === 2) break;
+          await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)));
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+    }
+    throw lastError || new Error("No Solana RPC endpoint responded");
   } finally {
-    clearTimeout(timeout);
+    releaseRpcSlot();
+  }
+}
+
+async function solanaRpcBatch(requests) {
+  await acquireRpcSlot();
+  try {
+    let lastError;
+    for (const endpoint of SOLANA_RPC_URLS) {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20_000);
+        try {
+          const response = await fetch(endpoint, {
+            method: "POST",
+            signal: controller.signal,
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify(requests)
+          });
+          if (response.status === 429) {
+            lastError = new Error(`Solana RPC HTTP 429 at ${new URL(endpoint).hostname}`);
+            await new Promise(resolve => setTimeout(resolve, 700 * (attempt + 1)));
+            continue;
+          }
+          if (!response.ok) throw new Error(`Solana RPC HTTP ${response.status}`);
+          const payload = await response.json();
+          if (!Array.isArray(payload)) throw new Error("Solana RPC batch response was invalid");
+          return payload;
+        } catch (error) {
+          lastError = error;
+          if (attempt === 2) break;
+          await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)));
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+    }
+    throw lastError || new Error("No Solana RPC endpoint responded");
+  } finally {
+    releaseRpcSlot();
+  }
+}
+
+function unverifiedSecurity(message) {
+  return {
+    verified: false,
+    status: "UNVERIFIED",
+    reasons: [`Security verification failed: ${message}`],
+    authorities: { mint: "UNKNOWN", freeze: "UNKNOWN", metadata: "UNKNOWN" },
+    holders: null,
+    topHolderPercent: null,
+    supply: null
+  };
+}
+
+function securityFromRpcResults(accountResponse, supplyResponse, largestResponse) {
+  const rpcError = [accountResponse, supplyResponse, largestResponse].find(item => item?.error);
+  if (rpcError) return unverifiedSecurity(rpcError.error.message || "Solana RPC request failed");
+  try {
+    const account = accountResponse?.result;
+    const supply = supplyResponse?.result;
+    const largest = largestResponse?.result;
+    const info = account?.value?.data?.parsed?.info;
+    const mintAuthorityRenounced = Boolean(info) && info.mintAuthority == null;
+    const freezeAuthorityRenounced = Boolean(info) && info.freezeAuthority == null;
+    const supplyRaw = BigInt(supply?.value?.amount || "0");
+    const largestRaw = BigInt(largest?.value?.[0]?.amount || "0");
+    const topHolderPercent = supplyRaw > 0n ? Number((largestRaw * 10000n) / supplyRaw) / 100 : null;
+    const reasons = [];
+    if (!info) reasons.push("Mint account data is unavailable or not an SPL token mint.");
+    else {
+      if (!mintAuthorityRenounced) reasons.push("Mint authority is still active.");
+      if (!freezeAuthorityRenounced) reasons.push("Freeze authority is still active.");
+    }
+    if (topHolderPercent == null) reasons.push("Token supply or largest-holder data is unavailable.");
+    else if (topHolderPercent > MAX_TOP_HOLDER_PERCENT) reasons.push(`Largest holder controls ${topHolderPercent.toFixed(2)}% of supply.`);
+    const verified = mintAuthorityRenounced && freezeAuthorityRenounced && topHolderPercent != null && topHolderPercent <= MAX_TOP_HOLDER_PERCENT;
+    return {
+      verified,
+      status: verified ? "VERIFIED" : "REJECTED",
+      reasons: reasons.length ? reasons : ["Mint and freeze authorities are renounced; largest-holder concentration is within the 80% limit."],
+      authorities: {
+        mint: mintAuthorityRenounced ? "RENOUNCED" : "ACTIVE",
+        freeze: freezeAuthorityRenounced ? "RENOUNCED" : "ACTIVE",
+        metadata: "UNKNOWN"
+      },
+      holders: largest?.value?.length || null,
+      topHolderPercent,
+      supply: supply?.value?.uiAmountString || null
+    };
+  } catch (error) {
+    return unverifiedSecurity(error.message);
+  }
+}
+
+async function verifyTokensSecurity(mints) {
+  const requests = mints.flatMap((mint, index) => [
+    { jsonrpc: "2.0", id: `${index}:account`, method: "getAccountInfo", params: [mint, { encoding: "jsonParsed", commitment: "confirmed" }] },
+    { jsonrpc: "2.0", id: `${index}:supply`, method: "getTokenSupply", params: [mint, { commitment: "confirmed" }] },
+    { jsonrpc: "2.0", id: `${index}:largest`, method: "getTokenLargestAccounts", params: [mint, { commitment: "confirmed" }] }
+  ]);
+  try {
+    const responses = await solanaRpcBatch(requests);
+    const byId = new Map(responses.map(response => [String(response.id), response]));
+    return mints.map((_, index) => securityFromRpcResults(
+      byId.get(`${index}:account`),
+      byId.get(`${index}:supply`),
+      byId.get(`${index}:largest`)
+    ));
+  } catch (error) {
+    return mints.map(() => unverifiedSecurity(error.message));
   }
 }
 
