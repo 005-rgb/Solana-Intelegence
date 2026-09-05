@@ -11,7 +11,9 @@ The server binds to `0.0.0.0:5000`.
 Required environment variables:
 
 - `DATABASE_URL`: PostgreSQL connection string used by Prisma.
-- `SOLANA_RPC_URL`: Helius or another Solana JSON-RPC endpoint used for live token security verification.
+- `SOLANA_RPC_URL`: one Helius or another Solana JSON-RPC endpoint used for live token security verification.
+- `SOLANA_RPC_URLS` (optional): multiple RPC endpoints in one secret, separated by commas or new lines. The server rotates healthy endpoints and fails over on timeout, HTTP 429, or 5xx; `SOLANA_RPC_URL` remains supported for compatibility.
+- Copy-ready secret configuration is documented in `docs/solana-rpc-pool-template.md`.
 
 After importing or changing the schema, initialize the local database client with:
 
@@ -61,6 +63,7 @@ If a provider or security scan fails, the last known good Radar board remains vi
 - The scan audit exposes source health, overlap, deduplicated mint/pair counts, pair policy, and primary/secondary observation lineage.
 - Provider feed and pair payloads are validated against `dexscreener-v1`; malformed records, negative/non-finite values, invalid timestamps, and future clock skew are counted as schema diagnostics instead of being treated as an empty feed.
 - Provider requests use bounded pair-fetch concurrency, bounded retries with `Retry-After`/exponential backoff, and an endpoint circuit breaker. A provider failure preserves the last known board.
+- Solana RPC security checks use a bounded RPC pool. Each endpoint has independent health/cooldown state, and the audit exposes endpoint host, failure count, circuit state, and last HTTP status without exposing secret URLs.
 
 ## Phase 1A account taxonomy
 

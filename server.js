@@ -277,11 +277,93 @@ function tokenById(id) {
   return state.tokens.find(item => item.mint === id || item.symbol.toLowerCase() === String(id).toLowerCase());
 }
 
-const SOLANA_RPC_URLS = process.env.SOLANA_RPC_URL
-  ? [process.env.SOLANA_RPC_URL]
+const configuredRpcUrls = [process.env.SOLANA_RPC_URLS, process.env.SOLANA_RPC_URL]
+  .filter(Boolean)
+  .flatMap(value => String(value).split(/[,\n]+/))
+  .map(value => value.trim())
+  .filter(value => /^https?:\/\//i.test(value));
+const SOLANA_RPC_URLS = [...new Set(configuredRpcUrls)].length
+  ? [...new Set(configuredRpcUrls)].slice(0, 8)
   : ["https://solana-rpc.publicnode.com", "https://api.mainnet-beta.solana.com"];
+const RPC_FAILURE_THRESHOLD = 2;
+const RPC_COOLDOWN_MS = 30_000;
+const RPC_MAX_ATTEMPTS_PER_ENDPOINT = 2;
+const rpcHealth = new Map();
+let rpcRoundRobin = 0;
 let rpcInFlight = 0;
 const rpcWaiters = [];
+
+function rpcEndpointState(endpoint) {
+  const state = rpcHealth.get(endpoint) || {
+    failures: 0, openedAt: 0, lastStatus: null, lastFailureAt: null, lastSuccessAt: null
+  };
+  if (state.openedAt && Date.now() - state.openedAt >= RPC_COOLDOWN_MS) {
+    state.openedAt = 0;
+    state.failures = 0;
+  }
+  rpcHealth.set(endpoint, state);
+  return state;
+}
+
+function rpcEndpointCandidates() {
+  const healthy = SOLANA_RPC_URLS.filter(endpoint => !rpcEndpointState(endpoint).openedAt);
+  const pool = healthy.length
+    ? healthy
+    : [...SOLANA_RPC_URLS].sort((left, right) => rpcEndpointState(left).openedAt - rpcEndpointState(right).openedAt).slice(0, 1);
+  if (!pool.length) return [];
+  const offset = rpcRoundRobin++ % pool.length;
+  return [...pool.slice(offset), ...pool.slice(0, offset)];
+}
+
+function rpcEndpointLabel(endpoint) {
+  try {
+    return new URL(endpoint).hostname;
+  } catch {
+    return "invalid-endpoint";
+  }
+}
+
+function recordRpcFailure(endpoint, status = null) {
+  const state = rpcEndpointState(endpoint);
+  state.failures += 1;
+  state.lastStatus = status;
+  state.lastFailureAt = new Date().toISOString();
+  if (state.failures >= RPC_FAILURE_THRESHOLD) state.openedAt = Date.now();
+}
+
+function recordRpcSuccess(endpoint) {
+  rpcHealth.set(endpoint, {
+    failures: 0,
+    openedAt: 0,
+    lastStatus: null,
+    lastFailureAt: rpcEndpointState(endpoint).lastFailureAt,
+    lastSuccessAt: new Date().toISOString()
+  });
+}
+
+function rpcRetryDelay(response, attempt) {
+  const retryAfter = Number(response?.headers?.get("retry-after"));
+  return Number.isFinite(retryAfter) && retryAfter >= 0
+    ? Math.min(2_000, retryAfter * 1_000)
+    : Math.min(2_000, 250 * (2 ** attempt));
+}
+
+function rpcHealthSummary() {
+  return {
+    configuredEndpoints: SOLANA_RPC_URLS.length,
+    endpoints: SOLANA_RPC_URLS.map(endpoint => {
+      const state = rpcEndpointState(endpoint);
+      return {
+        endpoint: rpcEndpointLabel(endpoint),
+        failures: state.failures,
+        circuitOpen: Boolean(state.openedAt),
+        lastStatus: state.lastStatus,
+        lastFailureAt: state.lastFailureAt,
+        lastSuccessAt: state.lastSuccessAt
+      };
+    })
+  };
+}
 
 async function acquireRpcSlot() {
   if (rpcInFlight < 1) {
@@ -301,8 +383,10 @@ async function solanaRpc(method, params) {
   await acquireRpcSlot();
   try {
     let lastError;
-    for (const endpoint of SOLANA_RPC_URLS) {
-      for (let attempt = 0; attempt < 3; attempt += 1) {
+    const tried = [];
+    for (const endpoint of rpcEndpointCandidates()) {
+      tried.push(rpcEndpointLabel(endpoint));
+      for (let attempt = 0; attempt < RPC_MAX_ATTEMPTS_PER_ENDPOINT; attempt += 1) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 10000);
         try {
@@ -312,25 +396,43 @@ async function solanaRpc(method, params) {
             headers: { "Content-Type": "application/json", Accept: "application/json" },
             body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params })
           });
-          if (response.status === 429) {
-            lastError = new Error(`Solana RPC HTTP 429 at ${new URL(endpoint).hostname}`);
-            await new Promise(resolve => setTimeout(resolve, 700 * (attempt + 1)));
+          if (response.status === 429 || response.status >= 500) {
+            lastError = new Error(`Solana RPC HTTP ${response.status} at ${rpcEndpointLabel(endpoint)}`);
+            lastError.status = response.status;
+            recordRpcFailure(endpoint, response.status);
+            if (attempt + 1 < RPC_MAX_ATTEMPTS_PER_ENDPOINT) {
+              await new Promise(resolve => setTimeout(resolve, rpcRetryDelay(response, attempt)));
+            }
             continue;
           }
-          if (!response.ok) throw new Error(`Solana RPC HTTP ${response.status}`);
+          if (!response.ok) {
+            lastError = new Error(`Solana RPC HTTP ${response.status} at ${rpcEndpointLabel(endpoint)}`);
+            lastError.status = response.status;
+            recordRpcFailure(endpoint, response.status);
+            break;
+          }
           const payload = await response.json();
-          if (payload.error) throw new Error(payload.error.message || "Solana RPC request failed");
+          if (payload.error) {
+            lastError = new Error(payload.error.message || "Solana RPC request failed");
+            lastError.status = payload.error.code || null;
+            recordRpcFailure(endpoint, lastError.status);
+            break;
+          }
+          recordRpcSuccess(endpoint);
           return payload.result;
         } catch (error) {
+          if (error.name === "AbortError") error.message = `Solana RPC timeout at ${rpcEndpointLabel(endpoint)}`;
           lastError = error;
-          if (attempt === 2) break;
-          await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)));
+          if (error.status == null) recordRpcFailure(endpoint, null);
+          if (attempt + 1 < RPC_MAX_ATTEMPTS_PER_ENDPOINT) {
+            await new Promise(resolve => setTimeout(resolve, 250 * (2 ** attempt)));
+          }
         } finally {
           clearTimeout(timeout);
         }
       }
     }
-    throw lastError || new Error("No Solana RPC endpoint responded");
+    throw lastError || new Error(`No Solana RPC endpoint responded. Tried: ${tried.join(", ")}`);
   } finally {
     releaseRpcSlot();
   }
@@ -340,8 +442,10 @@ async function solanaRpcBatch(requests, signal) {
   await acquireRpcSlot();
   try {
     let lastError;
-    for (const endpoint of SOLANA_RPC_URLS) {
-      for (let attempt = 0; attempt < 3; attempt += 1) {
+    const tried = [];
+    for (const endpoint of rpcEndpointCandidates()) {
+      tried.push(rpcEndpointLabel(endpoint));
+      for (let attempt = 0; attempt < RPC_MAX_ATTEMPTS_PER_ENDPOINT; attempt += 1) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 5_000);
         try {
@@ -351,25 +455,43 @@ async function solanaRpcBatch(requests, signal) {
             headers: { "Content-Type": "application/json", Accept: "application/json" },
             body: JSON.stringify(requests)
           });
-          if (response.status === 429) {
-            lastError = new Error(`Solana RPC HTTP 429 at ${new URL(endpoint).hostname}`);
+          if (response.status === 429 || response.status >= 500) {
+            lastError = new Error(`Solana RPC HTTP ${response.status} at ${rpcEndpointLabel(endpoint)}`);
+            lastError.status = response.status;
+            recordRpcFailure(endpoint, response.status);
+            if (attempt + 1 < RPC_MAX_ATTEMPTS_PER_ENDPOINT) {
+              await new Promise(resolve => setTimeout(resolve, rpcRetryDelay(response, attempt)));
+            }
+            continue;
+          }
+          if (!response.ok) {
+            lastError = new Error(`Solana RPC HTTP ${response.status} at ${rpcEndpointLabel(endpoint)}`);
+            lastError.status = response.status;
+            recordRpcFailure(endpoint, response.status);
             break;
           }
-          if (!response.ok) throw new Error(`Solana RPC HTTP ${response.status}`);
           const payload = await response.json();
-          if (!Array.isArray(payload)) throw new Error("Solana RPC batch response was invalid");
+          if (!Array.isArray(payload)) {
+            lastError = new Error(`Solana RPC batch response was invalid at ${rpcEndpointLabel(endpoint)}`);
+            recordRpcFailure(endpoint, null);
+            break;
+          }
+          recordRpcSuccess(endpoint);
           return payload;
         } catch (error) {
           if (signal?.aborted) throw new Error("Solana RPC request aborted by scan deadline.");
+          if (error.name === "AbortError") error.message = `Solana RPC timeout at ${rpcEndpointLabel(endpoint)}`;
           lastError = error;
-          if (attempt === 2) break;
-          await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)));
+          if (error.status == null) recordRpcFailure(endpoint, null);
+          if (attempt + 1 < RPC_MAX_ATTEMPTS_PER_ENDPOINT) {
+            await new Promise(resolve => setTimeout(resolve, 250 * (2 ** attempt)));
+          }
         } finally {
           clearTimeout(timeout);
         }
       }
     }
-    throw lastError || new Error("No Solana RPC endpoint responded");
+    throw lastError || new Error(`No Solana RPC endpoint responded. Tried: ${tried.join(", ")}`);
   } finally {
     releaseRpcSlot();
   }
@@ -1038,6 +1160,8 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
            endpoint,
            { failures: health.failures, circuitOpen: Boolean(health.openedAt), lastStatus: health.lastStatus }
          ]))
+         ,
+         rpc_health: rpcHealthSummary()
       }
     });
     lastFilterReport = {
