@@ -164,3 +164,17 @@ model ScanRun {
   @@index([startedAt])
   @@index([status])
 }
+
+model WhaleActivityPoint {
+  id          Int      @id @default(autoincrement())
+  recordedAt  DateTime
+  buyVolume   Float?
+  sellVolume  Float?
+  netFlow     Float?
+  totalVolume Float?
+  source      String
+  dataQuality Int?
+  createdAt   DateTime @default(now())
+
+  @@index([source, recordedAt])
+}

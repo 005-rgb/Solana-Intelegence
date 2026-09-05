@@ -7,6 +7,7 @@ const {
   persistState,
   recordTrade,
   recordWatchlistEvent,
+  recordWhaleActivity,
   createScanRun,
   finishScanRun,
   disconnectDb
@@ -48,6 +49,19 @@ function token(symbol, name, price, marketCap, liquidity, radar, opportunity, sm
 }
 
 function freshState() {
+  const whaleActivity = [38, 52, 46, 61, 58, 74, 69, 82, 77, 96, 91, 108].map((netFlow, index) => {
+    const buyVolume = 118000 + index * 7200 + (index % 3) * 4100;
+    const sellVolume = buyVolume - netFlow * 1000;
+    return {
+      at: new Date(Date.now() - (11 - index) * 30 * 60 * 1000).toISOString(),
+      buyVolume,
+      sellVolume,
+      netFlow: netFlow * 1000,
+      totalVolume: buyVolume + sellVolume,
+      source: "demo",
+      dataQuality: 100
+    };
+  });
   return {
     mode: process.env.RADAR_MODE === "live" ? "live" : "demo",
     provider: process.env.RADAR_MODE === "live" ? "DexScreener" : "Controlled Demo Dataset",
@@ -55,6 +69,7 @@ function freshState() {
     nextScanAt: Date.now() + AUTO_SCAN_MS,
     scanRunning: false,
     tokens: DEMO_TOKENS,
+    whaleActivity,
     watchlist: [DEMO_TOKENS[0].mint, DEMO_TOKENS[2].mint],
     watchlistHistory: [],
     alerts: [
@@ -131,6 +146,27 @@ function formatAge(ms) {
   if (minutes < 60) return `${minutes}m`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
+function parseFlow(value) {
+  const match = String(value || "").replace(/[$,]/g, "").match(/([+-]?\d+(?:\.\d+)?)([KMB]?)/i);
+  if (!match) return null;
+  const multiplier = { K: 1e3, M: 1e6, B: 1e9 }[match[2].toUpperCase()] || 1;
+  return Number(match[1]) * multiplier;
+}
+function buildWhaleActivityPoint(at) {
+  const flows = state.tokens.map(item => parseFlow(item.whaleFlow)).filter(value => value != null);
+  if (!flows.length) return null;
+  const buyVolume = flows.filter(value => value > 0).reduce((sum, value) => sum + value, 0);
+  const sellVolume = flows.filter(value => value < 0).reduce((sum, value) => sum + Math.abs(value), 0);
+  return {
+    at: new Date(at).toISOString(),
+    buyVolume,
+    sellVolume,
+    netFlow: buyVolume - sellVolume,
+    totalVolume: buyVolume + sellVolume,
+    source: state.mode === "live" ? "live" : "demo",
+    dataQuality: state.mode === "live" ? null : 100
+  };
+}
 function tokenById(id) {
   return state.tokens.find(item => item.mint === id || item.symbol.toLowerCase() === String(id).toLowerCase());
 }
@@ -181,6 +217,13 @@ async function runScan(manual = false) {
         const drift = ((started / 30000 + index) % 5) - 2;
         return { ...item, radar: Math.round(Math.max(1, Math.min(99, item.radar + drift))), updatedAt: new Date().toISOString() };
       });
+    }
+    const whalePoint = state.mode === "live" ? null : buildWhaleActivityPoint(started);
+    if (whalePoint) {
+      state.whaleActivity = [...(state.whaleActivity || []), whalePoint].slice(-96);
+      await recordWhaleActivity(whalePoint);
+    } else {
+      state.whaleActivity = [];
     }
     state.lastScan = new Date().toISOString();
     state.nextScanAt = Date.now() + AUTO_SCAN_MS;

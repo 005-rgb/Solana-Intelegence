@@ -61,6 +61,30 @@ function fromToken(row) {
   };
 }
 
+function whalePointData(point) {
+  return {
+    recordedAt: new Date(point.at),
+    buyVolume: point.buyVolume ?? null,
+    sellVolume: point.sellVolume ?? null,
+    netFlow: point.netFlow ?? null,
+    totalVolume: point.totalVolume ?? null,
+    source: point.source,
+    dataQuality: point.dataQuality ?? null
+  };
+}
+
+function fromWhalePoint(row) {
+  return {
+    at: row.recordedAt.toISOString(),
+    buyVolume: row.buyVolume,
+    sellVolume: row.sellVolume,
+    netFlow: row.netFlow,
+    totalVolume: row.totalVolume,
+    source: row.source,
+    dataQuality: row.dataQuality
+  };
+}
+
 async function seedState(state) {
   await prisma.$transaction(async tx => {
     await tx.radarState.create({
@@ -75,6 +99,9 @@ async function seedState(state) {
         system: state.system || {}
       }
     });
+    for (const point of state.whaleActivity || []) {
+      await tx.whaleActivityPoint.create({ data: whalePointData(point) });
+    }
 
     const tokens = new Map();
     for (const item of state.tokens) {
@@ -132,14 +159,21 @@ async function readState(fallback) {
     return fallback;
   }
 
-  const [tokens, activeWatchlist, events, alerts, patterns, account] = await Promise.all([
+  const [tokens, activeWatchlist, events, alerts, patterns, account, whalePoints] = await Promise.all([
     prisma.token.findMany({ orderBy: [{ radar: "desc" }, { updatedAt: "desc" }] }),
     prisma.watchlistEntry.findMany({ where: { active: true }, include: { token: true } }),
     prisma.watchlistEvent.findMany({ include: { token: true }, orderBy: { createdAt: "asc" } }),
     prisma.alert.findMany({ orderBy: { createdAt: "desc" }, take: 20 }),
     prisma.pattern.findMany({ orderBy: { match: "desc" } }),
-    prisma.paperAccount.findUnique({ where: { id: 1 }, include: { positions: { include: { token: true } }, history: { orderBy: { time: "desc" }, take: 100 } } })
+    prisma.paperAccount.findUnique({ where: { id: 1 }, include: { positions: { include: { token: true } }, history: { orderBy: { time: "desc" }, take: 100 } } }),
+    prisma.whaleActivityPoint.findMany({ where: { source: radar.mode === "live" ? "live" : "demo" }, orderBy: { recordedAt: "asc" }, take: 96 })
   ]);
+
+  let activityRows = whalePoints;
+  if (!activityRows.length && radar.mode === "demo" && fallback.whaleActivity?.length) {
+    await prisma.whaleActivityPoint.createMany({ data: fallback.whaleActivity.map(whalePointData) });
+    activityRows = await prisma.whaleActivityPoint.findMany({ where: { source: "demo" }, orderBy: { recordedAt: "asc" }, take: 96 });
+  }
 
   const dbPortfolio = account ? {
     starting: account.starting,
@@ -180,6 +214,7 @@ async function readState(fallback) {
     watchlistHistory: events.map(event => ({ mint: event.token.mint, action: event.action, at: event.createdAt.toISOString() })),
     alerts: alerts.map(alert => ({ type: alert.type, token: alert.token, text: alert.text, tone: alert.tone, time: alert.timeLabel || alert.createdAt.toISOString() })),
     patterns: patterns.map(pattern => ({ id: pattern.patternId, name: pattern.name, desc: pattern.detail, match: pattern.match, sample: pattern.sample, outcome: pattern.outcome, tone: pattern.tone })),
+    whaleActivity: activityRows.map(fromWhalePoint),
     portfolio: dbPortfolio,
     system: { ...(fallback.system || {}), ...(radar.system || {}), database: "POSTGRESQL / PRISMA" }
   };
@@ -248,6 +283,13 @@ async function recordWatchlistEvent(mint, action) {
   if (token) await prisma.watchlistEvent.create({ data: { tokenId: token.id, action } });
 }
 
+async function recordWhaleActivity(point) {
+  await prisma.whaleActivityPoint.create({ data: whalePointData(point) });
+  await prisma.whaleActivityPoint.deleteMany({
+    where: { source: point.source, recordedAt: { lt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 30) } }
+  });
+}
+
 async function createScanRun(data) {
   return prisma.scanRun.create({ data });
 }
@@ -260,4 +302,4 @@ async function disconnectDb() {
   await prisma.$disconnect();
 }
 
-module.exports = { prisma, readState, persistState, recordTrade, recordWatchlistEvent, createScanRun, finishScanRun, disconnectDb };
+module.exports = { prisma, readState, persistState, recordTrade, recordWatchlistEvent, recordWhaleActivity, createScanRun, finishScanRun, disconnectDb };
