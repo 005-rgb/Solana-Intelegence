@@ -1,8 +1,8 @@
 # Radar Core System — Phased Precision Plan
 
 **Status:** Proposed implementation blueprint — expanded gap-audit edition  
-**Scope:** Radar core only — discovery, market features, Solana security, scoring, alerts, and outcome measurement  
-**Mode:** Paper trading only; no wallet, signing, or real-fund execution  
+**Scope:** Radar core plus a gated post-core wallet execution and monetization roadmap
+**Mode:** Phases 0–7 remain paper/research only; wallet signing and real-fund execution begin only after the core acceptance gate
 **Primary objective:** Maximize precision of actionable token candidates while preserving fail-closed security behavior and auditable evidence
 
 ---
@@ -53,6 +53,8 @@ These rules are mandatory for every phase:
 8. **No unvalidated prediction language.** Until outcome metrics exist, the UI must call results `candidate`, `upward evidence`, or `watch`, not `likely winner` or `guaranteed`.
 9. **Every alert is an experiment.** Alerts need a timestamp, feature snapshot, decision version, and later forward outcome.
 10. **Paper trading remains isolated.** Radar research data must not introduce wallets, private keys, signing, or real transactions.
+11. **Execution is a separate trust boundary.** Wallet connectivity, transaction construction, signing, fee policy, and treasury accounting must not weaken or redefine Radar evidence.
+12. **Fees are configuration, not code.** The launch-safe default is zero application fee; any later fee must be versioned, backend-controlled, visible before signing, and charged only for confirmed successful execution.
 
 ---
 
@@ -1432,15 +1434,28 @@ The complete roadmap now has these implementation phases:
 | 6 | Outcome labeling | Executable and price-based forward labels with censoring | Backtest conclusion before temporal validity |
 | 6A | Evaluation | Walk-forward, embargo, confidence intervals, calibration metrics | Efficacy claims below minimum sample |
 | 7 | Controlled rollout | SLOs, monitoring, rollback, challenger promotion | Permanent rollout without guardrails |
+| 8 | Wallet readiness | Non-custodial wallet adapters, signed-wallet identity, execution boundary | Real transaction capability |
+| 9 | Quote and simulation | Fresh quotes, sellability, route validation, transaction simulation, intent preview | User signing without simulation |
+| 10 | Controlled execution | Wallet-signed swaps, confirmation/reconciliation, limits, kill switch, transaction audit | Broad token execution |
+| 11 | Fee policy and transparent monetization | Versioned backend fee policy, zero-fee launch mode, fee disclosure, treasury controls | Hidden or hardcoded fee |
+| 12 | Monetization rollout | Free/beta cohorts, controlled fee activation, revenue and safety monitoring, rollback | Permanent fee schedule without evidence |
 
 Dependencies:
 
 ```text
 0 → 1 → 1A → 2 → 2A → 3 → 3A → 4 → 4A → 5 → 6 → 6A → 7
+                                                               ↓
+                           8 → 9 → 10 → 11 → 12
 0A must be in place before mutation endpoints or multi-process scheduling.
 ```
 
-Some work can be developed in parallel, but no downstream score or efficacy claim may bypass its data and evaluation dependencies.
+Core preparation may be developed in parallel where it does not activate execution:
+
+- Phase 2 and 2A may add Token-2022, transfer-fee, transfer-hook, sellability, route, price-impact, and simulation evidence.
+- Phase 3 may persist immutable quote/simulation observations for later execution-quality measurement.
+- Phase 0A may harden authentication boundaries, request tracing, rate limits, idempotency, and durable audit patterns.
+
+These preparation items must remain research-only. No wallet signing, real transaction, treasury movement, or application fee may be activated before Phase 7 passes the core acceptance gate.
 
 ---
 
@@ -1503,3 +1518,349 @@ The Radar core is complete only when all criteria below pass:
 - shadow, rollback, and challenger paths are available.
 
 Until this gate passes, the product should describe the system as a **live research filter and evidence collector**, not as a validated high-precision prediction engine.
+
+---
+
+## 19. Core-to-execution handoff
+
+The core acceptance gate is a hard boundary, not a soft milestone. Wallet execution may be designed in advance, but it must not be activated until the core can demonstrate:
+
+- reproducible observations, features, decisions, and outcomes;
+- discovery beyond the promoted feed with source denominators;
+- fail-closed security and market-quality gates;
+- explicit UNKNOWN/STALE/PARTIAL behavior;
+- sellability and execution-quality evidence for research candidates;
+- deduplicated candidate lifecycle and durable alert history;
+- forward outcomes, no-look-ahead evaluation, and walk-forward holdout;
+- measured precision, adverse excursion, tradability, and data-quality drift;
+- operational SLOs, rollback, recovery, and incident procedures.
+
+The handoff contract must carry the exact research context into any later execution preview:
+
+```text
+mint
+pair_address
+decision_id
+decision_version
+feature_snapshot_id
+security_state
+market_quality_state
+sellability_state
+observed_at
+freshness_deadline
+score_reasons[]
+risk_warnings[]
+```
+
+Execution must never replace or rewrite the research decision. It adds a separate quote, simulation, transaction, and settlement record.
+
+---
+
+## 20. Phase 8 — Wallet readiness and non-custodial identity
+
+### Goal
+
+Introduce wallet connectivity without introducing real trading or custody risk.
+
+### Scope
+
+- Support Solana wallet-standard-compatible adapters, beginning with Phantom and an adapter boundary for Solflare, Backpack, and other supported wallets.
+- Connect/disconnect and read the public wallet address and balances.
+- Keep this phase read-only: no swap transaction, signing request, or fee collection.
+- Authenticate wallet ownership with a one-time server nonce and a clearly scoped signed message.
+- Expire nonces, prevent replay, bind sessions to wallet address and domain, and record authentication events.
+- Maintain a strict rule that the server never receives or stores seed phrases, private keys, wallet passwords, or signing capabilities.
+- Separate wallet UI state from the Radar session and support explicit disconnect/revocation.
+- Support extension and mobile/deep-link wallet flows without changing the server trust model.
+
+### Security requirements
+
+- The signed message must explicitly say that it authenticates the wallet and does not authorize a transaction.
+- The server must validate domain, wallet address, nonce, issued-at time, expiry, and signature.
+- Wallet address alone is not authentication.
+- Frontend code must use strict CSP, pinned/controlled dependencies, HTTPS, and no arbitrary remote scripts.
+- The UI must warn users about phishing and must never request a seed phrase.
+
+### Acceptance criteria
+
+- A user can connect and disconnect a supported wallet without any transaction prompt.
+- An authenticated wallet session cannot be replayed with an old nonce.
+- No private key or signing secret crosses the application boundary.
+- The Radar remains fully usable without a wallet.
+- A wallet outage cannot corrupt scan, alert, or outcome data.
+
+---
+
+## 21. Phase 9 — Quote, route, and simulation safety
+
+### Goal
+
+Build an execution preview that proves what would happen before the user is asked to sign.
+
+### Quote contract
+
+Every quote must preserve:
+
+```text
+quote_id
+quote_provider
+route
+input_mint
+output_mint
+input_amount
+expected_output
+minimum_received
+price_impact
+slippage_bps
+network_fee_estimate
+priority_fee_estimate
+application_fee
+fee_policy_version
+created_at
+expires_at
+```
+
+### Required checks
+
+- Use an approved route/quote provider; provider choice and data quality must be explicit.
+- Validate route program IDs and account addresses against an allowlist or approved policy.
+- Simulate the complete transaction before wallet signing.
+- Detect failed simulation, stale blockhash, missing accounts, account-creation requirements, compute failure, transfer fees, transfer hooks, permanent delegates, non-transferable restrictions, and other supported Token-2022 extensions.
+- Show buy and sell quotes at explicit research sizes such as `$100`, `$500`, and `$1,000`.
+- Enforce configured maximum slippage, price impact, quote age, and transaction expiry.
+- Never use a provider mid-price as an executable return.
+- A missing or failed sell quote remains `UNKNOWN` or `BLOCKED`; it is never treated as sellable.
+
+### User preview
+
+Before signing, the application must show:
+
+```text
+input amount
+expected output
+minimum received
+application fee
+route/DEX fee
+network and priority fee estimate
+price impact
+slippage tolerance
+quote expiry
+token warnings
+```
+
+The wallet prompt and application preview must describe the same intent. If they differ, signing must be blocked.
+
+### Acceptance criteria
+
+- A quote can be reproduced and audited from its immutable input.
+- A stale, failed, incomplete, or contradictory simulation blocks signing.
+- The user can see all application and network costs before approval.
+- The research candidate state remains separate from execution eligibility.
+
+---
+
+## 22. Phase 10 — Controlled non-custodial execution
+
+### Goal
+
+Allow a user to execute a deliberately approved swap while the wallet remains the only signer and custodian.
+
+### Execution boundary
+
+- The server may construct or return a transaction, but never signs it.
+- The wallet signs only after the application preview and simulation pass.
+- Initial execution must be manual only; no auto-trading, copy trading, or background signing.
+- Start with a narrow set of approved programs, routes, token programs, and liquid pairs.
+- Add configurable per-transaction, per-wallet, and daily limits.
+- Add an emergency kill switch that can disable quote generation, transaction building, or execution independently.
+- Require a fresh quote and blockhash for every signing attempt.
+
+### Settlement and audit
+
+Persist an immutable execution lifecycle:
+
+```text
+intent_created
+quote_attached
+simulation_passed
+wallet_prompted
+signed
+submitted
+confirmed
+failed
+expired
+reconciled
+```
+
+Each execution must retain wallet address, quote ID, transaction signature, route, policy versions, fee estimate, actual fee, timestamps, confirmation state, and failure reason.
+
+Use idempotency keys to prevent duplicate submissions. Reconcile confirmed transactions from the chain rather than trusting only the client response.
+
+### Fee safety
+
+- Application fee is charged only after a successful, confirmed swap.
+- Failed, rejected, expired, or simulation-blocked transactions incur no application fee.
+- Fee collection must not be able to redirect the swap output to an unapproved account.
+- The fee account is separate from operational signing infrastructure and protected with treasury controls.
+
+### Acceptance criteria
+
+- The server has no signing secret.
+- Every executed transaction has a matching approved intent, quote, simulation, and wallet signature.
+- Duplicate requests cannot create duplicate swaps.
+- Confirmed, failed, expired, and unknown settlement states are distinct.
+- Real execution can be disabled without disabling the Radar core.
+
+---
+
+## 23. Phase 11 — Versioned fee policy and transparent monetization
+
+### Goal
+
+Introduce an adjustable backend fee policy without hardcoding rates or surprising users.
+
+### Fee policy
+
+The policy must be versioned and auditable:
+
+```text
+fee_policy_version
+enabled
+buy_fee_bps
+sell_fee_bps
+fee_currency_policy
+treasury_account
+minimum_fee_policy
+maximum_fee_policy
+effective_from
+effective_until
+configuration_hash
+approved_by
+```
+
+The safe launch configuration is:
+
+```text
+enabled = false
+buy_fee_bps = 0
+sell_fee_bps = 0
+```
+
+The previously discussed `0.5% buy / 1% sell` is a future commercial hypothesis, not a hardcoded default. It must be configurable, testable, and reversible.
+
+### Transparency requirements
+
+- The backend attaches the active fee policy to every quote.
+- The frontend displays the application fee as both basis points and estimated absolute amount.
+- Application fee, DEX/route fee, network fee, priority fee, slippage, and price impact are separate line items.
+- The user sees the final expected output and minimum received before signing.
+- A client cannot override or hide the fee policy.
+- Fee changes require an authenticated administrative boundary, audit record, effective time, and rollback to zero.
+- The policy shown in the application must match the policy encoded in the transaction.
+- Fee destination and treasury account must be verifiable.
+
+### Treasury and accounting
+
+- Use a dedicated treasury account with multisig or equivalent operational controls.
+- Reconcile collected fees against confirmed transaction signatures.
+- Keep fee accounting separate from user funds and paper-trading balances.
+- Monitor unexpected fee-account changes, abnormal fee volume, and failed reconciliation.
+- Define token handling for fees, dust, transfer-tax tokens, and unsupported fee currencies before activation.
+
+### Acceptance criteria
+
+- A zero-fee launch can be enabled without a code change.
+- A fee activation or change is visible, versioned, auditable, and reversible.
+- No fee is collected from an unsuccessful execution.
+- Users can distinguish every cost before wallet approval.
+- Fee accounting reconciles to confirmed on-chain transactions.
+
+---
+
+## 24. Phase 12 — Free launch, beta, and controlled monetization rollout
+
+### Goal
+
+Prove execution reliability and user comprehension before optimizing revenue.
+
+### Rollout sequence
+
+1. **Internal execution:** restricted wallets, low limits, fee disabled.
+2. **Free beta:** real wallet execution with `0%` application fee, narrow token/route allowlist.
+3. **Measured beta:** monitor execution and user outcomes while keeping fee at zero or using an explicitly announced pilot policy.
+4. **Controlled fee activation:** enable a versioned policy for a defined cohort only after safety and reliability gates pass.
+5. **Expansion:** widen routes, tokens, limits, and user cohorts one control at a time.
+
+### Metrics
+
+Track separately:
+
+```text
+wallet_connect_success_rate
+nonce_auth_failure_rate
+quote_success_rate
+simulation_failure_rate
+quote_to_sign_conversion
+wallet_rejection_rate
+submission_success_rate
+confirmation_latency
+settlement_failure_rate
+duplicate_submission_rate
+actual_vs_estimated_output
+actual_price_impact
+fee_reconciliation_rate
+user_reported_fee_confusion
+execution_incident_rate
+```
+
+Do not optimize for fee revenue if execution failure, price impact, or user confusion is increasing.
+
+### Rollback
+
+- Disable application fee independently by setting the policy to zero.
+- Disable new execution intents without taking the Radar core offline.
+- Revert to an earlier approved route/program policy.
+- Preserve all quote, simulation, signature, and settlement records for incident review.
+- Publish a user-visible degraded state when execution is paused.
+
+---
+
+## 25. Final acceptance gate for wallet monetization
+
+Wallet monetization is not production-ready until all of the following pass:
+
+### Core prerequisite
+
+- The complete Phase 7 core acceptance gate passes.
+- Radar effectiveness claims are based on measured outcomes, not only provider scans.
+- Paper trading and real execution remain technically and visually distinct.
+
+### Wallet and identity
+
+- Supported wallet adapters pass connect/disconnect and session tests.
+- Signed nonce authentication is replay-safe and domain-bound.
+- No secret key or seed phrase enters the system.
+
+### Execution safety
+
+- Quote, simulation, route, program, token-program, slippage, and expiry checks pass.
+- Buy and sell evidence is available at configured order sizes.
+- Failed or missing sellability blocks execution.
+- Duplicate requests, restart recovery, and chain reconciliation tests pass.
+- Manual kill switches and transaction limits are operational.
+
+### Monetization
+
+- Default fee is zero until an approved policy activates it.
+- Fee policy is backend-controlled, versioned, transparent, and reversible.
+- Fee is charged only for confirmed successful execution.
+- Treasury accounting reconciles to on-chain records.
+- Fee, route, network, priority, slippage, and price-impact costs are shown separately.
+
+### Governance and operations
+
+- Security review, dependency review, incident runbook, and rollback drill are complete.
+- Legal/compliance review is completed for the jurisdictions and user markets involved.
+- Monitoring and support procedures can distinguish application defects, provider failures, wallet failures, route failures, token behavior, and market loss.
+
+Until this gate passes, the product should remain a **research Radar with optional free, tightly controlled execution beta**, not a general-purpose trading platform.
