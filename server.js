@@ -463,7 +463,8 @@ async function fetchLiveTokens() {
         }
       };
     });
-    const secured = await Promise.all(fresh.map(async item => ({ ...item, security: await verifyTokenSecurity(item.mint) })));
+    const securityResults = await verifyTokensSecurity(fresh.map(item => item.mint));
+    const secured = fresh.map((item, index) => ({ ...item, security: securityResults[index] }));
     const safeTokens = secured
       .filter(item => {
         const change = Number(String(item.priceChange || "").replace("%", ""));
