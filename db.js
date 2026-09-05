@@ -287,6 +287,25 @@ async function readState(fallback) {
       pairFailures: run.pairFailures,
       rpcStatus: run.rpcStatus,
       qualityStatus: run.qualityStatus,
+      discoveryUniverseSize: run.discoveryUniverseSize,
+      providerRecordsWithPair: run.providerRecordsWithPair,
+      providerRecordsWithPrice: run.providerRecordsWithPrice,
+      providerRecordsWithLiquidity: run.providerRecordsWithLiquidity,
+      securityVerified: run.securityVerified,
+      securityUnknown: run.securityUnknown,
+      securityRejected: run.securityRejected,
+      liquidityRejected: run.liquidityRejected,
+      momentumRejected: run.momentumRejected,
+      ctoRejected: run.ctoRejected,
+      tokensPersisted: run.tokensPersisted,
+      providerFreshnessMs: run.providerFreshnessMs,
+      rpcFreshnessMs: run.rpcFreshnessMs,
+      rpcCommitment: run.rpcCommitment,
+      timedOut: run.timedOut,
+      timeoutReason: run.timeoutReason,
+      decisionVersion: run.decisionVersion,
+      correlationId: run.correlationId,
+      sourceMetrics: run.sourceMetrics || null,
       provider: run.provider
     })),
     portfolio: dbPortfolio,
@@ -384,6 +403,19 @@ async function finishScanRun(id, data) {
   return prisma.scanRun.update({ where: { id }, data });
 }
 
+async function recordTokenObservations(observations, scanRunId) {
+  if (!Array.isArray(observations) || !observations.length) return;
+  await prisma.tokenObservation.createMany({
+    data: observations.map(observation => ({
+      ...observation,
+      scanRunId: scanRunId || null,
+      observedAt: new Date(observation.observedAt),
+      providerUpdatedAt: observation.providerUpdatedAt ? new Date(observation.providerUpdatedAt) : null,
+      pairCreatedAt: observation.pairCreatedAt ? new Date(observation.pairCreatedAt) : null
+    }))
+  });
+}
+
 async function persistPatterns(patterns) {
   await prisma.$transaction(async tx => {
     const ids = patterns.map(pattern => pattern.id);
@@ -417,4 +449,4 @@ async function disconnectDb() {
   await prisma.$disconnect();
 }
 
-module.exports = { prisma, readState, persistState, persistPatterns, recordTrade, recordWatchlistEvent, recordWhaleActivity, recordAlert, createScanRun, finishScanRun, disconnectDb };
+module.exports = { prisma, readState, persistState, persistPatterns, recordTrade, recordWatchlistEvent, recordWhaleActivity, recordAlert, createScanRun, finishScanRun, recordTokenObservations, disconnectDb };

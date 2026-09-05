@@ -150,31 +150,89 @@ model PaperTrade {
 }
 
 model ScanRun {
-  id                    String    @id @default(cuid())
-  manual                Boolean   @default(false)
-  status                String
-  startedAt             DateTime
-  finishedAt            DateTime?
-  durationMs            Int?
-  tokensScanned         Int       @default(0)
-  transactionsProcessed Int       @default(0)
-  errorCount            Int       @default(0)
-  provider              String
-  recordsChecked       Int       @default(0)
-  acceptedCount        Int       @default(0)
-  rejectedCount        Int       @default(0)
-  unresolvedCount      Int       @default(0)
-  rejectionReasons     Json?
-  filterConfig         Json?
-  providerAgeMs        Int?
-  providerRecords      Int       @default(0)
-  pairRequests         Int       @default(0)
-  pairFailures         Int       @default(0)
-  rpcStatus            String?
-  qualityStatus        String?
+  id                           String             @id @default(cuid())
+  manual                       Boolean            @default(false)
+  status                       String
+  startedAt                    DateTime
+  finishedAt                   DateTime?
+  durationMs                   Int?
+  tokensScanned                Int                @default(0)
+  transactionsProcessed        Int                @default(0)
+  errorCount                   Int                @default(0)
+  provider                     String
+  recordsChecked               Int                @default(0)
+  acceptedCount                Int                @default(0)
+  rejectedCount                Int                @default(0)
+  unresolvedCount              Int                @default(0)
+  rejectionReasons             Json?
+  filterConfig                 Json?
+  providerAgeMs                Int?
+  providerRecords              Int                @default(0)
+  pairRequests                 Int                @default(0)
+  pairFailures                 Int                @default(0)
+  rpcStatus                    String?
+  qualityStatus                String?
+  discoveryUniverseSize        Int                @default(0)
+  providerRecordsWithPair      Int                @default(0)
+  providerRecordsWithPrice     Int                @default(0)
+  providerRecordsWithLiquidity Int                @default(0)
+  securityVerified             Int                @default(0)
+  securityUnknown              Int                @default(0)
+  securityRejected             Int                @default(0)
+  liquidityRejected            Int                @default(0)
+  momentumRejected             Int                @default(0)
+  ctoRejected                  Int                @default(0)
+  tokensPersisted              Int                @default(0)
+  providerFreshnessMs          Int?
+  rpcFreshnessMs               Int?
+  rpcCommitment                String?
+  timedOut                     Boolean            @default(false)
+  timeoutReason                String?
+  decisionVersion              String             @default("baseline-v1")
+  correlationId                String?
+  sourceMetrics                Json?
+  tokenObservations            TokenObservation[]
 
   @@index([startedAt])
   @@index([status])
+}
+
+model TokenObservation {
+  id                 String    @id @default(cuid())
+  scanRunId          String?
+  mint               String
+  pairAddress        String?
+  chainId            String
+  dexId              String?
+  baseToken          Json?
+  quoteToken         Json?
+  observedAt         DateTime
+  providerUpdatedAt  DateTime?
+  pairCreatedAt      DateTime?
+  priceUsd           Float?
+  marketCap          Float?
+  fdv                Float?
+  liquidityUsd       Float?
+  volume             Json
+  transactions       Json
+  makers             Json
+  priceChange        Json
+  boostAmount        Float?
+  ctoFlag            Boolean?
+  source             String
+  sourceEndpoint     String?
+  sourceRequestId    String?
+  sourceResponseHash String?
+  freshnessMs        Int?
+  dataQuality        String
+  qualityReasons     Json
+  rawPayload         Json
+  createdAt          DateTime  @default(now())
+  scanRun            ScanRun?  @relation(fields: [scanRunId], references: [id], onDelete: SetNull)
+
+  @@index([mint, observedAt])
+  @@index([pairAddress, observedAt])
+  @@index([scanRunId])
 }
 
 model WhaleActivityPoint {

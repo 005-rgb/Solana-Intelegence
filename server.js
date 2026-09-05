@@ -1,6 +1,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { URL } = require("url");
 const {
   readState,
@@ -11,9 +12,21 @@ const {
   recordAlert,
   createScanRun,
   finishScanRun,
+  recordTokenObservations,
   persistPatterns,
   disconnectDb
 } = require("./db");
+const {
+  BASELINE_DECISION_VERSION,
+  FILTER_CONFIG,
+  MAX_TOP_HOLDER_PERCENT,
+  MIN_LIQUIDITY_USD,
+  dedupeMintEntries,
+  evaluateBaselineCandidate,
+  selectBoardTokens,
+  selectPrimaryPair,
+  summarizeBaselineCandidates
+} = require("./radar-core");
 
 const PORT = Number(process.env.PORT || 5000);
 const ROOT = __dirname;
@@ -26,7 +39,13 @@ const ANALYSIS_MS = 6 * 60 * 60 * 1000;
 let lastFilterReport = {
   checked: 0, accepted: 0, rejected: 0, unresolved: 0, reasons: [],
   providerRecords: 0, pairRequests: 0, pairFailures: 0, providerAgeMs: null,
-  rpcStatus: "NOT RUN", qualityStatus: "NOT RUN", filterConfig: null
+  rpcStatus: "NOT RUN", rpcFreshnessMs: null, rpcCommitment: "confirmed",
+  qualityStatus: "NOT RUN", filterConfig: FILTER_CONFIG, tokensPersisted: 0,
+  discoveryUniverseSize: 0, providerRecordsWithPair: 0,
+  providerRecordsWithPrice: 0, providerRecordsWithLiquidity: 0,
+  securityVerified: 0, securityUnknown: 0, securityRejected: 0,
+  liquidityRejected: 0, momentumRejected: 0, ctoRejected: 0,
+  sourceMetrics: {}
 };
 
 function token(symbol, name, price, marketCap, liquidity, radar, opportunity, smartMoney, momentum, hype, risk, confidence, priceChange, whaleFlow, holderGrowth, status, age, rationale, riskLabel, dataQuality, potential) {
@@ -128,18 +147,6 @@ function tokenById(id) {
 const SOLANA_RPC_URLS = process.env.SOLANA_RPC_URL
   ? [process.env.SOLANA_RPC_URL]
   : ["https://solana-rpc.publicnode.com", "https://api.mainnet-beta.solana.com"];
-const MAX_TOP_HOLDER_PERCENT = 80;
-const MIN_LIQUIDITY_USD = 10_000;
-const FILTER_CONFIG = {
-  version: "baseline-v1",
-  mintAuthority: "RENOUNCED",
-  freezeAuthority: "RENOUNCED",
-  largestHolderMaximum: `${MAX_TOP_HOLDER_PERCENT}%`,
-  minimumLiquidityUsd: MIN_LIQUIDITY_USD,
-  positive24hChange: true,
-  ctoFlag: false
-};
-lastFilterReport.filterConfig = FILTER_CONFIG;
 let rpcInFlight = 0;
 const rpcWaiters = [];
 
@@ -438,10 +445,62 @@ function derivePatterns(tokens, scanRuns = []) {
   ];
 }
 
-async function fetchLiveTokens() {
+function appendScanRunToState(scanRun, status, audit, details) {
+  if (!scanRun?.id) return;
+  state.scanRuns = [{
+    id: scanRun.id,
+    manual: Boolean(scanRun.manual),
+    status,
+    startedAt: scanRun.startedAt instanceof Date ? scanRun.startedAt.toISOString() : String(scanRun.startedAt),
+    ...details,
+    ...audit
+  }, ...(state.scanRuns || [])].slice(0, 100);
+}
+
+function observationData(item, endpoint, sourceRequestId, observedAt) {
+  const pair = item.details?.pair || {};
+  const providerMetadata = item.details?.providerMetadata || {};
+  const decision = evaluateBaselineCandidate(item);
+  const rawPayload = { providerMetadata, pair };
+  return {
+    mint: item.mint,
+    pairAddress: pair.address || null,
+    chainId: providerMetadata.chainId || "solana",
+    dexId: pair.dexId || null,
+    baseToken: pair.baseToken || {},
+    quoteToken: pair.quoteToken || {},
+    observedAt,
+    providerUpdatedAt: providerMetadata.providerUpdatedAt || null,
+    pairCreatedAt: pair.pairCreatedAt || null,
+    priceUsd: Number.isFinite(Number(pair.priceUsd)) ? Number(pair.priceUsd) : null,
+    marketCap: Number.isFinite(Number(pair.marketCap)) ? Number(pair.marketCap) : null,
+    fdv: Number.isFinite(Number(pair.fdv)) ? Number(pair.fdv) : null,
+    liquidityUsd: Number.isFinite(Number(pair.liquidityUsd)) ? Number(pair.liquidityUsd) : null,
+    volume: pair.volume || {},
+    transactions: pair.txns || {},
+    makers: pair.makers || {},
+    priceChange: pair.priceChange || {},
+    boostAmount: Number.isFinite(Number(providerMetadata.boostAmount)) ? Number(providerMetadata.boostAmount) : null,
+    ctoFlag: typeof providerMetadata.cto === "boolean" ? providerMetadata.cto : null,
+    source: "DexScreener",
+    sourceEndpoint: endpoint,
+    sourceRequestId,
+    sourceResponseHash: crypto.createHash("sha256").update(JSON.stringify(rawPayload)).digest("hex"),
+    freshnessMs: Number.isFinite(Date.parse(providerMetadata.providerUpdatedAt || ""))
+      ? Math.max(0, Date.now() - Date.parse(providerMetadata.providerUpdatedAt))
+      : null,
+    dataQuality: pair.address ? "PARTIAL_SECURITY_SEPARATE" : "MISSING_PAIR",
+    qualityReasons: decision.reasonCodes,
+    rawPayload
+  };
+}
+
+async function fetchLiveTokens({ correlationId } = {}) {
   const endpoint = process.env.DEXSCREENER_API_URL || "https://api.dexscreener.com/token-boosts/latest/v1";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 7000);
+  const observedAt = new Date().toISOString();
+  const sourceRequestId = correlationId || crypto.randomUUID();
   let pairRequests = 0;
   let pairFailures = 0;
   try {
@@ -449,66 +508,48 @@ async function fetchLiveTokens() {
     if (!response.ok) throw new Error(`Provider HTTP ${response.status}`);
     const payload = await response.json();
     const entries = Array.isArray(payload) ? payload.filter(item => item && item.chainId === "solana") : [];
-    const boostedEntries = [];
-    const seenMints = new Set();
-    for (const item of entries) {
-      if (!item.tokenAddress || seenMints.has(item.tokenAddress)) continue;
-      seenMints.add(item.tokenAddress);
-      boostedEntries.push(item);
-      if (boostedEntries.length === 10) break;
-    }
+    const boostedEntries = dedupeMintEntries(entries, 10);
     pairRequests = boostedEntries.length;
     const pairResponses = await Promise.all(boostedEntries.map(async item => {
       const mint = item.tokenAddress;
-      if (!mint) return { pairs: [] };
       try {
         const pairResponse = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(mint)}`, {
           signal: controller.signal,
           headers: { Accept: "application/json" }
         });
-        if (!pairResponse.ok) return { pairs: [] };
+        if (!pairResponse.ok) {
+          pairFailures += 1;
+          return { pairs: [] };
+        }
         return await pairResponse.json();
       } catch {
         pairFailures += 1;
         return { pairs: [] };
       }
     }));
+    const allPairs = pairResponses.flatMap(result => Array.isArray(result?.pairs) ? result.pairs.filter(pair => pair?.chainId === "solana") : []);
     const fresh = boostedEntries.map((item, index) => {
       const mint = item.tokenAddress || `live-${index}`;
       const pairs = Array.isArray(pairResponses[index]?.pairs)
         ? pairResponses[index].pairs.filter(pair => pair && pair.chainId === "solana")
         : [];
-      const pair = pairs.sort((left, right) => Number(right.liquidity?.usd || 0) - Number(left.liquidity?.usd || 0))[0] || null;
+      const pair = selectPrimaryPair(pairs);
       const shortMint = mint.slice(0, 4).toUpperCase();
       const baseToken = pair?.baseToken || {};
       const pairInfo = pair?.info || {};
       const symbol = baseToken.symbol || item.symbol || `SOL-${shortMint}`;
       const name = baseToken.name || item.name || String(item.description || "").split(/\r?\n/).map(line => line.trim()).find(Boolean) || `Solana token ${shortMint}`;
       const description = item.description || pairInfo.description || null;
-      const links = providerLinks(
-        item.links,
-        pairInfo.websites,
-        pairInfo.socials
-      );
-      const websites = providerLinks(item.links, pairInfo.websites).filter(link => link.type !== "twitter" && link.type !== "telegram" && link.type !== "discord");
+      const links = providerLinks(item.links, pairInfo.websites, pairInfo.socials);
+      const websites = providerLinks(item.links, pairInfo.websites).filter(link => !["twitter", "telegram", "discord"].includes(link.type));
       const socials = providerLinks(item.links, pairInfo.socials).filter(link => !websites.some(site => site.url === link.url));
       const imageUrl = /^https?:\/\//i.test(String(item.icon || "")) ? item.icon : pairInfo.imageUrl || null;
       const headerUrl = /^https?:\/\//i.test(String(item.header || "")) ? item.header : pairInfo.header || null;
       const providerMetadata = {
-        chainId: item.chainId,
-        symbol,
-        name,
-        icon: imageUrl,
-        header: headerUrl,
-        openGraph: item.openGraph || null,
-        description,
-        links,
-        websites,
-        socials,
-        pairInfo,
+        chainId: item.chainId, symbol, name, icon: imageUrl, header: headerUrl,
+        openGraph: item.openGraph || null, description, links, websites, socials, pairInfo,
         cto: typeof item.cto === "boolean" ? item.cto : null,
-        boostAmount: item.amount ?? null,
-        totalBoostAmount: item.totalAmount ?? null,
+        boostAmount: item.amount ?? null, totalBoostAmount: item.totalAmount ?? null,
         providerUpdatedAt: item.updatedAt || null
       };
       const evidence = [
@@ -526,121 +567,47 @@ async function fetchLiveTokens() {
       const priceChange = pair?.priceChange?.h24 != null ? `${Number(pair.priceChange.h24).toFixed(2)}%` : "UNKNOWN";
       const base = token(symbol, name, price, marketCap, liquidity, null, null, null, null, null, null, null, priceChange, "UNKNOWN", "UNKNOWN", providerMetadata.cto ? "CTO FLAG" : "PROVIDER", providerAge, "Pending independent Solana security verification.", "unknown", null, "UNKNOWN");
       return {
-        ...base,
-        mint,
-        symbol,
-        name,
+        ...base, mint, symbol, name,
         providerUrl: pair?.url || item.url || `https://dexscreener.com/solana/${mint}`,
         details: {
-          ...base.details,
-          source: endpoint,
-          coverage: "DEXSCREENER_TOKEN_BOOST_METADATA",
+          ...base.details, source: endpoint, coverage: "DEXSCREENER_TOKEN_BOOST_METADATA",
           pair: pair ? {
-            address: pair.pairAddress || null,
-            dexId: pair.dexId || null,
-            url: pair.url || null,
-            baseToken: pair.baseToken || null,
-            quoteToken: pair.quoteToken || null,
-            pairCreatedAt: pair.pairCreatedAt || null,
-            labels: Array.isArray(pair.labels) ? pair.labels : [],
-            priceUsd: pair.priceUsd ?? null,
-            fdv: pair.fdv ?? null,
-            marketCap: pair.marketCap ?? null,
-            liquidityUsd: pair.liquidity?.usd ?? null,
-            volume: pair.volume || {},
-            priceChange: pair.priceChange || {},
-            txns: pair.txns || {},
-            makers: pair.makers || {},
-            info: pair.info || null
+            address: pair.pairAddress || null, dexId: pair.dexId || null, url: pair.url || null,
+            baseToken: pair.baseToken || null, quoteToken: pair.quoteToken || null,
+            pairCreatedAt: pair.pairCreatedAt || null, labels: Array.isArray(pair.labels) ? pair.labels : [],
+            priceUsd: pair.priceUsd ?? null, fdv: pair.fdv ?? null, marketCap: pair.marketCap ?? null,
+            liquidityUsd: pair.liquidity?.usd ?? null, volume: pair.volume || {},
+            priceChange: pair.priceChange || {}, txns: pair.txns || {}, makers: pair.makers || {},
+            info: pair.info || null, pairCountForMint: pairs.length
           } : null,
           providerMetadata,
-          profile: {
-            description,
-            imageUrl,
-            headerUrl,
-            websites,
-            socials,
-            openGraph: item.openGraph || null
-          },
+          profile: { description, imageUrl, headerUrl, websites, socials, openGraph: item.openGraph || null },
           evidence
         }
       };
     });
+    const rpcStartedAt = Date.now();
     const securityResults = await verifyTokensSecurity(fresh.map(item => item.mint));
-    const secured = fresh.map((item, index) => ({ ...item, security: securityResults[index] }));
-    const safeTokens = secured
-      .filter(item => {
-        const change = Number(String(item.priceChange || "").replace("%", ""));
-        return item.security.verified &&
-          item.price !== "UNKNOWN" &&
-          Number(item.liquidity) >= MIN_LIQUIDITY_USD &&
-          Number.isFinite(change) &&
-          change > 0 &&
-          item.details.providerMetadata.cto !== true;
-      })
-      .map(item => {
-        const rationale = buildTokenReview(item, item.security);
-        return {
-          ...item,
-          rationale,
-          potential: "UPWARD BIAS",
-          details: {
-            ...item.details,
-            holders: item.security.holders,
-            holderConcentration: item.security.topHolderPercent,
-            authorities: item.security.authorities,
-            security: item.security,
-            evidence: [...item.details.evidence, ...item.security.reasons, rationale]
-          }
-        };
-      });
-    const reasonCounts = new Map();
-    const addReason = (code, reason) => {
-      const current = reasonCounts.get(code) || { code, reason, count: 0 };
-      current.count += 1;
-      reasonCounts.set(code, current);
-    };
-    let unresolved = 0;
-    for (const item of secured) {
-      const reasons = [];
-      let hasUnknown = false;
-      if (!item.security.verified) {
-        const code = item.security.status === "UNVERIFIED" ? "SECURITY_UNKNOWN" : "SECURITY_REJECTED";
-        item.security.reasons.forEach(reason => addReason(code, reason));
-        reasons.push(...item.security.reasons);
-        hasUnknown ||= item.security.status === "UNVERIFIED";
-      }
-      if (item.price === "UNKNOWN") {
-        addReason("PRICE_UNKNOWN", "Provider price is unavailable.");
-        reasons.push("Provider price is unavailable.");
-        hasUnknown = true;
-      }
-      const liquidity = Number(item.liquidity);
-      if (!Number.isFinite(liquidity)) {
-        addReason("LIQUIDITY_UNKNOWN", "Provider liquidity is unavailable.");
-        reasons.push("Provider liquidity is unavailable.");
-        hasUnknown = true;
-      } else if (liquidity < MIN_LIQUIDITY_USD) {
-        addReason("LIQUIDITY_BELOW_MINIMUM", `Liquidity is below $${MIN_LIQUIDITY_USD.toLocaleString("en-US")}.`);
-        reasons.push(`Liquidity is below $${MIN_LIQUIDITY_USD.toLocaleString("en-US")}.`);
-      }
-      const change = Number(String(item.priceChange || "").replace("%", ""));
-      if (!Number.isFinite(change)) {
-        addReason("PRICE_CHANGE_UNKNOWN", "Provider 24h change is unavailable.");
-        reasons.push("Provider 24h change is unavailable.");
-        hasUnknown = true;
-      } else if (change <= 0) {
-        addReason("PRICE_CHANGE_NOT_POSITIVE", "Provider 24h change is not positive.");
-        reasons.push("Provider 24h change is not positive.");
-      }
-      if (item.details.providerMetadata.cto === true) {
-        addReason("CTO_FLAG", "Provider marked the token as CTO.");
-        reasons.push("Provider marked the token as CTO.");
-      }
-      if (!item.security.verified || item.price === "UNKNOWN" || item.details.providerMetadata.cto === true || !Number.isFinite(liquidity) || !Number.isFinite(change) || liquidity < MIN_LIQUIDITY_USD || change <= 0) {
-        if (hasUnknown) unresolved += 1;
-      }
-    }
+    const rpcFreshnessMs = Date.now() - rpcStartedAt;
+    const secured = fresh.map((item, index) => ({
+      ...item,
+      security: securityResults[index],
+      details: { ...item.details, security: securityResults[index] }
+    }));
+    const decisions = secured.map(evaluateBaselineCandidate);
+    const safeTokens = secured.filter((item, index) => decisions[index].accepted).map(item => {
+      const rationale = buildTokenReview(item, item.security);
+      return {
+        ...item, rationale, potential: "UPWARD BIAS",
+        details: {
+          ...item.details, holders: item.security.holders,
+          holderConcentration: item.security.topHolderPercent,
+          authorities: item.security.authorities,
+          security: item.security,
+          evidence: [...item.details.evidence, ...item.security.reasons, rationale]
+        }
+      };
+    });
     const providerAgeMs = fresh.reduce((maxAge, item) => {
       const updatedAt = Date.parse(item.details?.providerMetadata?.providerUpdatedAt || "");
       return Number.isFinite(updatedAt) ? Math.max(maxAge, Math.max(0, Date.now() - updatedAt)) : maxAge;
@@ -648,26 +615,41 @@ async function fetchLiveTokens() {
     const rpcStatuses = securityResults.map(result => result.status);
     const rpcStatus = rpcStatuses.length && rpcStatuses.every(status => status !== "UNVERIFIED")
       ? "LIVE"
-      : rpcStatuses.some(status => status !== "UNVERIFIED")
-        ? "PARTIAL"
-        : "FAILED";
-    const qualityStatus = pairFailures > 0 ? "PARTIAL" : "FULL";
-    lastFilterReport = {
+      : rpcStatuses.some(status => status !== "UNVERIFIED") ? "PARTIAL" : "FAILED";
+    const report = summarizeBaselineCandidates(secured, {
       checked: secured.length,
-      accepted: safeTokens.length,
-      rejected: secured.length - safeTokens.length - unresolved,
-      unresolved,
-      reasons: [...reasonCounts.values()].sort((left, right) => right.count - left.count).slice(0, 8),
       providerRecords: entries.length,
-      pairRequests,
-      pairFailures,
-      providerAgeMs,
-      rpcStatus,
-      qualityStatus,
-      filterConfig: FILTER_CONFIG
+      discoveryUniverseSize: boostedEntries.length,
+      providerRecordsWithPair: fresh.filter(item => item.details?.pair).length,
+      providerRecordsWithPrice: fresh.filter(item => item.price !== "UNKNOWN").length,
+      providerRecordsWithLiquidity: fresh.filter(item => item.liquidity != null).length,
+      pairRequests, pairFailures, providerAgeMs, rpcFreshnessMs,
+      rpcStatus, rpcCommitment: "confirmed",
+      qualityStatus: pairFailures > 0 ? "PARTIAL" : "FULL",
+      filterConfig: FILTER_CONFIG,
+      sourceMetrics: {
+        boost_feed_seen: entries.length,
+        unique_mints_before_dedup: new Set(entries.map(item => item.tokenAddress).filter(Boolean)).size,
+        unique_pairs_before_dedup: new Set(allPairs.map(pair => pair.pairAddress).filter(Boolean)).size,
+        unique_mints_after_dedup: boostedEntries.length,
+        source_overlap: {},
+        source_only_candidates: { boost_feed: boostedEntries.length }
+      }
+    });
+    lastFilterReport = {
+      ...report,
+      checked: report.recordsChecked,
+      accepted: report.accepted,
+      rejected: report.rejected,
+      unresolved: report.unresolved,
+      tokensPersisted: safeTokens.length,
+      reasons: report.reasons
     };
-    if (!safeTokens.length) throw new Error("No token passed the LIVE security and upward-evidence filters.");
-    return safeTokens;
+    return {
+      tokens: safeTokens,
+      observations: secured.map(item => observationData(item, endpoint, sourceRequestId, observedAt)),
+      report: lastFilterReport
+    };
   } finally {
     clearTimeout(timeout);
   }
@@ -677,7 +659,28 @@ async function runScan(manual = false) {
   if (state.scanRunning) return { ok: false, message: "A scan is already running." };
   state.scanRunning = true;
   const started = Date.now();
+  const correlationId = crypto.randomUUID();
   let scanRun = null;
+  let scanResult = null;
+  lastFilterReport = {
+    ...lastFilterReport,
+    checked: 0,
+    accepted: 0,
+    rejected: 0,
+    unresolved: 0,
+    reasons: [],
+    providerRecords: 0,
+    pairRequests: 0,
+    pairFailures: 0,
+    providerAgeMs: null,
+    rpcFreshnessMs: null,
+    rpcStatus: "NOT RUN",
+    qualityStatus: "RUNNING",
+    tokensPersisted: 0,
+    timedOut: false,
+    timeoutReason: null,
+    sourceMetrics: {}
+  };
   const scanAudit = () => ({
     recordsChecked: lastFilterReport.checked || 0,
     acceptedCount: lastFilterReport.accepted || 0,
@@ -690,7 +693,26 @@ async function runScan(manual = false) {
     pairRequests: lastFilterReport.pairRequests || 0,
     pairFailures: lastFilterReport.pairFailures || 0,
     rpcStatus: lastFilterReport.rpcStatus || "NOT RUN",
-    qualityStatus: lastFilterReport.qualityStatus || "NOT RUN"
+    qualityStatus: lastFilterReport.qualityStatus || "NOT RUN",
+    discoveryUniverseSize: lastFilterReport.discoveryUniverseSize || 0,
+    providerRecordsWithPair: lastFilterReport.providerRecordsWithPair || 0,
+    providerRecordsWithPrice: lastFilterReport.providerRecordsWithPrice || 0,
+    providerRecordsWithLiquidity: lastFilterReport.providerRecordsWithLiquidity || 0,
+    securityVerified: lastFilterReport.securityVerified || 0,
+    securityUnknown: lastFilterReport.securityUnknown || 0,
+    securityRejected: lastFilterReport.securityRejected || 0,
+    liquidityRejected: lastFilterReport.liquidityRejected || 0,
+    momentumRejected: lastFilterReport.momentumRejected || 0,
+    ctoRejected: lastFilterReport.ctoRejected || 0,
+    tokensPersisted: lastFilterReport.tokensPersisted || 0,
+    providerFreshnessMs: lastFilterReport.providerAgeMs ?? null,
+    rpcFreshnessMs: lastFilterReport.rpcFreshnessMs ?? null,
+    rpcCommitment: lastFilterReport.rpcCommitment || "confirmed",
+    timedOut: Boolean(lastFilterReport.timedOut),
+    timeoutReason: lastFilterReport.timeoutReason || null,
+    decisionVersion: BASELINE_DECISION_VERSION,
+    correlationId,
+    sourceMetrics: lastFilterReport.sourceMetrics || {}
   });
   try {
     scanRun = await Promise.race([
@@ -699,6 +721,8 @@ async function runScan(manual = false) {
         status: "RUNNING",
         startedAt: new Date(started),
         provider: state.provider,
+        decisionVersion: BASELINE_DECISION_VERSION,
+        correlationId,
         ...scanAudit()
       }),
       new Promise((_, reject) => setTimeout(() => reject(new Error("Scan run could not be registered in the database.")), 8000))
@@ -706,13 +730,17 @@ async function runScan(manual = false) {
     state.mode = "live";
     state.provider = "DexScreener";
     const previousTokens = state.tokens;
-    state.tokens = await Promise.race([
-      fetchLiveTokens(),
+    scanResult = await Promise.race([
+      fetchLiveTokens({ correlationId }),
       new Promise((_, reject) => setTimeout(() => reject(new Error("LIVE scan timed out before provider verification completed.")), LIVE_SCAN_TIMEOUT_MS))
     ]);
+    lastFilterReport = scanResult.report;
+    if (scanRun?.id) await recordTokenObservations(scanResult.observations, scanRun.id);
+    const hasAcceptedTokens = scanResult.tokens.length > 0;
+    state.tokens = selectBoardTokens(state.tokens, scanResult.tokens);
+    lastFilterReport.tokensPersisted = hasAcceptedTokens ? scanResult.tokens.length : 0;
+    if (!hasAcceptedTokens) throw new Error("No token passed the LIVE security and upward-evidence filters.");
     await publishPotentialAlerts(previousTokens, state.tokens);
-    state.patterns = derivePatterns(state.tokens, state.scanRuns);
-    await persistPatterns(state.patterns);
     state.system.rpc = "LIVE PROVIDER";
     state.system.market = "LIVE PROVIDER";
     state.whaleActivity = [];
@@ -720,27 +748,49 @@ async function runScan(manual = false) {
     state.nextScanAt = Date.now() + AUTO_SCAN_MS;
     state.system.lastScanStatus = "SUCCESS";
     state.system.avgDuration = `${Date.now() - started}ms`;
-    state.system.tokensPerScan = state.tokens.length;
+    state.system.tokensPerScan = scanResult.tokens.length;
     state.system.transactionsPerScan = 0;
     state.system.securityFilter = lastFilterReport;
     state.system.lastScanQuality = lastFilterReport.qualityStatus;
     state.system.lastScanRunId = scanRun.id;
     delete state.system.lastScanError;
     state.scanRunning = false;
+    const finishedAt = new Date();
+    const durationMs = Date.now() - started;
     await finishScanRun(scanRun.id, {
       status: "SUCCESS",
-      finishedAt: new Date(),
-      durationMs: Date.now() - started,
+      finishedAt,
+      durationMs,
       tokensScanned: state.tokens.length,
       transactionsProcessed: 0,
       errorCount: 0,
       ...scanAudit()
     });
+    appendScanRunToState(scanRun, "SUCCESS", scanAudit(), {
+      finishedAt: finishedAt.toISOString(),
+      durationMs,
+      tokensScanned: state.tokens.length,
+      transactionsProcessed: 0,
+      errorCount: 0
+    });
+    state.patterns = derivePatterns(state.tokens, state.scanRuns);
+    await persistPatterns(state.patterns);
     await saveState();
     return { ok: true, manual, duration: Date.now() - started, tokens: state.tokens.length };
   } catch (error) {
     state.scanRunning = false;
     const filtered = error.message === "No token passed the LIVE security and upward-evidence filters.";
+    const timedOut = /timed out|timeout|aborted/i.test(error.message);
+    if (!scanResult) {
+      lastFilterReport = {
+        ...lastFilterReport,
+        qualityStatus: timedOut ? "TIMEOUT" : "FAILED",
+        rpcStatus: "UNKNOWN",
+        timedOut,
+        timeoutReason: timedOut ? error.message : null,
+        tokensPersisted: 0
+      };
+    }
     state.nextScanAt = Date.now() + AUTO_SCAN_MS;
     state.system.lastScanStatus = filtered ? "FILTERED · 0 SAFE TOKENS" : "FAILED";
     state.system.tokensPerScan = 0;
@@ -749,15 +799,31 @@ async function runScan(manual = false) {
     state.system.lastScanQuality = filtered ? lastFilterReport.qualityStatus : "FAILED";
     if (scanRun?.id) state.system.lastScanRunId = scanRun.id;
     if (!filtered) state.system.errors += 1;
-    if (scanRun) await finishScanRun(scanRun.id, {
-        status: filtered ? "FILTERED" : "FAILED",
-        finishedAt: new Date(),
-        durationMs: Date.now() - started,
+    if (scanRun) {
+      const finishedAt = new Date();
+      const durationMs = Date.now() - started;
+      const status = filtered ? "FILTERED" : "FAILED";
+      const audit = scanAudit();
+      await finishScanRun(scanRun.id, {
+        status,
+        finishedAt,
+        durationMs,
         tokensScanned: 0,
         transactionsProcessed: 0,
         errorCount: filtered ? 0 : 1,
-        ...scanAudit()
+        timedOut,
+        timeoutReason: timedOut ? error.message : null,
+        tokensPersisted: 0,
+        ...audit
       });
+      appendScanRunToState(scanRun, status, audit, {
+        finishedAt: finishedAt.toISOString(),
+        durationMs,
+        tokensScanned: 0,
+        transactionsProcessed: 0,
+        errorCount: filtered ? 0 : 1
+      });
+    }
     await saveState();
     return { ok: false, message: filtered ? "No token passed the active security filters. No token was added to Radar." : "DexScreener provider temporarily unavailable. Data remains unchanged.", securityFilter: lastFilterReport };
   }
