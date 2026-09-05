@@ -89,3 +89,24 @@ test("duplicate mints and pairs resolve deterministically", () => {
     { chainId: "solana", pairAddress: "a", priceUsd: "1", liquidity: { usd: 1000 }, pairCreatedAt: 2 }
   ]).pairAddress, "a");
 });
+
+test("partial candidate data remains unresolved and cannot reconcile as accepted", () => {
+  const report = summarizeBaselineCandidates([
+    verifiedItem({
+      security: {
+        verified: false,
+        status: "UNVERIFIED",
+        authorities: { mint: "UNKNOWN", freeze: "UNKNOWN" },
+        topHolderPercent: null,
+        supply: null
+      }
+    }),
+    verifiedItem({ liquidity: null })
+  ]);
+  assert.equal(report.accepted, 0);
+  assert.equal(report.unresolved, 2);
+  assert.equal(report.rejected, 0);
+  assert.equal(report.recordsChecked, 2);
+  assert.equal(report.recordsChecked, report.accepted + report.rejected + report.unresolved);
+  assert.deepEqual(report.reasons.map(reason => reason.code), ["LIQUIDITY_UNKNOWN", "SECURITY_UNKNOWN"]);
+});

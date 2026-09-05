@@ -203,7 +203,7 @@ async function solanaRpc(method, params) {
   }
 }
 
-async function solanaRpcBatch(requests) {
+async function solanaRpcBatch(requests, signal) {
   await acquireRpcSlot();
   try {
     let lastError;
@@ -214,7 +214,7 @@ async function solanaRpcBatch(requests) {
         try {
           const response = await fetch(endpoint, {
             method: "POST",
-            signal: controller.signal,
+            signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
             headers: { "Content-Type": "application/json", Accept: "application/json" },
             body: JSON.stringify(requests)
           });
@@ -227,6 +227,7 @@ async function solanaRpcBatch(requests) {
           if (!Array.isArray(payload)) throw new Error("Solana RPC batch response was invalid");
           return payload;
         } catch (error) {
+          if (signal?.aborted) throw new Error("Solana RPC request aborted by scan deadline.");
           lastError = error;
           if (attempt === 2) break;
           await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)));
@@ -262,10 +263,18 @@ function securityFromRpcResults(accountResponse, supplyResponse, largestResponse
     const supply = supplyResponse?.result;
     const largest = largestResponse?.result;
     const info = account?.value?.data?.parsed?.info;
+    const supplyAmount = supply?.value?.amount;
+    const largestAccounts = largest?.value;
+    if (!info || !supplyAmount || !Array.isArray(largestAccounts) || !largestAccounts.length) {
+      return unverifiedSecurity("Solana RPC security response is incomplete.");
+    }
     const mintAuthorityRenounced = Boolean(info) && info.mintAuthority == null;
     const freezeAuthorityRenounced = Boolean(info) && info.freezeAuthority == null;
-    const supplyRaw = BigInt(supply?.value?.amount || "0");
-    const largestRaw = BigInt(largest?.value?.[0]?.amount || "0");
+    const supplyRaw = BigInt(supplyAmount);
+    const largestRaw = BigInt(largestAccounts[0]?.amount || "0");
+    if (supplyRaw <= 0n || largestAccounts[0]?.amount == null) {
+      return unverifiedSecurity("Solana RPC supply or largest-holder data is invalid.");
+    }
     const topHolderPercent = supplyRaw > 0n ? Number((largestRaw * 10000n) / supplyRaw) / 100 : null;
     const topHolders = Array.isArray(largest?.value)
       ? largest.value.slice(0, 20).map((holder, index) => {
@@ -306,14 +315,14 @@ function securityFromRpcResults(accountResponse, supplyResponse, largestResponse
   }
 }
 
-async function verifyTokensSecurity(mints) {
+async function verifyTokensSecurity(mints, signal) {
   const requests = mints.flatMap((mint, index) => [
     { jsonrpc: "2.0", id: `${index}:account`, method: "getAccountInfo", params: [mint, { encoding: "jsonParsed", commitment: "confirmed" }] },
     { jsonrpc: "2.0", id: `${index}:supply`, method: "getTokenSupply", params: [mint, { commitment: "confirmed" }] },
     { jsonrpc: "2.0", id: `${index}:largest`, method: "getTokenLargestAccounts", params: [mint, { commitment: "confirmed" }] }
   ]);
   try {
-    const responses = await solanaRpcBatch(requests);
+    const responses = await solanaRpcBatch(requests, signal);
     const byId = new Map(responses.map(response => [String(response.id), response]));
     return mints.map((_, index) => securityFromRpcResults(
       byId.get(`${index}:account`),
@@ -495,7 +504,7 @@ function observationData(item, endpoint, sourceRequestId, observedAt) {
   };
 }
 
-async function fetchLiveTokens({ correlationId } = {}) {
+async function fetchLiveTokens({ correlationId, signal } = {}) {
   const endpoint = process.env.DEXSCREENER_API_URL || "https://api.dexscreener.com/token-boosts/latest/v1";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 7000);
@@ -504,7 +513,8 @@ async function fetchLiveTokens({ correlationId } = {}) {
   let pairRequests = 0;
   let pairFailures = 0;
   try {
-    const response = await fetch(endpoint, { signal: controller.signal, headers: { Accept: "application/json" } });
+    const requestSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
+    const response = await fetch(endpoint, { signal: requestSignal, headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error(`Provider HTTP ${response.status}`);
     const payload = await response.json();
     const entries = Array.isArray(payload) ? payload.filter(item => item && item.chainId === "solana") : [];
@@ -514,7 +524,7 @@ async function fetchLiveTokens({ correlationId } = {}) {
       const mint = item.tokenAddress;
       try {
         const pairResponse = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(mint)}`, {
-          signal: controller.signal,
+          signal: requestSignal,
           headers: { Accept: "application/json" }
         });
         if (!pairResponse.ok) {
@@ -587,7 +597,7 @@ async function fetchLiveTokens({ correlationId } = {}) {
       };
     });
     const rpcStartedAt = Date.now();
-    const securityResults = await verifyTokensSecurity(fresh.map(item => item.mint));
+    const securityResults = await verifyTokensSecurity(fresh.map(item => item.mint), signal);
     const rpcFreshnessMs = Date.now() - rpcStartedAt;
     const secured = fresh.map((item, index) => ({
       ...item,
@@ -625,13 +635,18 @@ async function fetchLiveTokens({ correlationId } = {}) {
       providerRecordsWithLiquidity: fresh.filter(item => item.liquidity != null).length,
       pairRequests, pairFailures, providerAgeMs, rpcFreshnessMs,
       rpcStatus, rpcCommitment: "confirmed",
-      qualityStatus: pairFailures > 0 ? "PARTIAL" : "FULL",
+       qualityStatus: rpcStatus === "LIVE" && pairFailures === 0
+         ? "FULL"
+         : rpcStatus === "PARTIAL" || pairFailures > 0
+           ? "PARTIAL"
+           : "FAILED",
       filterConfig: FILTER_CONFIG,
       sourceMetrics: {
         boost_feed_seen: entries.length,
         unique_mints_before_dedup: new Set(entries.map(item => item.tokenAddress).filter(Boolean)).size,
         unique_pairs_before_dedup: new Set(allPairs.map(pair => pair.pairAddress).filter(Boolean)).size,
-        unique_mints_after_dedup: boostedEntries.length,
+         unique_mints_after_dedup: boostedEntries.length,
+         unique_pairs_after_dedup: new Set(fresh.map(item => item.details?.pair?.address).filter(Boolean)).size,
         source_overlap: {},
         source_only_candidates: { boost_feed: boostedEntries.length }
       }
@@ -662,6 +677,8 @@ async function runScan(manual = false) {
   const correlationId = crypto.randomUUID();
   let scanRun = null;
   let scanResult = null;
+  const scanController = new AbortController();
+  let scanDeadline;
   lastFilterReport = {
     ...lastFilterReport,
     checked: 0,
@@ -730,16 +747,24 @@ async function runScan(manual = false) {
     state.mode = "live";
     state.provider = "DexScreener";
     const previousTokens = state.tokens;
+    scanDeadline = setTimeout(() => scanController.abort(), LIVE_SCAN_TIMEOUT_MS);
     scanResult = await Promise.race([
-      fetchLiveTokens({ correlationId }),
+      fetchLiveTokens({ correlationId, signal: scanController.signal }),
       new Promise((_, reject) => setTimeout(() => reject(new Error("LIVE scan timed out before provider verification completed.")), LIVE_SCAN_TIMEOUT_MS))
     ]);
+    clearTimeout(scanDeadline);
     lastFilterReport = scanResult.report;
     if (scanRun?.id) await recordTokenObservations(scanResult.observations, scanRun.id);
     const hasAcceptedTokens = scanResult.tokens.length > 0;
-    state.tokens = selectBoardTokens(state.tokens, scanResult.tokens);
-    lastFilterReport.tokensPersisted = hasAcceptedTokens ? scanResult.tokens.length : 0;
-    if (!hasAcceptedTokens) throw new Error("No token passed the LIVE security and upward-evidence filters.");
+    const completeScan = scanResult.report.qualityStatus === "FULL";
+    if (completeScan && hasAcceptedTokens) {
+      state.tokens = selectBoardTokens(state.tokens, scanResult.tokens);
+      lastFilterReport.tokensPersisted = scanResult.tokens.length;
+    } else {
+      lastFilterReport.tokensPersisted = 0;
+      if (!completeScan) throw new Error(`LIVE scan completed with ${scanResult.report.qualityStatus.toLowerCase()} coverage.`);
+      throw new Error("No token passed the LIVE security and upward-evidence filters.");
+    }
     await publishPotentialAlerts(previousTokens, state.tokens);
     state.system.rpc = "LIVE PROVIDER";
     state.system.market = "LIVE PROVIDER";
@@ -778,8 +803,12 @@ async function runScan(manual = false) {
     await saveState();
     return { ok: true, manual, duration: Date.now() - started, tokens: state.tokens.length };
   } catch (error) {
+    if (scanDeadline) clearTimeout(scanDeadline);
     state.scanRunning = false;
-    const filtered = error.message === "No token passed the LIVE security and upward-evidence filters.";
+    const filtered = error.message === "No token passed the LIVE security and upward-evidence filters."
+      && lastFilterReport.unresolved === 0
+      && lastFilterReport.qualityStatus === "FULL";
+    const partial = Boolean(scanResult) && lastFilterReport.qualityStatus === "PARTIAL";
     const timedOut = /timed out|timeout|aborted/i.test(error.message);
     if (!scanResult) {
       lastFilterReport = {
@@ -792,17 +821,21 @@ async function runScan(manual = false) {
       };
     }
     state.nextScanAt = Date.now() + AUTO_SCAN_MS;
-    state.system.lastScanStatus = filtered ? "FILTERED · 0 SAFE TOKENS" : "FAILED";
+    state.system.lastScanStatus = filtered
+      ? "FILTERED · 0 SAFE TOKENS"
+      : partial
+        ? "PARTIAL · BOARD UNCHANGED"
+        : "FAILED";
     state.system.tokensPerScan = 0;
     state.system.securityFilter = lastFilterReport;
     state.system.lastScanError = error.message;
-    state.system.lastScanQuality = filtered ? lastFilterReport.qualityStatus : "FAILED";
+    state.system.lastScanQuality = filtered ? lastFilterReport.qualityStatus : partial ? "PARTIAL" : "FAILED";
     if (scanRun?.id) state.system.lastScanRunId = scanRun.id;
     if (!filtered) state.system.errors += 1;
     if (scanRun) {
       const finishedAt = new Date();
       const durationMs = Date.now() - started;
-      const status = filtered ? "FILTERED" : "FAILED";
+      const status = filtered ? "FILTERED" : partial ? "PARTIAL" : "FAILED";
       const audit = scanAudit();
       await finishScanRun(scanRun.id, {
         status,
@@ -810,7 +843,7 @@ async function runScan(manual = false) {
         durationMs,
         tokensScanned: lastFilterReport.recordsChecked || 0,
         transactionsProcessed: 0,
-        errorCount: filtered ? 0 : 1,
+        errorCount: filtered || partial ? 0 : 1,
         timedOut,
         timeoutReason: timedOut ? error.message : null,
         tokensPersisted: 0,
@@ -821,7 +854,7 @@ async function runScan(manual = false) {
         durationMs,
         tokensScanned: lastFilterReport.recordsChecked || 0,
         transactionsProcessed: 0,
-        errorCount: filtered ? 0 : 1
+        errorCount: filtered || partial ? 0 : 1
       });
     }
     await saveState();
