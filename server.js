@@ -86,7 +86,8 @@ function jsonState() {
   const now = Date.now();
   const positions = state.portfolio.positions.map(position => {
     const current = state.tokens.find(item => item.mint === position.mint);
-    const price = current ? parseFloat(current.price.replace("$", "")) : position.entry;
+    const currentPrice = current ? parseFloat(String(current.price).replace("$", "")) : NaN;
+    const price = Number.isFinite(currentPrice) ? currentPrice : position.entry;
     const currentValue = position.quantity * price;
     const pnl = currentValue - position.invested;
     return { ...position, currentPrice: price, currentValue, pnl, pnlPct: (pnl / position.invested) * 100, holding: formatAge(now - position.openedAt) };
@@ -112,8 +113,34 @@ async function fetchLiveTokens() {
     if (!response.ok) throw new Error(`Provider HTTP ${response.status}`);
     const payload = await response.json();
     const entries = Array.isArray(payload) ? payload.filter(item => item && item.chainId === "solana") : [];
-    const fresh = entries.slice(0, 10).map((item, index) => {
+    const boostedEntries = [];
+    const seenMints = new Set();
+    for (const item of entries) {
+      if (!item.tokenAddress || seenMints.has(item.tokenAddress)) continue;
+      seenMints.add(item.tokenAddress);
+      boostedEntries.push(item);
+      if (boostedEntries.length === 10) break;
+    }
+    const pairResponses = await Promise.all(boostedEntries.map(async item => {
+      const mint = item.tokenAddress;
+      if (!mint) return { pairs: [] };
+      try {
+        const pairResponse = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(mint)}`, {
+          signal: controller.signal,
+          headers: { Accept: "application/json" }
+        });
+        if (!pairResponse.ok) return { pairs: [] };
+        return await pairResponse.json();
+      } catch {
+        return { pairs: [] };
+      }
+    }));
+    const fresh = boostedEntries.map((item, index) => {
       const mint = item.tokenAddress || `live-${index}`;
+      const pairs = Array.isArray(pairResponses[index]?.pairs)
+        ? pairResponses[index].pairs.filter(pair => pair && pair.chainId === "solana")
+        : [];
+      const pair = pairs.sort((left, right) => Number(right.liquidity?.usd || 0) - Number(left.liquidity?.usd || 0))[0] || null;
       const shortMint = mint.slice(0, 4).toUpperCase();
       const symbol = `SOL-${shortMint}`;
       const description = String(item.description || "").split(/\r?\n/).map(line => line.trim()).find(Boolean) || `Solana token ${shortMint}`;
@@ -131,7 +158,7 @@ async function fetchLiveTokens() {
         providerUpdatedAt: item.updatedAt || null
       };
       const evidence = [
-        "DexScreener supplied token-boost metadata only; market metrics are UNKNOWN until pair data is available.",
+        "DexScreener supplied live token-boost metadata and pair data when available; missing market metrics remain UNKNOWN.",
         `DexScreener CTO flag: ${providerMetadata.cto == null ? "UNKNOWN" : providerMetadata.cto ? "TRUE" : "FALSE"}.`,
         links.length ? `DexScreener supplied ${links.length} external link${links.length === 1 ? "" : "s"}.` : "DexScreener supplied no external links."
       ];
@@ -139,17 +166,29 @@ async function fetchLiveTokens() {
       if (providerMetadata.providerUpdatedAt) evidence.push(`Provider metadata updated ${providerMetadata.providerUpdatedAt}.`);
       const providerTime = providerMetadata.providerUpdatedAt ? Date.parse(providerMetadata.providerUpdatedAt) : NaN;
       const providerAge = Number.isFinite(providerTime) ? formatAge(Math.max(0, Date.now() - providerTime)) : "UNKNOWN";
-      const base = token(symbol, description, "UNKNOWN", null, null, null, null, null, null, null, null, null, "UNKNOWN", "UNKNOWN", "UNKNOWN", providerMetadata.cto ? "CTO FLAG" : "PROVIDER", providerAge, "DexScreener token-boost metadata; deeper intelligence requires indexed market and pair data.", "unknown", null, "UNKNOWN");
+      const price = pair?.priceUsd ? `$${pair.priceUsd}` : "UNKNOWN";
+      const marketCap = Number.isFinite(Number(pair?.marketCap)) ? Number(pair.marketCap) : null;
+      const liquidity = Number.isFinite(Number(pair?.liquidity?.usd)) ? Number(pair.liquidity.usd) : null;
+      const priceChange = pair?.priceChange?.h24 != null ? `${Number(pair.priceChange.h24).toFixed(2)}%` : "UNKNOWN";
+      const base = token(symbol, description, price, marketCap, liquidity, null, null, null, null, null, null, null, priceChange, "UNKNOWN", "UNKNOWN", providerMetadata.cto ? "CTO FLAG" : "PROVIDER", providerAge, "DexScreener live token and pair data; intelligence fields remain UNKNOWN when the provider does not supply them.", "unknown", null, "UNKNOWN");
       return {
         ...base,
         mint,
         symbol,
         name: description,
-        providerUrl: item.url || `https://dexscreener.com/solana/${mint}`,
+        providerUrl: pair?.url || item.url || `https://dexscreener.com/solana/${mint}`,
         details: {
           ...base.details,
           source: endpoint,
           coverage: "DEXSCREENER_TOKEN_BOOST_METADATA",
+          pair: pair ? {
+            address: pair.pairAddress || null,
+            dexId: pair.dexId || null,
+            url: pair.url || null,
+            baseToken: pair.baseToken || null,
+            quoteToken: pair.quoteToken || null,
+            volume24h: pair.volume?.h24 ?? null
+          } : null,
           providerMetadata,
           evidence
         }
@@ -252,6 +291,7 @@ async function handleApi(req, res, url) {
       if (body.side === "BUY") {
         const amount = 100;
         if (state.portfolio.cash < amount) return send(res, 422, { error: "Insufficient virtual cash." });
+        if (state.portfolio.positions.some(position => position.mint === item.mint)) return send(res, 409, { error: "An open virtual position already exists for this token." });
         const fee = amount * 0.003;
         const position = { mint: item.mint, symbol: item.symbol, name: item.name, invested: amount, quantity: (amount - fee) / price, entry: price, peakPnl: 0, openedAt: Date.now() };
         state.portfolio.cash -= amount;
@@ -276,9 +316,6 @@ async function handleApi(req, res, url) {
       await recordTrade(tradeRecord);
       return send(res, 200, { ok: true, state: jsonState() });
     } catch (error) { return send(res, 400, { error: error.message }); }
-  }
-  if (req.method === "POST" && url.pathname === "/api/settings") {
-    return send(res, 410, { error: "Mode switching has been removed. DexScreener LIVE MODE is always active." });
   }
   send(res, 404, { error: "API route not found" });
 }

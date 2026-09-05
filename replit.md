@@ -8,38 +8,29 @@ npm run dev
 
 The server binds to `0.0.0.0:5000`.
 
-## Data modes
+## Live data and virtual trading
 
-- **DEMO MODE** (default): uses a clearly labelled, controlled dataset for development and UI/engine validation. It is not production market data.
-- **LIVE MODE**: set `RADAR_MODE=live` and run a scan. The server calls the configured `DEXSCREENER_API_URL` or its public default endpoint, keeps only Solana records, and preserves DexScreener metadata such as provider URL, icon, header, description, links, CTO flag, boost amounts, and provider update time. Unavailable market/intelligence fields remain `UNKNOWN`.
-
-No API keys are hard-coded or sent to the browser. The application never asks for seed phrases/private keys and only supports simulated paper trading.
+- DexScreener is the only market-data provider and the application always runs in LIVE mode.
+- The server scans DexScreener every 30 seconds and keeps only Solana records.
+- Token boost metadata is combined with the provider's live token-pair data when available, including price, liquidity, market cap, 24-hour change, and pair URL.
+- Missing provider fields remain `UNKNOWN`; the app does not invent market values.
+- Paper trading uses virtual funds only: a $100,000 starting balance, fixed $100 entries, and a simulated 0.3% fee. No wallet, private key, signing, or real-fund transaction is supported.
+- On first startup after the LIVE-only migration, old non-live records are removed and the virtual account is reset to $100,000 with no open positions.
 
 ## Architecture
 
-- `server.js`: server-side HTTP API, provider boundary, server-side automatic scan every 30 seconds, scan and paper-trade logic.
-- `db.js`: Prisma repository layer for PostgreSQL-backed state, watchlist events, paper trades, and scan runs.
-- `prisma/schema.prisma`: PostgreSQL schema and indexes for tokens, signals, watchlists, paper trading, and scan observability.
-- `public/`: responsive institutional research UI.
+- `server.js`: HTTP API, DexScreener provider boundary, automatic scan scheduler, and paper-trade logic.
+- `db.js`: Prisma repository layer, LIVE-only cleanup, watchlist events, paper trades, and scan runs.
+- `prisma/schema.prisma`: PostgreSQL schema for live tokens, signals, watchlists, paper trading, and scan observability.
+- `public/`: responsive research UI.
 
 ## Database
 
-The app uses Replit's PostgreSQL database through Prisma 6.19.0:
+The app uses PostgreSQL through Prisma 6.19.0:
 
 ```bash
 npm run db:generate
 npm run db:push
 ```
 
-`DATABASE_URL` is read server-side from the Replit environment. The existing local JSON state is used only as a one-time seed when the Prisma database is empty; after boot, runtime reads and writes PostgreSQL.
-
-## Data modes
-
-- **DEMO MODE** (default): controlled dataset for development and UI/engine validation. It is explicitly labeled and is not production market data.
-- **LIVE MODE**: set `RADAR_MODE=live` and run a scan. The server calls `DEXSCREENER_API_URL` or its public default endpoint, keeps only Solana records, and preserves DexScreener metadata such as provider URL, icon, header, description, links, CTO flag, boost amounts, and provider update time. Unavailable market/intelligence fields remain `UNKNOWN`.
-
-No API keys are hard-coded or sent to the browser. The application never asks for seed phrases/private keys and only supports simulated paper trading.
-
-## Automatic scanning
-
-The scheduler runs on the server every 30 seconds. The browser only displays the countdown and is not responsible for triggering scans. Overlapping scans are rejected, and each run is stored in `ScanRun` with status, duration, provider, and processed-record counts.
+`DATABASE_URL` is read only on the server. The database is the runtime source of truth after initialization.

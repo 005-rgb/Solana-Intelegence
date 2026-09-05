@@ -1,0 +1,117 @@
+hapus mode demo sepenuhnya. untuk uang virtual adalah uang untuk menguji real /live mode.
+
+Free
+8 minutes ago
+
+2 actions
+Saya akan menghapus DEMO MODE sebagai sumber data dan opsi UI, lalu menjadikan DexScreener LIVE sebagai satu-satunya mode. Karena record demo yang tersimpan tidak boleh tercampur dengan pengujian live, migrasi ini akan membersihkan token/whale/pattern/alert demo dan mengatur ulang paper portfolio ke $100.000 virtual tanpa posisi—uang virtualnya tetap ada untuk menguji data live.
+
+
+
+Show less
+
+Searched for "DEMO|demo|Controlled|se…"
+
+Opened server.js
+
+Opened db.js
+
+Opened app.js
+
+Opened package.json
+Refining state management
+
+Refining state management
+Clarifying radar modes
+
+Clarifying radar modes
+Considering patch updates
+
+Considering patch updates
+Implementasi akan mengubah sumber kebenaran menjadi LIVE-only, bukan sekadar menyembunyikan tombol DEMO. Saya juga akan membersihkan data controlled yang tersimpan dari database dan mereset jurnal/posisi paper lama supaya saldo virtual $100.000 benar-benar mulai menguji token live.
+
+
+
+Show less
+
+Edited server.js
+Editing file paths and constants
+
+Editing file paths and constants
+
+Edited server.js
+Clearing demo data
+
+Clearing demo data
+
+Opened server.js
+
+Opened server.js
+
+Edited db.js
+Evaluating migration needs
+
+Evaluating migration needs
+
+Edited schema.prisma
+Patching the front end
+
+Patching the front end
+
+Edited app.js
+Inspecting dashboard patch
+
+Inspecting dashboard patch
+
+Searched for "^function dashboard|^fu…"
+
+Opened app.js
+Considering patching issues
+
+Considering patching issues
+Investigating patch failure
+
+Investigating patch failure
+Considering function patching
+
+Considering function patching
+
+Edited app.js
+
+Edited app.js
+
+Edited app.js
+
+Opened app.js
+Implementing liveDashboard function
+
+Implementing liveDashboard function
+
+Edited app.js
+Defining liveDashboard function
+
+Defining liveDashboard function
+
+Edited app.js
+Evaluating dashboard settings
+
+Evaluating dashboard settings
+
+Opened app.js
+
+Opened app.js
+
+Edited app.js
+
+Edited app.js
+Planning code cleanup
+
+Planning code cleanup
+UI sudah diubah menjadi LIVE-only dan Settings tidak lagi menawarkan mode switching. Saya bersihkan referensi DEMO yang tersisa di backend, dokumentasi, dan event handler, lalu restart untuk menjalankan migrasi database satu kali.
+
+
+
+Searched for "DEMO|demo|Controlled|se…"
+
+Worked for 5 minutes
+You've reached your daily free quota limit. It will reset at 12:00 AM UTC.

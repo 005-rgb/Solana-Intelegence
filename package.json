@@ -14,7 +14,7 @@
     "node": "24.x"
   },
   "dependencies": {
-    "@prisma/client": "6.19.0",
-    "prisma": "6.19.0"
+    "@prisma/client": "^6.19.0",
+    "prisma": "^6.19.0"
   }
 }

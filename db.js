@@ -1,6 +1,7 @@
 const { PrismaClient } = require("@prisma/client");
 
 const prisma = new PrismaClient();
+const LIVE_ONLY_MIGRATION = "liveOnlyInitialized";
 
 function tokenData(item) {
   return {
@@ -152,9 +153,11 @@ async function seedState(state) {
   });
 }
 
-async function migrateToLive() {
+async function ensureLiveOnly() {
   const radar = await prisma.radarState.findUnique({ where: { id: 1 } });
-  if (!radar || (radar.mode === "live" && radar.provider === "DexScreener")) return;
+  if (!radar) return;
+  const currentSystem = radar.system && typeof radar.system === "object" && !Array.isArray(radar.system) ? radar.system : {};
+  if (currentSystem[LIVE_ONLY_MIGRATION] === true && radar.mode === "live" && radar.provider === "DexScreener") return;
 
   await prisma.$transaction(async tx => {
     await tx.watchlistEvent.deleteMany({});
@@ -162,7 +165,7 @@ async function migrateToLive() {
     await tx.paperPosition.deleteMany({ where: { accountId: 1 } });
     await tx.paperTrade.deleteMany({ where: { accountId: 1 } });
     await tx.token.deleteMany({ where: { providerUrl: null } });
-    await tx.whaleActivityPoint.deleteMany({ where: { source: "demo" } });
+    await tx.whaleActivityPoint.deleteMany({ where: { source: { not: "live" } } });
     await tx.alert.deleteMany({});
     await tx.pattern.deleteMany({});
     await tx.scanRun.deleteMany({});
@@ -190,7 +193,8 @@ async function migrateToLive() {
           avgDuration: "—",
           tokensPerScan: 0,
           transactionsPerScan: 0,
-          errors: 0
+          errors: 0,
+          [LIVE_ONLY_MIGRATION]: true
         }
       }
     });
@@ -201,11 +205,9 @@ async function readState(fallback) {
   let radar = await prisma.radarState.findUnique({ where: { id: 1 } });
   if (!radar) {
     await seedState(fallback);
-    radar = await prisma.radarState.findUnique({ where: { id: 1 } });
-  } else if (radar.mode !== "live" || radar.provider !== "DexScreener") {
-    await migrateToLive();
-    radar = await prisma.radarState.findUnique({ where: { id: 1 } });
   }
+  await ensureLiveOnly();
+  radar = await prisma.radarState.findUnique({ where: { id: 1 } });
 
   const tokenFilter = { providerUrl: { not: null } };
   const [tokens, activeWatchlist, events, alerts, patterns, account, whalePoints, scanRuns] = await Promise.all([
