@@ -182,6 +182,41 @@ function scorecardMarkup(scorecard) {
     <div class="data-note">These are deterministic evidence scores, not profit probabilities. Unknown features reduce confidence or keep the candidate in WATCH.</div>
   </div>`;
 }
+function phase4aMarkup(scorecard) {
+  const item = scorecard?.phase4a || {};
+  const valuation = item.valuation || {};
+  const catalysts = item.catalysts || {};
+  const regime = item.marketRegime || {};
+  const thesis = item.thesis || {};
+  const governance = item.governance || {};
+  const score = value => value == null ? "UNKNOWN" : Math.round(Number(value));
+  const evidence = list => (Array.isArray(list) ? list : []).slice(0, 5)
+    .map(row => `<li>${esc(typeof row === "string" ? row : row.text || row.claim || row.reason || "Evidence recorded.")}</li>`).join("");
+  const catalyst = catalysts.next
+    ? `${esc(catalysts.next.title)} · ${esc(catalysts.next.proximityDays)}d · ${esc(catalysts.next.pricingStatus)}`
+    : "UNKNOWN";
+  return `<div class="phase4a-panel">
+    <div class="side-card-heading"><div><h3>Phase 4A · Valuation & thesis</h3><span>${esc(item.version || "UNKNOWN")} · config ${esc((item.configurationHash || "UNKNOWN").slice(0, 12))}</span></div><span class="security-status ${thesis.state === "THESIS_CONFLICT" ? "rejected" : "partial"}">${esc(thesis.state || "UNKNOWN")}</span></div>
+    <div class="phase4a-grid">
+      <div><span>Valuation asymmetry</span><strong>${score(valuation.valuationAsymmetry)}</strong></div>
+      <div><span>Comparable quality / coverage</span><strong>${score(valuation.comparableQuality)} / ${valuation.comparableCoverage ?? "UNKNOWN"}</strong></div>
+      <div><span>Catalyst score</span><strong>${score(catalysts.catalystScore)}</strong></div>
+      <div><span>Verified catalysts</span><strong>${catalysts.verifiedCount ?? "UNKNOWN"}</strong></div>
+      <div><span>Market regime</span><strong>${esc(regime.state || "UNKNOWN")}</strong></div>
+      <div><span>Regime fit</span><strong>${score(regime.fitScore)}</strong></div>
+    </div>
+    <div class="phase4a-thesis"><strong>Primary thesis</strong><p>${esc(thesis.primary || "UNKNOWN")}</p></div>
+    <div class="health-row"><span>Next verified catalyst</span><strong class="health-value">${catalyst}</strong></div>
+    <div class="phase4a-columns">
+      <div><strong>Positive evidence</strong><ul>${evidence(thesis.positiveEvidence) || "<li>UNKNOWN</li>"}</ul></div>
+      <div><strong>Negative / contradiction</strong><ul>${evidence([...(thesis.negativeEvidence || []), ...(thesis.contradictions || [])]) || "<li>UNKNOWN</li>"}</ul></div>
+    </div>
+    <div class="health-row"><span>Strongest failure reason</span><strong class="health-value">${esc(thesis.strongestFailureReason || "UNKNOWN")}</strong></div>
+    <div class="health-row"><span>Calibration governance</span><strong class="health-value">${esc(governance.mode || "UNKNOWN")} · champion ${esc(governance.champion?.version || "UNKNOWN")} · challenger ${esc(governance.challenger?.version || "UNKNOWN")}</strong></div>
+    <div class="health-row"><span>Promotion gate</span><strong class="health-value">${esc(governance.promotion?.status || "UNKNOWN")} · ${esc((governance.promotion?.failedChecks || []).slice(0, 3).join(" / ") || "none")}</strong></div>
+    <div class="data-note">Phase 4A is source-backed research governance. Missing comparables, catalysts, or regime evidence remain UNKNOWN; this is not a price target or probability.</div>
+  </div>`;
+}
 function positionFor(item) { return snapshot?.portfolio?.positions?.find(position => position.mint === item.mint) || null; }
 function tokenPnl(item) {
   const position = positionFor(item);
@@ -781,6 +816,7 @@ async function showToken(id, reload = true) {
          ${manipulationEvidenceMarkup(manipulationEvidence)}
          ${projectTractionMarkup(projectTraction)}
          ${scorecardMarkup(scorecard)}
+          ${phase4aMarkup(scorecard)}
          <div class="side-divider"></div>
         <div class="side-card-heading"><div><h3>Pair identity</h3><span>Selected by highest live liquidity</span></div></div>
         <div class="pair-identity"><span>Pair address</span><code>${esc(pair.address || "UNKNOWN")}</code></div>

@@ -224,6 +224,16 @@ body {
 .traction-grid > div { display: flex; flex-direction: column; gap: 5px; padding: 8px; background: rgba(255,255,255,.018); border: 1px solid var(--line); }
 .traction-grid span { color: var(--muted); font-size: 8px; text-transform: uppercase; letter-spacing: .5px; }
 .traction-grid strong { color: var(--ink); font-size: 10px; }
+.phase4a-panel { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+.phase4a-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 11px 0; }
+.phase4a-grid > div { display: flex; flex-direction: column; gap: 5px; padding: 8px; background: rgba(255,255,255,.018); border: 1px solid var(--line); }
+.phase4a-grid span, .phase4a-columns strong { color: var(--muted); font-size: 8px; text-transform: uppercase; letter-spacing: .5px; }
+.phase4a-grid strong { color: var(--ink); font-size: 10px; }
+.phase4a-thesis { padding: 10px; border: 1px solid var(--line); background: rgba(255,255,255,.018); margin: 10px 0; }
+.phase4a-thesis strong { color: var(--muted); font-size: 8px; text-transform: uppercase; letter-spacing: .5px; }
+.phase4a-thesis p { color: var(--ink); font-size: 10px; line-height: 1.5; margin: 7px 0 0; }
+.phase4a-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
+.phase4a-columns ul { margin: 7px 0 0; padding-left: 16px; color: var(--muted-2); font-size: 9px; line-height: 1.5; }
 .phase4-panel { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
 .phase4-radar-grid, .phase4-score-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 11px 0; }
 .phase4-score-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

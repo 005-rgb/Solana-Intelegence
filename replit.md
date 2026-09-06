@@ -108,6 +108,25 @@ npm run db:push
   leaves a component unknown; blocking Phase 3A flags keep the score in
   `WATCH`.
 
+## Phase 4A valuation, catalysts, and thesis
+
+- `phase4a-v1` evaluates only verified, source-linked, fresh comparable,
+  catalyst, and market-regime evidence. Missing or stale inputs remain
+  `UNKNOWN`; they are never converted into favorable values.
+- Every scorecard now stores Phase 4A configuration lineage, valuation
+  methodology, comparable coverage, catalyst timing/pricing status, regime fit,
+  primary thesis, positive evidence, negative evidence, contradiction, and
+  invalidation conditions.
+- A strong explicit contradiction produces `THESIS_CONFLICT` and keeps the
+  candidate in `WATCH`. Phase 4A is research evidence, not a target price or
+  probability, and does not enable wallet execution.
+- Calibration governance is `phase4a-governance-v1`: the current `phase4-v1`
+  score remains the champion, Phase 4A is a non-alerting/non-trading challenger
+  in `SHADOW`, and promotion stays blocked until the temporal holdout,
+  completeness, security, precision, adverse-excursion, latency, and
+  explainability checks pass. Feature missingness and score drift are exposed
+  with the governance snapshot.
+
 The authoritative product specification is
 [`docs/integrated-radar-core-market-brain-prd.md`](docs/integrated-radar-core-market-brain-prd.md).
 It integrates the existing Radar Core implementation plan with the project-first

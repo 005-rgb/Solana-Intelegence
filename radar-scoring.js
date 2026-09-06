@@ -1,5 +1,11 @@
 const crypto = require("crypto");
 const { TRACTION_VERSION } = require("./project-traction");
+const {
+  PHASE4A_VERSION,
+  PHASE4A_CONFIGURATION_HASH,
+  PHASE4A_CONFIG,
+  evaluatePhase4A
+} = require("./phase4a");
 
 const SCORE_VERSION = "phase4-v1";
 const FEATURE_VERSION = "phase3-v1";
@@ -282,6 +288,9 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
     : { sampleStatus: "UNKNOWN", flags: {}, qualityReasons: [] };
   const risk = riskScore(candidate, securityScore, structuralScore);
   const project = profileEvidence(candidate);
+  const phase4a = evaluatePhase4A(candidate, {
+    asOf: candidate.details.observedAt || candidate.details.providerMetadata?.providerUpdatedAt || null
+  });
   const opportunityResult = average(
     [momentumScore.value, marketScore.value, flowScore.value, securityScore.value],
     [35, 25, 20, 20]
@@ -289,19 +298,34 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
   const chase = chaseRisk(candidate, momentumScore);
   const entry = entryQuality(candidate, structuralScore, chase);
   const confidence = confidenceScore(candidate, securityScore, marketScore, momentumScore, structuralScore, manipulation);
+  const phase4aOpportunity = average(
+    [
+      opportunityResult.value,
+      phase4a.valuation.valuationScore,
+      phase4a.catalysts.catalystScore,
+      phase4a.marketRegime.fitScore
+    ],
+    [
+      PHASE4A_CONFIG.weights.phase4aOpportunity.baselineOpportunity,
+      PHASE4A_CONFIG.weights.phase4aOpportunity.valuation,
+      PHASE4A_CONFIG.weights.phase4aOpportunity.catalyst,
+      PHASE4A_CONFIG.weights.phase4aOpportunity.marketRegimeFit
+    ]
+  );
+  const opportunityValue = phase4aOpportunity?.value ?? opportunityResult.value;
   const riskInverse = risk.value == null ? null : 100 - risk.value;
   const radars = {
     REAL_PROJECT: average(
-      [project.value, tokenScore.value, opportunityResult.value, riskInverse],
-      [30, 25, 25, 20]
+      [project.value, tokenScore.value, opportunityValue, riskInverse, phase4a.valuation.valuationScore, phase4a.catalysts.catalystScore, phase4a.marketRegime.fitScore],
+      [25, 20, 20, 15, 10, 5, 5]
     ).value,
     REACTIVATION: average(
-      [project.value, momentumScore.value, tokenScore.value, opportunityResult.value, confidence.value],
-      [20, 30, 15, 20, 15]
+      [project.value, momentumScore.value, tokenScore.value, opportunityValue, confidence.value, phase4a.marketRegime.fitScore],
+      [15, 25, 15, 20, 15, 10]
     ).value,
     SPECULATIVE_MEME: average(
-      [momentumScore.value, flowScore.value, structuralScore.value, tokenScore.value, opportunityResult.value],
-      [35, 20, 20, 10, 15]
+      [momentumScore.value, flowScore.value, structuralScore.value, tokenScore.value, opportunityValue, phase4a.marketRegime.fitScore],
+      [30, 18, 18, 9, 15, 10]
     ).value
   };
   const activeRadar = "SPECULATIVE_MEME";
@@ -313,8 +337,10 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
     && risk.value != null
     && risk.value <= SCORE_CONFIG.thresholds.maximumRiskForQualifying
     && opportunityResult.value != null
-    && opportunityResult.value >= SCORE_CONFIG.thresholds.minimumOpportunityForQualifying
+    && opportunityValue >= SCORE_CONFIG.thresholds.minimumOpportunityForQualifying
     && !blockingFlags.length;
+  const phase4aQualifying = !phase4a.thesis.strongContradiction;
+  const finalQualifying = qualifying && phase4aQualifying;
   const warnings = [...new Set([
     ...project.warnings,
     ...securityScore.reasons,
@@ -326,6 +352,7 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
     ...confidence.reasons,
     ...entry.reasons,
     ...chase.reasons,
+    ...phase4a.warnings,
     ...(blockingFlags.length ? blockingFlags.map(flag => `${flag.toUpperCase()}_BLOCKS_QUALIFYING`) : [])
   ])];
   const scorecard = {
@@ -333,6 +360,8 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
     featureVersion: candidate.details.featureSnapshot?.featureVersion || FEATURE_VERSION,
     projectTractionVersion: candidate.details.projectTraction?.version || null,
     configurationHash: CONFIGURATION_HASH,
+    phase4aVersion: PHASE4A_VERSION,
+    phase4aConfigurationHash: PHASE4A_CONFIGURATION_HASH,
     sourceSet: SCORE_CONFIG.sourceSet,
     activeRadar,
     components: {
@@ -341,7 +370,11 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
       momentumQuality: momentumScore.value,
       marketQuality: marketScore.value,
       flowQuality: flowScore.value,
-      opportunity: opportunityResult.value,
+      opportunity: opportunityValue,
+      baselineOpportunity: opportunityResult.value,
+      valuation: phase4a.valuation.valuationScore,
+      catalyst: phase4a.catalysts.catalystScore,
+      marketRegimeFit: phase4a.marketRegime.fitScore,
       risk: risk.value,
       confidence: confidence.value,
       entryQuality: entry.value,
@@ -349,9 +382,11 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
       structuralFeasibility: structuralScore.value
     },
     radars,
-    decisionState: qualifying ? "QUALIFYING" : "WATCH",
+    decisionState: finalQualifying ? "QUALIFYING" : "WATCH",
     eligibility: {
-      qualifying,
+      qualifying: finalQualifying,
+      baselineQualifying: qualifying,
+      phase4aThesisClear: phase4aQualifying,
       blockingManipulationFlags: blockingFlags,
       requiredConfidence: SCORE_CONFIG.thresholds.confidenceForQualifying,
       requiredOpportunity: SCORE_CONFIG.thresholds.minimumOpportunityForQualifying,
@@ -359,16 +394,26 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
     },
     scoreReasons: [
       `Active ${activeRadar} score is ${activeScore == null ? "UNKNOWN" : activeScore}.`,
-      `Opportunity is ${opportunityResult.value == null ? "UNKNOWN" : opportunityResult.value}; risk is ${risk.value == null ? "UNKNOWN" : risk.value}.`,
+      `Opportunity is ${opportunityValue == null ? "UNKNOWN" : opportunityValue}; risk is ${risk.value == null ? "UNKNOWN" : risk.value}.`,
       `Entry quality is ${entry.value == null ? "UNKNOWN" : entry.value}; chase risk is ${chase.value == null ? "UNKNOWN" : chase.value}.`
     ],
     scoreWarnings: warnings,
-    confidenceCaps: confidence.caps
+    confidenceCaps: confidence.caps,
+    phase4a: {
+      version: phase4a.version,
+      configurationHash: phase4a.configurationHash,
+      valuation: phase4a.valuation,
+      catalysts: phase4a.catalysts,
+      marketRegime: phase4a.marketRegime,
+      thesis: phase4a.thesis,
+      governance: phase4a.governance,
+      warnings: phase4a.warnings
+    }
   };
   return {
     ...candidate,
     radar: activeScore == null ? null : Math.round(activeScore),
-    opportunity: opportunityResult.value == null ? null : Math.round(opportunityResult.value),
+    opportunity: opportunityValue == null ? null : Math.round(opportunityValue),
     momentum: momentumScore.value == null ? null : Math.round(momentumScore.value),
     risk: risk.value == null ? null : Math.round(risk.value),
     confidence: confidence.value == null ? null : Math.round(confidence.value),
