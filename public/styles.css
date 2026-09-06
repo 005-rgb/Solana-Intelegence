@@ -399,14 +399,21 @@ tbody tr:hover { background: rgba(54,217,220,.045); }
   .terminal-readouts { order: 3; width: 100%; flex-basis: 100%; justify-content: space-between; }
   .terminal-actions { margin-left: auto; }
 }
+@media (max-width: 900px) and (min-width: 761px) {
+  .main-grid { grid-template-columns: 1fr; }
+  .terminal-inspector { min-height: 0; }
+}
 @media (max-width: 760px) {
   .terminal-header { align-items: flex-start; padding: 15px; }
   .terminal-brand { min-width: 0; }
   .terminal-actions { width: 100%; margin-left: 0; }
   .terminal-actions .search { flex: 1; width: auto; }
-  .terminal-readouts { gap: 12px; overflow-x: auto; justify-content: flex-start; }
-  .terminal-readouts > div { min-width: 92px; }
-  .precision-readout, .model-readout { padding-left: 12px; }
+  .terminal-readouts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 8px; overflow: visible; justify-content: stretch; }
+  .terminal-readouts > div { min-width: 0; }
+  .terminal-readouts .precision-readout, .terminal-readouts .model-readout { border-left: 0; border-top: 1px solid var(--line); padding: 10px 0 0; }
+  .terminal-readouts .precision-readout { grid-column: 1; }
+  .terminal-readouts .model-readout { grid-column: 2 / span 2; }
+  .terminal-readouts small { overflow: hidden; text-overflow: ellipsis; }
   .terminal-disclaimer { padding: 8px 15px; line-height: 1.5; }
   .mode-tabs { padding: 0 15px; overflow-x: auto; }
   .mode-tab { min-width: 145px; }
