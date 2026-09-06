@@ -37,6 +37,7 @@ const {
   evaluateMarketQuality,
   normalizeDiscoveryUniverse,
   normalizePoolEvidence,
+  parseRpcEndpointConfig,
   selectBoardTokens,
   selectPrimaryPair,
   summarizeBaselineCandidates,
@@ -296,7 +297,20 @@ function jsonState() {
     return { ...position, currentPrice: price, currentValue, pnl, pnlPct: (pnl / position.invested) * 100, holding: formatAge(now - position.openedAt) };
   });
   const unrealized = positions.reduce((sum, position) => sum + position.pnl, 0);
-  return { ...state, now, positions, portfolio: { ...state.portfolio, positions, invested: positions.reduce((sum, p) => sum + p.invested, 0), equity: state.portfolio.cash + positions.reduce((sum, p) => sum + p.currentValue, 0), unrealized, roi: ((state.portfolio.cash + positions.reduce((sum, p) => sum + p.currentValue, 0) - state.portfolio.starting) / state.portfolio.starting) * 100 } };
+  return {
+    ...state,
+    now,
+    rpcHealth: rpcHealthSummary(),
+    positions,
+    portfolio: {
+      ...state.portfolio,
+      positions,
+      invested: positions.reduce((sum, p) => sum + p.invested, 0),
+      equity: state.portfolio.cash + positions.reduce((sum, p) => sum + p.currentValue, 0),
+      unrealized,
+      roi: ((state.portfolio.cash + positions.reduce((sum, p) => sum + p.currentValue, 0) - state.portfolio.starting) / state.portfolio.starting) * 100
+    }
+  };
 }
 function formatAge(ms) {
   const minutes = Math.max(0, Math.floor(ms / 60000));
@@ -321,14 +335,16 @@ function tokenById(id) {
   return state.tokens.find(item => item.mint === id || item.symbol.toLowerCase() === String(id).toLowerCase());
 }
 
-const configuredRpcUrls = [process.env.SOLANA_RPC_URLS, process.env.SOLANA_RPC_URL]
-  .filter(Boolean)
-  .flatMap(value => String(value).split(/[,\n]+/))
-  .map(value => value.trim())
-  .filter(value => /^https?:\/\//i.test(value));
-const SOLANA_RPC_URLS = [...new Set(configuredRpcUrls)].length
-  ? [...new Set(configuredRpcUrls)].slice(0, 8)
-  : ["https://solana-rpc.publicnode.com", "https://api.mainnet-beta.solana.com"];
+const configuredRpc = parseRpcEndpointConfig([process.env.SOLANA_RPC_URLS, process.env.SOLANA_RPC_URL]);
+const configuredRpcUrls = configuredRpc.accepted.slice(0, 8);
+const fallbackRpcUrls = ["https://solana-rpc.publicnode.com", "https://api.mainnet-beta.solana.com"];
+const SOLANA_RPC_URLS = configuredRpcUrls.length ? configuredRpcUrls : fallbackRpcUrls;
+const rpcConfiguration = {
+  source: process.env.SOLANA_RPC_URLS ? "SOLANA_RPC_URLS" : process.env.SOLANA_RPC_URL ? "SOLANA_RPC_URL" : "DEFAULT",
+  fallbackUsed: configuredRpcUrls.length === 0,
+  acceptedBeforeLimit: configuredRpc.accepted.length,
+  rejected: configuredRpc.rejected
+};
 const RPC_FAILURE_THRESHOLD = 2;
 const RPC_COOLDOWN_MS = 30_000;
 const RPC_MAX_ATTEMPTS_PER_ENDPOINT = 2;
@@ -394,6 +410,10 @@ function rpcRetryDelay(response, attempt) {
 
 function rpcHealthSummary() {
   return {
+    source: rpcConfiguration.source,
+    fallbackUsed: rpcConfiguration.fallbackUsed,
+    acceptedBeforeLimit: rpcConfiguration.acceptedBeforeLimit,
+    rejectedConfigurationEntries: rpcConfiguration.rejected,
     configuredEndpoints: SOLANA_RPC_URLS.length,
     endpoints: SOLANA_RPC_URLS.map(endpoint => {
       const state = rpcEndpointState(endpoint);

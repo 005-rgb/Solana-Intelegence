@@ -883,6 +883,74 @@ function selectBoardTokens(previousTokens, acceptedTokens) {
     : (Array.isArray(previousTokens) ? previousTokens : []);
 }
 
+function parseRpcEndpointConfig(values = []) {
+  const accepted = [];
+  const rejected = [];
+  const seen = new Set();
+  const queue = [];
+
+  const enqueue = value => {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed) return;
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) return parsed.forEach(enqueue);
+        if (parsed && typeof parsed === "object") return Object.values(parsed).forEach(enqueue);
+      } catch {
+        // Plain comma/newline/semicolon-separated secret follows.
+      }
+      trimmed.split(/[,\n;]+/).forEach(entry => {
+        const normalized = entry.trim().replace(/^["']|["']$/g, "");
+        if (normalized) queue.push(normalized);
+      });
+      return;
+    }
+    if (Array.isArray(value)) return value.forEach(enqueue);
+    if (value && typeof value === "object") Object.values(value).forEach(enqueue);
+  };
+
+  values.forEach(enqueue);
+  for (const raw of queue) {
+    const urlMatch = raw.match(/https?:\/\/\S+/i);
+    const candidate = (urlMatch ? urlMatch[0] : raw).replace(/[)"',]+$/, "");
+    let parsed;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      rejected.push({ reason: "INVALID_URL" });
+      continue;
+    }
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      rejected.push({ reason: "INVALID_SCHEME" });
+      continue;
+    }
+    if (parsed.username || parsed.password) {
+      rejected.push({ reason: "CREDENTIALS_IN_URL" });
+      continue;
+    }
+    const path = parsed.pathname.toLowerCase();
+    if (
+      path.includes("/service/apikeys")
+      || path.includes("/dashboard")
+      || path.includes("/console")
+      || path.includes("/api-key")
+      || path.includes("/apikeys")
+    ) {
+      rejected.push({ reason: "MANAGEMENT_URL_NOT_RPC" });
+      continue;
+    }
+    const normalized = parsed.toString().replace(/\/$/, "");
+    if (seen.has(normalized)) {
+      rejected.push({ reason: "DUPLICATE" });
+      continue;
+    }
+    seen.add(normalized);
+    accepted.push(normalized);
+  }
+  return { accepted, rejected };
+}
+
 module.exports = {
   ACCOUNT_CLASSES,
   BASELINE_DECISION_VERSION,
@@ -909,6 +977,7 @@ module.exports = {
   evaluatePhase2Candidate,
   normalizePoolEvidence,
   normalizeDiscoveryUniverse,
+  parseRpcEndpointConfig,
   validateProviderFeed,
   validateProviderPair,
   validateProviderPairFeed,

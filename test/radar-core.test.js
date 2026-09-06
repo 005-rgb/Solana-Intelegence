@@ -18,6 +18,7 @@ const {
   , validateProviderPairFeed
   , summarizePhase2Candidates
   , normalizePoolEvidence
+  , parseRpcEndpointConfig
 } = require("../radar-core");
 
 function verifiedItem(overrides = {}) {
@@ -264,6 +265,27 @@ test("phase 1 pair validation preserves explicit pool evidence for downstream ta
   assert.equal(validation.pair.poolEvidence.poolProgramId, "amm-program");
   assert.equal(validation.pair.poolEvidence.baseVault, "base-vault");
   assert.equal(validation.pair.poolEvidence.lpMint, "lp-mint");
+});
+
+test("RPC endpoint configuration accepts provider pools and rejects dashboard URLs", () => {
+  const config = parseRpcEndpointConfig([JSON.stringify({
+    helius: "https://mainnet.helius-rpc.com/?api-key=hidden",
+    zan: "https://api.zan.top/node/v1/solana/mainnet/hidden"
+  }), "https://zan.top/service/apikeys/project-id"]);
+  assert.equal(config.accepted.length, 2);
+  assert.ok(config.accepted.some(endpoint => endpoint.includes("mainnet.helius-rpc.com")));
+  assert.ok(config.accepted.some(endpoint => endpoint.includes("api.zan.top/node/v1/solana/mainnet")));
+  assert.ok(config.rejected.some(entry => entry.reason === "MANAGEMENT_URL_NOT_RPC"));
+});
+
+test("RPC endpoint configuration supports labeled lines, deduplication, and safe diagnostics", () => {
+  const config = parseRpcEndpointConfig([
+    "HELIUS=https://helius.example/rpc\nhttps://quicknode.example/rpc",
+    "https://quicknode.example/rpc"
+  ]);
+  assert.equal(config.accepted.length, 2);
+  assert.equal(config.rejected.filter(entry => entry.reason === "DUPLICATE").length, 1);
+  assert.ok(config.rejected.every(entry => !Object.prototype.hasOwnProperty.call(entry, "value")));
 });
 
 test("partial candidate data remains unresolved and cannot reconcile as accepted", () => {
