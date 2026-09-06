@@ -13,6 +13,8 @@ Required environment variables:
 - `DATABASE_URL`: PostgreSQL connection string used by Prisma.
 - `SOLANA_RPC_URL`: one Helius or another Solana JSON-RPC endpoint used for live token security verification.
 - `SOLANA_RPC_URLS` (optional): multiple RPC endpoints in one secret, separated by commas or new lines. The server rotates healthy endpoints and fails over on timeout, HTTP 429, or 5xx; `SOLANA_RPC_URL` remains supported for compatibility.
+- `DEXSCREENER_NEW_PAIRS_API_URL` (optional): a provider endpoint returning a validated `{ "pairs": [...] }` payload for latest/new Solana pair discovery. Pair base-token addresses are normalized into the Phase 1 universe; the source stays optional and never weakens baseline gates.
+- `RADAR_INDEXED_DISCOVERY_URL` (optional): an indexed discovery adapter endpoint returning a validated array of `{ tokenAddress, chainId, updatedAt, ... }` records. It is an additive source boundary, not a trust signal or score.
 - Copy-ready secret configuration is documented in `docs/solana-rpc-pool-template.md`.
 
 After importing or changing the schema, initialize the local database client with:
@@ -64,10 +66,11 @@ If a provider or security scan fails, the last known good Radar board remains vi
 ## Phase 1 discovery and observations
 
 - Discovery merges DexScreener token boosts, latest token profiles, and active watchlist mints.
+- Latest pair discovery and an optional indexed discovery adapter can add non-boosted mints without changing the active decision contract. Disabled optional sources are reported as `NOT CONFIGURED`, not as empty successful feeds.
 - Mints are deduplicated deterministically with watchlist priority; every Solana pair returned for a mint is retained as an immutable `TokenObservation`.
 - The primary pair policy is explicit: Solana only, price and liquidity required, then highest liquidity, freshest `updatedAt`, newest `pairCreatedAt`, and stable pair address tie-break.
 - Boost data is stored as attention metadata and never acts as a quality score by itself.
-- Missing provider fields remain `null`/`UNKNOWN`; source endpoint, request ID, response hash, observation time, provider update time, and quality reasons are persisted.
+- Missing provider fields remain `null`/`UNKNOWN`; source endpoint, per-request ID, response hash, observation time, provider update time, and quality reasons are persisted. Discovery and pair-fetch lineage remain separate.
 - The scan audit exposes source health, overlap, deduplicated mint/pair counts, pair policy, and primary/secondary observation lineage.
 - Provider feed and pair payloads are validated against `dexscreener-v1`; malformed records, negative/non-finite values, invalid timestamps, and future clock skew are counted as schema diagnostics instead of being treated as an empty feed.
 - Provider requests use bounded pair-fetch concurrency, bounded retries with `Retry-After`/exponential backoff, and an endpoint circuit breaker. A provider failure preserves the last known board.

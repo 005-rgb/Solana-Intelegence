@@ -211,6 +211,51 @@ function validateProviderPair(pair, { now = Date.now() } = {}) {
   };
 }
 
+function validateProviderPairFeed(payload, { now = Date.now() } = {}) {
+  const pairs = Array.isArray(payload) ? payload : payload && Array.isArray(payload.pairs) ? payload.pairs : null;
+  if (!pairs) {
+    return {
+      ok: false,
+      schemaVersion: PROVIDER_SCHEMA_VERSION,
+      entries: [],
+      invalidRecords: 0,
+      errors: ["Provider pair discovery payload must contain a pairs array."]
+    };
+  }
+  const entries = [];
+  const invalid = [];
+  for (const candidate of pairs) {
+    const validation = validateProviderPair(candidate, { now });
+    if (!validation.valid) {
+      invalid.push(validation);
+      continue;
+    }
+    const tokenAddress = String(validation.pair.baseToken?.address || "").trim();
+    if (!tokenAddress) {
+      invalid.push(invalidProviderRecord("base_token_address_missing_or_invalid", candidate));
+      continue;
+    }
+    entries.push({
+      tokenAddress,
+      chainId: "solana",
+      pair: validation.pair,
+      pairAddress: validation.pair.pairAddress
+    });
+  }
+  return {
+    ok: true,
+    schemaVersion: PROVIDER_SCHEMA_VERSION,
+    entries,
+    invalidRecords: invalid.length,
+    invalid,
+    errors: invalid.map(item => item.reason),
+    invalidReasonCounts: invalid.reduce((counts, item) => {
+      counts[item.reason] = (counts[item.reason] || 0) + 1;
+      return counts;
+    }, {})
+  };
+}
+
 function normalizedAddressSet(values) {
   return new Set((Array.isArray(values) ? values : [values])
     .map(value => String(value || "").trim())
@@ -489,11 +534,13 @@ function dedupeMintEntries(entries, limit = 10) {
   }).slice(0, limit);
 }
 
-function normalizeDiscoveryUniverse({ boostEntries = [], profileEntries = [], watchlistMints = [], limit = 30 } = {}) {
+function normalizeDiscoveryUniverse({ boostEntries = [], profileEntries = [], pairEntries = [], indexedEntries = [], watchlistMints = [], limit = 30 } = {}) {
   const merged = new Map();
   const sourceLists = [
     ["boost_feed", boostEntries],
     ["new_pair_feed", profileEntries],
+    ["latest_pair_feed", pairEntries],
+    ["indexed_feed", indexedEntries],
     ["watchlist", watchlistMints.map(tokenAddress => ({ tokenAddress }))]
   ];
   for (const [source, entries] of sourceLists) {
@@ -512,7 +559,7 @@ function normalizeDiscoveryUniverse({ boostEntries = [], profileEntries = [], wa
   }
   const entries = [...merged.values()]
     .sort((left, right) => {
-      const sourcePriority = entry => entry.sources.includes("watchlist") ? 0 : entry.sources.includes("new_pair_feed") ? 1 : 2;
+      const sourcePriority = entry => entry.sources.includes("watchlist") ? 0 : entry.sources.includes("latest_pair_feed") ? 1 : entry.sources.includes("indexed_feed") ? 2 : entry.sources.includes("new_pair_feed") ? 3 : 4;
       return sourcePriority(left) - sourcePriority(right) || left.tokenAddress.localeCompare(right.tokenAddress);
     })
     .slice(0, limit);
@@ -520,11 +567,13 @@ function normalizeDiscoveryUniverse({ boostEntries = [], profileEntries = [], wa
     boost_feed_seen: new Set((Array.isArray(boostEntries) ? boostEntries : []).map(item => item?.tokenAddress).filter(Boolean)).size,
     profile_feed_seen: new Set((Array.isArray(profileEntries) ? profileEntries : []).map(item => item?.tokenAddress).filter(Boolean)).size,
     new_pair_feed_seen: new Set((Array.isArray(profileEntries) ? profileEntries : []).map(item => item?.tokenAddress).filter(Boolean)).size,
+    latest_pair_feed_seen: new Set((Array.isArray(pairEntries) ? pairEntries : []).map(item => item?.tokenAddress).filter(Boolean)).size,
+    indexed_feed_seen: new Set((Array.isArray(indexedEntries) ? indexedEntries : []).map(item => item?.tokenAddress).filter(Boolean)).size,
     watchlist_seen: new Set((Array.isArray(watchlistMints) ? watchlistMints : []).filter(Boolean)).size,
     unique_mints_before_dedup: new Set(sourceLists.flatMap(([, values]) => values.map(item => item?.tokenAddress).filter(Boolean))).size,
     unique_mints_after_dedup: entries.length,
     source_overlap: {},
-    source_only_candidates: { boost_feed: 0, new_pair_feed: 0, watchlist: 0 }
+    source_only_candidates: { boost_feed: 0, new_pair_feed: 0, latest_pair_feed: 0, indexed_feed: 0, watchlist: 0 }
   };
   for (const entry of entries) {
     const sources = entry.sources;
@@ -739,6 +788,7 @@ module.exports = {
   normalizeDiscoveryUniverse,
   validateProviderFeed,
   validateProviderPair,
+  validateProviderPairFeed,
   selectBoardTokens,
   selectPrimaryPair,
   summarizeBaselineCandidates,

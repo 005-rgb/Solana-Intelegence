@@ -156,7 +156,7 @@ function baselineAuditPanel(report = {}, run = {}, compactMode = false) {
     ? Object.entries(source.source_only_candidates).map(([key, value]) => `${key}: ${value}`).join(" · ")
     : "none recorded";
   const sourceHealth = source.discovery_sources && typeof source.discovery_sources === "object"
-    ? Object.entries(source.discovery_sources).map(([key, value]) => `${key}: ${value?.ok === true ? "OK" : value?.count != null ? `${value.count} tracked` : "FAILED"}`).join(" · ")
+    ? Object.entries(source.discovery_sources).map(([key, value]) => `${key}: ${value?.configured === false ? "NOT CONFIGURED" : value?.ok === true ? "OK" : value?.count != null ? `${value.count} tracked` : "FAILED"}`).join(" · ")
     : "not recorded";
   const reasonMarkup = reasons.length
     ? reasons.slice(0, compactMode ? 4 : 12).map(reason => `<div class="health-row"><span>${esc(reason.code)}<small class="health-muted"> · ${esc(reason.reason || "No label")}</small></span><strong>${auditValue(reason.count)}</strong></div>`).join("")

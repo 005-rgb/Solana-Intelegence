@@ -15,6 +15,7 @@ const {
   summarizeBaselineCandidates
   , validateProviderFeed
   , validateProviderPair
+  , validateProviderPairFeed
   , summarizePhase2Candidates
 } = require("../radar-core");
 
@@ -153,6 +154,44 @@ test("phase 1 discovery merges sources, preserves watchlist priority, and record
   assert.equal(discovery.sourceMetrics.unique_mints_after_dedup, 4);
   assert.equal(discovery.sourceMetrics.source_overlap["boost_feed+new_pair_feed"], 1);
   assert.equal(discovery.sourceMetrics.source_only_candidates.watchlist, 1);
+});
+
+test("phase 1 latest pair feed validates pair identity and adds non-boosted mints", () => {
+  const validation = validateProviderPairFeed({
+    pairs: [
+      {
+        chainId: "solana",
+        pairAddress: "pair-latest",
+        baseToken: { address: "new-pair-only", symbol: "NEW", name: "New Pair" },
+        quoteToken: { address: "sol", symbol: "SOL" },
+        priceUsd: "0.42",
+        liquidity: { usd: 25_000 },
+        updatedAt: Date.now(),
+        pairCreatedAt: Date.now() - 60_000
+      },
+      {
+        chainId: "solana",
+        pairAddress: "pair-without-mint",
+        priceUsd: "0.42",
+        liquidity: { usd: 25_000 }
+      }
+    ]
+  });
+  assert.equal(validation.ok, true);
+  assert.equal(validation.entries.length, 1);
+  assert.equal(validation.entries[0].tokenAddress, "new-pair-only");
+  assert.equal(validation.entries[0].pair.pairAddress, "pair-latest");
+  assert.equal(validation.invalidReasonCounts.base_token_address_missing_or_invalid, 1);
+
+  const discovery = normalizeDiscoveryUniverse({
+    boostEntries: [{ tokenAddress: "boost-only", chainId: "solana" }],
+    pairEntries: validation.entries,
+    limit: 10
+  });
+  assert.deepEqual(discovery.entries.map(entry => entry.tokenAddress), ["new-pair-only", "boost-only"]);
+  assert.equal(discovery.entries[0].sources[0], "latest_pair_feed");
+  assert.equal(discovery.sourceMetrics.latest_pair_feed_seen, 1);
+  assert.equal(discovery.sourceMetrics.source_only_candidates.latest_pair_feed, 1);
 });
 
 test("phase 1 pair observations are deduplicated without dropping other valid pairs", () => {

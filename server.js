@@ -40,6 +40,7 @@ const {
   summarizeBaselineCandidates,
   validateProviderFeed,
   validateProviderPair,
+  validateProviderPairFeed,
   PROVIDER_SCHEMA_VERSION
 } = require("./radar-core");
 
@@ -1046,6 +1047,7 @@ function observationData(item, endpoint, sourceRequestId, observedAt, pairOverri
   const pair = pairOverride || item.details?.pair || {};
   const providerMetadata = item.details?.providerMetadata || {};
   const decision = evaluateBaselineCandidate(item);
+  const pairContext = pair.__sourceContext || item.details?.pairSourceContext || {};
   const rawPayload = {
     providerMetadata,
     pair,
@@ -1074,9 +1076,9 @@ function observationData(item, endpoint, sourceRequestId, observedAt, pairOverri
     boostAmount: Number.isFinite(Number(providerMetadata.boostAmount)) ? Number(providerMetadata.boostAmount) : null,
     ctoFlag: typeof providerMetadata.cto === "boolean" ? providerMetadata.cto : null,
     source: "DexScreener",
-    sourceEndpoint: endpoint,
-    sourceRequestId,
-    sourceResponseHash: crypto.createHash("sha256").update(JSON.stringify(rawPayload)).digest("hex"),
+    sourceEndpoint: pairContext.endpoint || endpoint,
+    sourceRequestId: pairContext.requestId || sourceRequestId,
+    sourceResponseHash: pairContext.responseHash || crypto.createHash("sha256").update(JSON.stringify(rawPayload)).digest("hex"),
     freshnessMs: Number.isFinite(timestampMs(pair.updatedAt || providerMetadata.providerUpdatedAt))
       ? Math.max(0, Date.now() - timestampMs(pair.updatedAt || providerMetadata.providerUpdatedAt))
       : null,
@@ -1092,6 +1094,8 @@ function observationData(item, endpoint, sourceRequestId, observedAt, pairOverri
 async function fetchLiveTokens({ correlationId, signal } = {}) {
   const boostEndpoint = process.env.DEXSCREENER_API_URL || "https://api.dexscreener.com/token-boosts/latest/v1";
   const profileEndpoint = process.env.DEXSCREENER_PROFILES_API_URL || "https://api.dexscreener.com/token-profiles/latest/v1";
+  const newPairEndpoint = process.env.DEXSCREENER_NEW_PAIRS_API_URL || process.env.DEXSCREENER_LATEST_PAIRS_API_URL || "";
+  const indexedEndpoint = process.env.RADAR_INDEXED_DISCOVERY_URL || "";
   const pairEndpoint = process.env.DEXSCREENER_PAIR_API_URL || "https://api.dexscreener.com/latest/dex/tokens";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 7000);
@@ -1106,35 +1110,67 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
   const rpcFailureReasons = new Set();
   try {
     const requestSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
-    const readFeed = async endpoint => {
+    const hashPayload = payload => crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+    const readFeed = async (endpoint, validator, sourceName) => {
+      if (!endpoint) {
+        return {
+          ok: false,
+          configured: false,
+          entries: [],
+          error: sourceName === "latest_pair_feed"
+            ? "No latest-pair discovery endpoint configured."
+            : "No indexed discovery endpoint configured.",
+          schemaVersion: PROVIDER_SCHEMA_VERSION,
+          requestId: null,
+          responseHash: null
+        };
+      }
+      const requestId = `${sourceName}:${crypto.randomUUID()}`;
       try {
         const payload = await fetchProviderJson(endpoint, { signal: requestSignal });
-        const validation = validateProviderFeed(payload);
+        const validation = validator(payload);
         invalidFeedRecords += validation.invalidRecords || 0;
         for (const [reason, count] of Object.entries(validation.invalidReasonCounts || {})) {
           invalidFeedReasonCounts[reason] = (invalidFeedReasonCounts[reason] || 0) + count;
         }
         if (!validation.ok) {
           schemaErrors += 1;
-          return { ok: false, entries: [], error: validation.errors.join("; "), schemaVersion: validation.schemaVersion };
+          return { ok: false, configured: true, entries: [], error: validation.errors.join("; "), schemaVersion: validation.schemaVersion, requestId, responseHash: hashPayload(payload) };
         }
         return {
           ok: true,
-          entries: validation.entries,
+          configured: true,
+          entries: validation.entries.map(entry => ({
+            ...entry,
+            __sourceEndpoint: endpoint,
+            __sourceRequestId: requestId,
+            __sourceResponseHash: hashPayload(payload)
+          })),
           error: null,
-          schemaVersion: validation.schemaVersion
+          schemaVersion: validation.schemaVersion,
+          requestId,
+          responseHash: hashPayload(payload)
         };
       } catch (error) {
         if (signal?.aborted) throw error;
-        return { ok: false, entries: [], error: error.message, schemaVersion: PROVIDER_SCHEMA_VERSION };
+        return { ok: false, configured: true, entries: [], error: error.message, schemaVersion: PROVIDER_SCHEMA_VERSION, requestId, responseHash: null };
       }
     };
-    const [boostFeed, profileFeed] = await Promise.all([readFeed(boostEndpoint), readFeed(profileEndpoint)]);
+    const [boostFeed, profileFeed, newPairFeed, indexedFeed] = await Promise.all([
+      readFeed(boostEndpoint, validateProviderFeed, "boost_feed"),
+      readFeed(profileEndpoint, validateProviderFeed, "profile_feed"),
+      readFeed(newPairEndpoint, validateProviderPairFeed, "latest_pair_feed"),
+      readFeed(indexedEndpoint, validateProviderFeed, "indexed_feed")
+    ]);
     const boostEntries = boostFeed.entries.filter(item => item.chainId === "solana" && item.tokenAddress);
     const profileEntries = profileFeed.entries.filter(item => item.chainId === "solana" && item.tokenAddress);
+    const pairEntries = newPairFeed.entries.filter(item => item.chainId === "solana" && item.tokenAddress);
+    const indexedEntries = indexedFeed.entries.filter(item => item.chainId === "solana" && item.tokenAddress);
     const discovery = normalizeDiscoveryUniverse({
       boostEntries,
       profileEntries,
+      pairEntries,
+      indexedEntries,
       watchlistMints: state.watchlist,
       limit: Math.max(1, Math.min(100, Number(process.env.DEXSCREENER_DISCOVERY_LIMIT || 30)))
     });
@@ -1142,12 +1178,23 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
     const pairResponses = await mapWithConcurrency(discovery.entries, PROVIDER_MAX_CONCURRENCY, async entry => {
       const mint = entry.tokenAddress;
       try {
+        const requestId = `pair_fetch:${crypto.randomUUID()}`;
         const payload = await fetchProviderJson(`${pairEndpoint}/${encodeURIComponent(mint)}`, { signal: requestSignal });
+        const responseHash = hashPayload(payload);
         const raw = Array.isArray(payload?.pairs) ? payload.pairs : [];
         const pairs = [];
         for (const candidate of raw) {
           const validation = validateProviderPair(candidate);
-          if (validation.valid) pairs.push(validation.pair);
+          if (validation.valid) {
+            pairs.push({
+              ...validation.pair,
+              __sourceContext: {
+                endpoint: `${pairEndpoint}/${encodeURIComponent(mint)}`,
+                requestId,
+                responseHash
+              }
+            });
+          }
           else invalidPairRecords += 1;
         }
         if (!Array.isArray(payload?.pairs)) {
@@ -1155,24 +1202,44 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
           pairFailures += 1;
           return { pairs: [], schemaError: "Pair response must contain a pairs array." };
         }
-        return { pairs, invalidPairs: raw.length - pairs.length };
+        return { pairs, invalidPairs: raw.length - pairs.length, requestId, responseHash };
       } catch {
         pairFailures += 1;
         return { pairs: [] };
       }
     });
-    const rawPairs = pairResponses.flatMap(result => Array.isArray(result?.pairs) ? result.pairs : []);
+    const seededPairs = discovery.entries
+      .map(entry => entry.sourceEntries.latest_pair_feed?.pair)
+      .filter(Boolean);
+    const rawPairs = [
+      ...pairResponses.flatMap(result => Array.isArray(result?.pairs) ? result.pairs : []),
+      ...seededPairs
+    ];
     const allPairs = dedupePairs(rawPairs);
     const fresh = discovery.entries.map((entry, index) => {
       const mint = entry.tokenAddress || `live-${index}`;
-      const pairs = dedupePairs(Array.isArray(pairResponses[index]?.pairs) ? pairResponses[index].pairs : []);
+      const discoveredPair = entry.sourceEntries.latest_pair_feed?.pair;
+      const discoveredPairWithContext = discoveredPair ? {
+        ...discoveredPair,
+        __sourceContext: {
+          endpoint: entry.sourceEntries.latest_pair_feed.__sourceEndpoint || newPairEndpoint,
+          requestId: entry.sourceEntries.latest_pair_feed.__sourceRequestId || null,
+          responseHash: entry.sourceEntries.latest_pair_feed.__sourceResponseHash || null
+        }
+      } : null;
+      const pairs = dedupePairs([
+        ...(Array.isArray(pairResponses[index]?.pairs) ? pairResponses[index].pairs : []),
+        ...(discoveredPairWithContext ? [discoveredPairWithContext] : [])
+      ]);
        const pair = selectPrimaryPair(pairs);
       const boost = entry.sourceEntries.boost_feed || {};
       const profile = entry.sourceEntries.new_pair_feed || {};
+      const latestPair = entry.sourceEntries.latest_pair_feed || {};
+      const indexed = entry.sourceEntries.indexed_feed || {};
       const shortMint = mint.slice(0, 4).toUpperCase();
       const baseToken = pair?.baseToken || {};
       const pairInfo = pair?.info || {};
-      const sourceItem = { ...profile, ...boost };
+      const sourceItem = { ...profile, ...indexed, ...latestPair, ...boost };
       const symbol = baseToken.symbol || sourceItem.symbol || `SOL-${shortMint}`;
       const name = baseToken.name || sourceItem.name || String(sourceItem.description || "").split(/\r?\n/).map(line => line.trim()).find(Boolean) || `Solana token ${shortMint}`;
       const description = sourceItem.description || pairInfo.description || null;
@@ -1186,8 +1253,17 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
         openGraph: sourceItem.openGraph || null, description, links, websites, socials, pairInfo,
         cto: typeof boost.cto === "boolean" ? boost.cto : null,
         boostAmount: boost.amount ?? null, totalBoostAmount: boost.totalAmount ?? null,
-        providerUpdatedAt: boost.updatedAt || profile.updatedAt || null,
-        discoverySources: entry.sources
+        providerUpdatedAt: boost.updatedAt || profile.updatedAt || latestPair.pair?.updatedAt || indexed.updatedAt || null,
+        discoverySources: entry.sources,
+        discoveryLineage: entry.sources.map(source => {
+          const sourceEntry = entry.sourceEntries[source] || {};
+          return {
+            source,
+            endpoint: sourceEntry.__sourceEndpoint || null,
+            requestId: sourceEntry.__sourceRequestId || null,
+            responseHash: sourceEntry.__sourceResponseHash || null
+          };
+        })
       };
       const evidence = [
         `DexScreener discovery sources: ${entry.sources.join(", ")}.`,
@@ -1219,6 +1295,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
              priceChange: pair.priceChange || null, txns: pair.txns || null, makers: pair.makers || null,
             info: pair.info || null, pairCountForMint: pairs.length
           } : null,
+           pairSourceContext: pair?.__sourceContext || null,
           pairs: pairs.map(candidate => ({
             address: candidate.pairAddress || null, dexId: candidate.dexId || null, url: candidate.url || null,
             chainId: candidate.chainId || null, baseToken: candidate.baseToken || null, quoteToken: candidate.quoteToken || null,
@@ -1226,6 +1303,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
             priceUsd: candidate.priceUsd ?? null, fdv: candidate.fdv ?? null, marketCap: candidate.marketCap ?? null,
              liquidityUsd: candidate.liquidity?.usd ?? null, volume: candidate.volume || null,
              priceChange: candidate.priceChange || null, txns: candidate.txns || null, makers: candidate.makers || null
+             , __sourceContext: candidate.__sourceContext || null
           })),
           primaryPairPolicy: "SOLANA_ONLY_WITH_PRICE_AND_LIQUIDITY_THEN_LIQUIDITY_UPDATED_CREATED_ADDRESS",
           providerMetadata,
@@ -1279,7 +1357,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
       : rpcStatuses.some(status => status !== "UNVERIFIED") ? "PARTIAL" : "FAILED";
     const report = summarizeBaselineCandidates(secured, {
       checked: secured.length,
-       providerRecords: boostFeed.entries.length + profileFeed.entries.length,
+        providerRecords: discovery.sourceMetrics.unique_mints_before_dedup,
        discoveryUniverseSize: discovery.entries.length,
        providerRecordsWithPair: fresh.filter(item => (item.details?.pairs || []).length > 0).length,
       providerRecordsWithPrice: fresh.filter(item => item.price !== "UNKNOWN").length,
@@ -1297,8 +1375,10 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
          unique_pairs_before_dedup: new Set(rawPairs.map(pair => pair.pairAddress).filter(Boolean)).size,
         unique_pairs_after_dedup: new Set(fresh.flatMap(item => item.details?.pairs || []).map(pair => pair.address).filter(Boolean)).size,
         discovery_sources: {
-          boost_feed: { endpoint: boostEndpoint, ok: boostFeed.ok, error: boostFeed.error },
-          new_pair_feed: { endpoint: profileEndpoint, ok: profileFeed.ok, error: profileFeed.error },
+           boost_feed: { endpoint: boostEndpoint, ok: boostFeed.ok, configured: boostFeed.configured, count: boostEntries.length, error: boostFeed.error },
+           new_pair_feed: { endpoint: profileEndpoint, ok: profileFeed.ok, configured: profileFeed.configured, count: profileEntries.length, error: profileFeed.error },
+           latest_pair_feed: { endpoint: newPairEndpoint || null, ok: newPairFeed.ok, configured: newPairFeed.configured, count: pairEntries.length, error: newPairFeed.error },
+           indexed_feed: { endpoint: indexedEndpoint || null, ok: indexedFeed.ok, configured: indexedFeed.configured, count: indexedEntries.length, error: indexedFeed.error },
           watchlist: { count: state.watchlist.length, ok: true }
         },
         primary_pair_policy: "SOLANA_ONLY_WITH_PRICE_AND_LIQUIDITY_THEN_LIQUIDITY_UPDATED_CREATED_ADDRESS"
