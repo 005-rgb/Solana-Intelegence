@@ -674,12 +674,15 @@ function summarizeCandidates(candidates, metadata, evaluator, filterConfig, deci
   }
 
   const report = {
+    ...metadata,
     decisionVersion,
+    // Outcome counters are derived from the examined rows and must never be
+    // supplied by a caller as metadata. Reconciliation is the audit contract.
     recordsChecked: decisions.length,
-    filterConfig,
     accepted: decisions.filter(decision => decision.accepted).length,
     rejected: decisions.filter(decision => decision.outcome === "REJECTED").length,
     unresolved: decisions.filter(decision => decision.outcome === "UNRESOLVED").length,
+    filterConfig,
     reasons: [...reasons.values()]
       .map(reason => ({ ...reason, reason: REASON_LABELS[reason.code] || reason.code }))
       .sort((left, right) => left.code.localeCompare(right.code)),
@@ -693,8 +696,7 @@ function summarizeCandidates(candidates, metadata, evaluator, filterConfig, deci
     securityRejected: list.filter(item => item?.security?.status === "REJECTED").length,
     liquidityRejected: decisions.filter(decision => decision.reasonCodes.includes("LIQUIDITY_BELOW_MINIMUM")).length,
     momentumRejected: decisions.filter(decision => decision.reasonCodes.includes("PRICE_CHANGE_NOT_POSITIVE")).length,
-    ctoRejected: decisions.filter(decision => decision.reasonCodes.includes("CTO_FLAG")).length,
-    ...metadata
+    ctoRejected: decisions.filter(decision => decision.reasonCodes.includes("CTO_FLAG")).length
   };
 
   if (report.recordsChecked !== report.accepted + report.rejected + report.unresolved) {

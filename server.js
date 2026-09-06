@@ -25,20 +25,20 @@ const {
   disconnectDb
 } = require("./db");
 const {
-  PHASE2_DECISION_VERSION,
-  PHASE2_FILTER_CONFIG,
+  BASELINE_DECISION_VERSION,
+  FILTER_CONFIG,
   buildAccountTaxonomy,
   MAX_TOP_HOLDER_PERCENT,
   MIN_LIQUIDITY_USD,
   dedupePairs,
   dedupeMintEntries,
+  evaluateBaselineCandidate,
   evaluateMarketQuality,
-  evaluatePhase2Candidate,
   normalizeDiscoveryUniverse,
   normalizePoolEvidence,
   selectBoardTokens,
   selectPrimaryPair,
-  summarizePhase2Candidates,
+  summarizeBaselineCandidates,
   validateProviderFeed,
   validateProviderPair,
   PROVIDER_SCHEMA_VERSION
@@ -70,7 +70,7 @@ let lastFilterReport = {
   checked: 0, accepted: 0, rejected: 0, unresolved: 0, reasons: [],
   providerRecords: 0, pairRequests: 0, pairFailures: 0, providerAgeMs: null,
   rpcStatus: "NOT RUN", rpcFreshnessMs: null, rpcCommitment: "confirmed",
-  qualityStatus: "NOT RUN", filterConfig: PHASE2_FILTER_CONFIG, tokensPersisted: 0,
+  qualityStatus: "NOT RUN", filterConfig: FILTER_CONFIG, tokensPersisted: 0,
   discoveryUniverseSize: 0, providerRecordsWithPair: 0,
   providerRecordsWithPrice: 0, providerRecordsWithLiquidity: 0,
   securityVerified: 0, securityUnknown: 0, securityRejected: 0,
@@ -1005,7 +1005,7 @@ function poolEvidenceFromItem(item) {
 function observationData(item, endpoint, sourceRequestId, observedAt, pairOverride = null, pairRole = "primary") {
   const pair = pairOverride || item.details?.pair || {};
   const providerMetadata = item.details?.providerMetadata || {};
-  const decision = evaluatePhase2Candidate(item);
+  const decision = evaluateBaselineCandidate(item);
   const rawPayload = {
     providerMetadata,
     pair,
@@ -1212,7 +1212,10 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
         marketQuality: evaluateMarketQuality(item)
       }
     }));
-    const decisions = secured.map(evaluatePhase2Candidate);
+    // Phase 0 freezes the existing hard-filter behavior. Phase 2 market
+    // quality remains attached as evidence, but it must not silently change
+    // the baseline accepted set.
+    const decisions = secured.map(evaluateBaselineCandidate);
     const safeTokens = secured.filter((item, index) => decisions[index].accepted).map(item => {
       const rationale = buildTokenReview(item, item.security);
       return {
@@ -1234,9 +1237,9 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
     const rpcStatus = rpcStatuses.length && rpcStatuses.every(status => status !== "UNVERIFIED")
       ? "LIVE"
       : rpcStatuses.some(status => status !== "UNVERIFIED") ? "PARTIAL" : "FAILED";
-    const report = summarizePhase2Candidates(secured, {
+    const report = summarizeBaselineCandidates(secured, {
       checked: secured.length,
-       providerRecords: boostEntries.length + profileEntries.length,
+       providerRecords: boostFeed.entries.length + profileFeed.entries.length,
        discoveryUniverseSize: discovery.entries.length,
        providerRecordsWithPair: fresh.filter(item => (item.details?.pairs || []).length > 0).length,
       providerRecordsWithPrice: fresh.filter(item => item.price !== "UNKNOWN").length,
@@ -1248,7 +1251,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
          : rpcStatus === "PARTIAL" || pairFailures > 0
            ? "PARTIAL"
            : "FAILED",
-      filterConfig: PHASE2_FILTER_CONFIG,
+       filterConfig: FILTER_CONFIG,
       sourceMetrics: {
         ...discovery.sourceMetrics,
          unique_pairs_before_dedup: new Set(rawPairs.map(pair => pair.pairAddress).filter(Boolean)).size,
@@ -1366,7 +1369,7 @@ async function runScan(manual = false, options = {}) {
     rejectedCount: lastFilterReport.rejected || 0,
     unresolvedCount: lastFilterReport.unresolved || 0,
     rejectionReasons: lastFilterReport.reasons || [],
-    filterConfig: lastFilterReport.filterConfig || PHASE2_FILTER_CONFIG,
+    filterConfig: lastFilterReport.filterConfig || FILTER_CONFIG,
     providerAgeMs: lastFilterReport.providerAgeMs ?? null,
     providerRecords: lastFilterReport.providerRecords || 0,
     pairRequests: lastFilterReport.pairRequests || 0,
@@ -1389,7 +1392,7 @@ async function runScan(manual = false, options = {}) {
     rpcCommitment: lastFilterReport.rpcCommitment || "confirmed",
     timedOut: Boolean(lastFilterReport.timedOut),
     timeoutReason: lastFilterReport.timeoutReason || null,
-    decisionVersion: PHASE2_DECISION_VERSION,
+    decisionVersion: BASELINE_DECISION_VERSION,
     correlationId,
     requestId,
     sourceMetrics: lastFilterReport.sourceMetrics || {}
@@ -1401,7 +1404,7 @@ async function runScan(manual = false, options = {}) {
         status: "RUNNING",
         startedAt: new Date(started),
         provider: state.provider,
-        decisionVersion: PHASE2_DECISION_VERSION,
+        decisionVersion: BASELINE_DECISION_VERSION,
         correlationId,
         requestId,
         idempotencyKey,

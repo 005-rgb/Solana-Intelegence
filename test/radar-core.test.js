@@ -88,6 +88,23 @@ test("checked, accepted, rejected, and unresolved counts reconcile", () => {
   assert.equal(FILTER_CONFIG.version, "baseline-v1");
 });
 
+test("audit outcome counters cannot be overridden by metadata", () => {
+  const report = summarizeBaselineCandidates([
+    verifiedItem(),
+    verifiedItem({ liquidity: null })
+  ], {
+    recordsChecked: 999,
+    accepted: 999,
+    rejected: 999,
+    unresolved: 999
+  });
+  assert.equal(report.recordsChecked, 2);
+  assert.equal(report.accepted, 1);
+  assert.equal(report.rejected, 0);
+  assert.equal(report.unresolved, 1);
+  assert.equal(report.recordsChecked, report.accepted + report.rejected + report.unresolved);
+});
+
 test("failed or empty scan preserves the last known good board", () => {
   const previous = [{ mint: "known-good" }];
   assert.deepEqual(selectBoardTokens(previous, []), previous);
