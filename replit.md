@@ -36,7 +36,7 @@ npm run db:push
 
 - `server.js`: HTTP API, DexScreener provider boundary, automatic scan scheduler, and paper-trade logic.
 - `db.js`: Prisma repository layer, LIVE-only cleanup, watchlist events, paper trades, scan runs, and immutable provider observations.
-- `radar-core.js`: pure baseline-v1 reason-code, count-reconciliation, and deterministic pair-selection helpers.
+- `radar-core.js`: pure baseline-v1/phase2-v1 reason-code, count-reconciliation, deterministic pair-selection, and market-quality helpers.
 - `prisma/schema.prisma`: PostgreSQL schema for live tokens, signals, watchlists, paper trading, scan observability, and `TokenObservation` lineage rows.
 - `public/`: responsive research UI.
 
@@ -74,6 +74,14 @@ If a provider or security scan fails, the last known good Radar board remains vi
 - A bounded top-holder RPC enrichment resolves account and owner evidence without weakening the existing security gates. Unresolved owners remain unknown.
 - Immutable `TokenObservation` rows persist account taxonomy, pool evidence, and separated account/wallet concentration metrics.
 - The UI calls the data token-account concentration and shows the taxonomy status; it does not present unresolved token accounts as wallet holders.
+
+## Phase 2 security and market-quality gates
+
+Live scans use the versioned `phase2-v1` decision contract while preserving `baseline-v1` helpers for audit comparison. Security verification now requires a parsed supported SPL mint account, positive supply, complete largest-account data, complete RPC slot context, and internally valid numeric amounts. Missing, malformed, partial, or stale RPC evidence remains `UNVERIFIED` and fails closed; an unsupported account type is `REJECTED`.
+
+Security observations identify `SPL_TOKEN` versus `TOKEN_2022`, retain reviewed Token-2022 extensions, and expose warnings for transfer-fee, transfer-hook, permanent-delegate, default-state, non-transferable, confidential-transfer, and metadata-pointer extensions. RPC evidence includes commitment, observation time, response/request counts, and per-response slot contexts.
+
+Market eligibility combines the existing $10,000 liquidity floor with liquidity/market-cap ratio, a transparent estimated impact proxy for a configured $100 research entry, 24-hour volume/liquidity ratio, pair age, and provider freshness. Missing inputs are `UNKNOWN`, never zero, and cannot qualify a candidate. Gate metrics and stable reason codes are persisted in token observations and scan audit data. These are research safety gates, not executable sell simulations or predictive scores.
 
 ## Phase 0A platform safety
 

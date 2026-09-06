@@ -7,12 +7,15 @@ const {
   dedupeMintEntries,
   dedupePairs,
   evaluateBaselineCandidate,
+  evaluateMarketQuality,
+  evaluatePhase2Candidate,
   normalizeDiscoveryUniverse,
   selectBoardTokens,
   selectPrimaryPair,
   summarizeBaselineCandidates
   , validateProviderFeed
   , validateProviderPair
+  , summarizePhase2Candidates
 } = require("../radar-core");
 
 function verifiedItem(overrides = {}) {
@@ -30,6 +33,24 @@ function verifiedItem(overrides = {}) {
     },
     ...overrides
   };
+}
+
+function phase2Item(overrides = {}) {
+  const now = Date.parse("2026-09-05T00:00:00.000Z");
+  return verifiedItem({
+    marketCap: 1_000_000,
+    details: {
+      providerMetadata: { cto: false },
+      pair: {
+        liquidityUsd: 25_000,
+        marketCap: 1_000_000,
+        volume: { h24: 50_000 },
+        pairCreatedAt: now - 60 * 60 * 1000,
+        updatedAt: now - 60 * 1000
+      }
+    },
+    ...overrides
+  });
 }
 
 test("unknown security fails closed", () => {
@@ -264,4 +285,73 @@ test("provider pair validation preserves missing values as null but rejects unsa
     priceUsd: "1",
     pairCreatedAt: now + 10 * 60 * 1000
   }, { now }).valid, false);
+});
+
+test("phase 2 market-quality gates pass with complete fresh market evidence", () => {
+  const now = Date.parse("2026-09-05T00:00:00.000Z");
+  const quality = evaluateMarketQuality(phase2Item(), { now });
+  assert.equal(quality.status, "PASSED");
+  assert.equal(quality.passed, true);
+  assert.equal(quality.metrics.liquidityToMarketCap, 0.025);
+  assert.equal(quality.metrics.estimatedEntryImpactPercent, 0.4);
+  assert.equal(quality.reasons.length, 0);
+  const candidate = phase2Item();
+  candidate.details.marketQuality = quality;
+  assert.equal(evaluatePhase2Candidate(candidate).accepted, true);
+});
+
+test("phase 2 missing market evidence is unknown and fails closed", () => {
+  const quality = evaluateMarketQuality(phase2Item({
+    marketCap: null,
+    details: { providerMetadata: { cto: false }, pair: { liquidityUsd: 25_000 } }
+  }), { now: Date.parse("2026-09-05T00:00:00.000Z") });
+  assert.equal(quality.status, "UNKNOWN");
+  assert.equal(quality.passed, false);
+  assert.ok(quality.reasons.includes("MARKET_CAP_UNKNOWN"));
+  assert.ok(quality.reasons.includes("VOLUME_UNKNOWN"));
+  assert.ok(quality.reasons.includes("POOL_AGE_UNKNOWN"));
+  assert.ok(quality.reasons.includes("MARKET_DATA_FRESHNESS_UNKNOWN"));
+});
+
+test("phase 2 market-quality blockers are explicit", () => {
+  const now = Date.parse("2026-09-05T00:00:00.000Z");
+  const item = phase2Item({
+    liquidity: 4_000,
+    marketCap: 10_000_000,
+    details: {
+      providerMetadata: { cto: false },
+      pair: {
+        liquidityUsd: 4_000,
+        marketCap: 10_000_000,
+        volume: { h24: 2_000_000 },
+        pairCreatedAt: now - 60 * 1000,
+        updatedAt: now - 60 * 60 * 1000
+      }
+    }
+  });
+  item.details.marketQuality = evaluateMarketQuality(item, { now });
+  const decision = evaluatePhase2Candidate(item);
+  assert.equal(decision.accepted, false);
+  assert.equal(decision.outcome, "REJECTED");
+  assert.ok(decision.reasonCodes.includes("LIQUIDITY_TO_MARKET_CAP_TOO_LOW"));
+  assert.ok(decision.reasonCodes.includes("ESTIMATED_ENTRY_IMPACT_TOO_HIGH"));
+  assert.ok(decision.reasonCodes.includes("VOLUME_LIQUIDITY_RATIO_TOO_HIGH"));
+  assert.ok(decision.reasonCodes.includes("POOL_TOO_NEW"));
+  assert.ok(decision.reasonCodes.includes("MARKET_DATA_STALE"));
+});
+
+test("phase 2 summary reconciles outcome rows while exposing multi-label gate reasons", () => {
+  const now = Date.parse("2026-09-05T00:00:00.000Z");
+  const accepted = phase2Item();
+  accepted.details.marketQuality = evaluateMarketQuality(accepted, { now });
+  const report = summarizePhase2Candidates([
+    accepted,
+    phase2Item({ marketCap: null, details: { providerMetadata: { cto: false }, pair: { liquidityUsd: 25_000 } } })
+  ], { discoveryUniverseSize: 2 });
+  assert.equal(report.decisionVersion, "phase2-v1");
+  assert.equal(report.recordsChecked, 2);
+  assert.equal(report.accepted + report.rejected + report.unresolved, 2);
+  assert.equal(report.accepted, 1);
+  assert.equal(report.unresolved, 1);
+  assert.ok(report.reasons.some(reason => reason.code === "MARKET_CAP_UNKNOWN"));
 });

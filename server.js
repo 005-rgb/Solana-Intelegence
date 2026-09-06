@@ -25,19 +25,20 @@ const {
   disconnectDb
 } = require("./db");
 const {
-  BASELINE_DECISION_VERSION,
+  PHASE2_DECISION_VERSION,
+  PHASE2_FILTER_CONFIG,
   buildAccountTaxonomy,
-  FILTER_CONFIG,
   MAX_TOP_HOLDER_PERCENT,
   MIN_LIQUIDITY_USD,
   dedupePairs,
   dedupeMintEntries,
-  evaluateBaselineCandidate,
+  evaluateMarketQuality,
+  evaluatePhase2Candidate,
   normalizeDiscoveryUniverse,
   normalizePoolEvidence,
   selectBoardTokens,
   selectPrimaryPair,
-  summarizeBaselineCandidates,
+  summarizePhase2Candidates,
   validateProviderFeed,
   validateProviderPair,
   PROVIDER_SCHEMA_VERSION
@@ -69,7 +70,7 @@ let lastFilterReport = {
   checked: 0, accepted: 0, rejected: 0, unresolved: 0, reasons: [],
   providerRecords: 0, pairRequests: 0, pairFailures: 0, providerAgeMs: null,
   rpcStatus: "NOT RUN", rpcFreshnessMs: null, rpcCommitment: "confirmed",
-  qualityStatus: "NOT RUN", filterConfig: FILTER_CONFIG, tokensPersisted: 0,
+  qualityStatus: "NOT RUN", filterConfig: PHASE2_FILTER_CONFIG, tokensPersisted: 0,
   discoveryUniverseSize: 0, providerRecordsWithPair: 0,
   providerRecordsWithPrice: 0, providerRecordsWithLiquidity: 0,
   securityVerified: 0, securityUnknown: 0, securityRejected: 0,
@@ -497,12 +498,17 @@ async function solanaRpcBatch(requests, signal) {
   }
 }
 
-function unverifiedSecurity(message, { poolEvidence = {} } = {}) {
+function unverifiedSecurity(message, {
+  poolEvidence = {},
+  reasonCodes = ["RPC_INCOMPLETE"],
+  rpcEvidence = null
+} = {}) {
   const taxonomy = buildAccountTaxonomy([], { poolEvidence });
   return {
     verified: false,
     status: "UNVERIFIED",
     reasons: [`Security verification failed: ${message}`],
+    reasonCodes,
     authorities: { mint: "UNKNOWN", freeze: "UNKNOWN", metadata: "UNKNOWN" },
     holders: null,
     topHolderPercent: null,
@@ -510,29 +516,90 @@ function unverifiedSecurity(message, { poolEvidence = {} } = {}) {
     supply: null,
     poolEvidence: taxonomy.poolEvidence,
     accountTaxonomy: taxonomy,
-    concentration: taxonomy.concentration
+    concentration: taxonomy.concentration,
+    tokenProgram: "UNKNOWN",
+    tokenProgramStatus: "UNKNOWN",
+    extensions: [],
+    extensionWarnings: [],
+    rpcEvidence
   };
 }
 
-function securityFromRpcResults(accountResponse, supplyResponse, largestResponse, taxonomyOptions = {}) {
+function securityFromRpcResults(accountResponse, supplyResponse, largestResponse, taxonomyOptions = {}, rpcEvidence = null) {
   const rpcError = [accountResponse, supplyResponse, largestResponse].find(item => item?.error);
-  if (rpcError) return unverifiedSecurity(rpcError.error.message || "Solana RPC request failed", taxonomyOptions);
+  if (rpcError) return unverifiedSecurity(rpcError.error.message || "Solana RPC request failed", {
+    ...taxonomyOptions,
+    reasonCodes: ["RPC_REQUEST_FAILED"],
+    rpcEvidence
+  });
   try {
     const account = accountResponse?.result;
     const supply = supplyResponse?.result;
     const largest = largestResponse?.result;
+    const accountValue = account?.value;
     const info = account?.value?.data?.parsed?.info;
     const supplyAmount = supply?.value?.amount;
     const largestAccounts = largest?.value;
-    if (!info || !supplyAmount || !Array.isArray(largestAccounts) || !largestAccounts.length) {
-      return unverifiedSecurity("Solana RPC security response is incomplete.", taxonomyOptions);
+    const contexts = [account, supply, largest].map(result => result?.context);
+    if (!info || accountValue == null || supplyAmount == null || !Array.isArray(largestAccounts) || !largestAccounts.length) {
+      return unverifiedSecurity("Solana RPC security response is incomplete.", {
+        ...taxonomyOptions,
+        reasonCodes: ["RPC_INCOMPLETE"],
+        rpcEvidence: { ...rpcEvidence, contexts }
+      });
+    }
+    if (!contexts.every(context => Number.isInteger(context?.slot) && context.slot >= 0)) {
+      return unverifiedSecurity("Solana RPC response did not identify a complete slot context.", {
+        ...taxonomyOptions,
+        reasonCodes: ["RPC_CONTEXT_UNKNOWN"],
+        rpcEvidence: { ...rpcEvidence, contexts }
+      });
+    }
+    const parsedType = account?.value?.data?.parsed?.type;
+    const program = account?.value?.data?.program;
+    const owner = accountValue?.owner;
+    const tokenProgram = program === "spl-token" || owner === "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+      ? "SPL_TOKEN"
+      : program === "spl-token-2022" || owner === "TokenzQdBNbLqP5VEhdkY6Y1W3qL6u3x9a6J6wGv5"
+        ? "TOKEN_2022"
+        : "UNKNOWN";
+    if (parsedType !== "mint" || tokenProgram === "UNKNOWN") {
+      return {
+        ...unverifiedSecurity("Account is not a supported parsed SPL mint account.", {
+          ...taxonomyOptions,
+          reasonCodes: ["MINT_ACCOUNT_INVALID"],
+          rpcEvidence: { ...rpcEvidence, contexts }
+        }),
+        status: "REJECTED",
+        tokenProgram,
+        tokenProgramStatus: "UNSUPPORTED",
+        rpcEvidence: { ...rpcEvidence, contexts }
+      };
     }
     const mintAuthorityRenounced = Boolean(info) && info.mintAuthority == null;
     const freezeAuthorityRenounced = Boolean(info) && info.freezeAuthority == null;
+    if (!/^\d+$/.test(String(supplyAmount)) || !/^\d+$/.test(String(largestAccounts[0]?.amount || ""))) {
+      return unverifiedSecurity("Solana RPC supply or largest-holder data is invalid.", {
+        ...taxonomyOptions,
+        reasonCodes: ["SECURITY_DATA_INVALID"],
+        rpcEvidence: { ...rpcEvidence, contexts }
+      });
+    }
     const supplyRaw = BigInt(supplyAmount);
-    const largestRaw = BigInt(largestAccounts[0]?.amount || "0");
-    if (supplyRaw <= 0n || largestAccounts[0]?.amount == null) {
-      return unverifiedSecurity("Solana RPC supply or largest-holder data is invalid.", taxonomyOptions);
+    const largestRaw = BigInt(largestAccounts[0].amount);
+    if (supplyRaw <= 0n) {
+      return unverifiedSecurity("Solana RPC reported a non-positive token supply.", {
+        ...taxonomyOptions,
+        reasonCodes: ["SUPPLY_NON_POSITIVE"],
+        rpcEvidence: { ...rpcEvidence, contexts }
+      });
+    }
+    if (largestAccounts.some(holder => !holder?.address || !/^\d+$/.test(String(holder.amount ?? "")))) {
+      return unverifiedSecurity("Solana RPC largest-holder data contains an invalid account amount.", {
+        ...taxonomyOptions,
+        reasonCodes: ["LARGEST_HOLDER_DATA_INVALID"],
+        rpcEvidence: { ...rpcEvidence, contexts }
+      });
     }
     const topHolderPercent = supplyRaw > 0n ? Number((largestRaw * 10000n) / supplyRaw) / 100 : null;
     const topHolders = Array.isArray(largest?.value)
@@ -548,18 +615,34 @@ function securityFromRpcResults(accountResponse, supplyResponse, largestResponse
       : [];
     const accountTaxonomy = buildAccountTaxonomy(topHolders, taxonomyOptions);
     const reasons = [];
-    if (!info) reasons.push("Mint account data is unavailable or not an SPL token mint.");
-    else {
-      if (!mintAuthorityRenounced) reasons.push("Mint authority is still active.");
-      if (!freezeAuthorityRenounced) reasons.push("Freeze authority is still active.");
+    const reasonCodes = [];
+    if (!mintAuthorityRenounced) {
+      reasons.push("Mint authority is still active.");
+      reasonCodes.push("MINT_AUTHORITY_ACTIVE");
+    }
+    if (!freezeAuthorityRenounced) {
+      reasons.push("Freeze authority is still active.");
+      reasonCodes.push("FREEZE_AUTHORITY_ACTIVE");
     }
     if (topHolderPercent == null) reasons.push("Token supply or largest-holder data is unavailable.");
-    else if (topHolderPercent > MAX_TOP_HOLDER_PERCENT) reasons.push(`Largest holder controls ${topHolderPercent.toFixed(2)}% of supply.`);
+    else if (topHolderPercent > MAX_TOP_HOLDER_PERCENT) {
+      reasons.push(`Largest holder controls ${topHolderPercent.toFixed(2)}% of supply.`);
+      reasonCodes.push("TOP_HOLDER_ABOVE_LIMIT");
+    }
+    const extensions = Array.isArray(info.extensions)
+      ? info.extensions.map(extension => typeof extension === "string" ? extension : extension?.extension || extension?.type).filter(Boolean)
+      : [];
+    const extensionWarnings = extensions.filter(extension => [
+      "transferFeeConfig", "transferHook", "permanentDelegate", "defaultAccountState",
+      "nonTransferable", "confidentialTransfer", "metadataPointer"
+    ].includes(extension)).map(extension => `Token-2022 extension present: ${extension}.`);
+    if (extensionWarnings.length) reasons.push(...extensionWarnings);
     const verified = mintAuthorityRenounced && freezeAuthorityRenounced && topHolderPercent != null && topHolderPercent <= MAX_TOP_HOLDER_PERCENT;
     return {
       verified,
       status: verified ? "VERIFIED" : "REJECTED",
       reasons: reasons.length ? reasons : ["Mint and freeze authorities are renounced; largest-holder concentration is within the 80% limit."],
+      reasonCodes,
       authorities: {
         mint: mintAuthorityRenounced ? "RENOUNCED" : "ACTIVE",
         freeze: freezeAuthorityRenounced ? "RENOUNCED" : "ACTIVE",
@@ -569,12 +652,21 @@ function securityFromRpcResults(accountResponse, supplyResponse, largestResponse
       topHolderPercent,
       topHolders: accountTaxonomy.accounts,
       supply: supply?.value?.uiAmountString || null,
+      tokenProgram,
+      tokenProgramStatus: tokenProgram === "TOKEN_2022" ? "SUPPORTED_WITH_EXTENSION_REVIEW" : "SUPPORTED",
+      extensions,
+      extensionWarnings,
       poolEvidence: accountTaxonomy.poolEvidence,
       accountTaxonomy,
-      concentration: accountTaxonomy.concentration
+      concentration: accountTaxonomy.concentration,
+      rpcEvidence: { ...rpcEvidence, contexts, commitment: "confirmed" }
     };
   } catch (error) {
-    return unverifiedSecurity(error.message, taxonomyOptions);
+    return unverifiedSecurity(error.message, {
+      ...taxonomyOptions,
+      reasonCodes: ["SECURITY_DATA_INVALID"],
+      rpcEvidence
+    });
   }
 }
 
@@ -590,6 +682,13 @@ async function verifyTokensSecurity(tokenRecords, signal) {
   try {
     const responses = await solanaRpcBatch(requests, signal);
     const byId = new Map(responses.map(response => [String(response.id), response]));
+    const rpcEvidence = {
+      observedAt: new Date().toISOString(),
+      commitment: "confirmed",
+      responseCount: responses.length,
+      requestCount: requests.length,
+      complete: responses.length === requests.length
+    };
     const baseResults = records.map((record, index) => ({
       account: byId.get(`${index}:account`),
       supply: byId.get(`${index}:supply`),
@@ -651,7 +750,8 @@ async function verifyTokensSecurity(tokenRecords, signal) {
         poolEvidence: result.poolEvidence,
         accountInfoByAddress,
         ownerInfoByAddress
-      }
+      },
+      rpcEvidence
     ));
   } catch (error) {
     return records.map(record => unverifiedSecurity(error.message, { poolEvidence: record.poolEvidence }));
@@ -905,8 +1005,14 @@ function poolEvidenceFromItem(item) {
 function observationData(item, endpoint, sourceRequestId, observedAt, pairOverride = null, pairRole = "primary") {
   const pair = pairOverride || item.details?.pair || {};
   const providerMetadata = item.details?.providerMetadata || {};
-  const decision = evaluateBaselineCandidate(item);
-  const rawPayload = { providerMetadata, pair, pairRole, discoverySources: item.details?.discoverySources || [] };
+  const decision = evaluatePhase2Candidate(item);
+  const rawPayload = {
+    providerMetadata,
+    pair,
+    pairRole,
+    discoverySources: item.details?.discoverySources || [],
+    marketQuality: item.details?.marketQuality || decision.marketQuality || null
+  };
   return {
     mint: item.mint,
     pairAddress: pair.address || null,
@@ -1100,9 +1206,13 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
     const secured = fresh.map((item, index) => ({
       ...item,
       security: securityResults[index],
-      details: { ...item.details, security: securityResults[index] }
+      details: {
+        ...item.details,
+        security: securityResults[index],
+        marketQuality: evaluateMarketQuality(item)
+      }
     }));
-    const decisions = secured.map(evaluateBaselineCandidate);
+    const decisions = secured.map(evaluatePhase2Candidate);
     const safeTokens = secured.filter((item, index) => decisions[index].accepted).map(item => {
       const rationale = buildTokenReview(item, item.security);
       return {
@@ -1124,7 +1234,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
     const rpcStatus = rpcStatuses.length && rpcStatuses.every(status => status !== "UNVERIFIED")
       ? "LIVE"
       : rpcStatuses.some(status => status !== "UNVERIFIED") ? "PARTIAL" : "FAILED";
-    const report = summarizeBaselineCandidates(secured, {
+    const report = summarizePhase2Candidates(secured, {
       checked: secured.length,
        providerRecords: boostEntries.length + profileEntries.length,
        discoveryUniverseSize: discovery.entries.length,
@@ -1138,7 +1248,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
          : rpcStatus === "PARTIAL" || pairFailures > 0
            ? "PARTIAL"
            : "FAILED",
-      filterConfig: FILTER_CONFIG,
+      filterConfig: PHASE2_FILTER_CONFIG,
       sourceMetrics: {
         ...discovery.sourceMetrics,
          unique_pairs_before_dedup: new Set(rawPairs.map(pair => pair.pairAddress).filter(Boolean)).size,
@@ -1256,7 +1366,7 @@ async function runScan(manual = false, options = {}) {
     rejectedCount: lastFilterReport.rejected || 0,
     unresolvedCount: lastFilterReport.unresolved || 0,
     rejectionReasons: lastFilterReport.reasons || [],
-    filterConfig: lastFilterReport.filterConfig || FILTER_CONFIG,
+    filterConfig: lastFilterReport.filterConfig || PHASE2_FILTER_CONFIG,
     providerAgeMs: lastFilterReport.providerAgeMs ?? null,
     providerRecords: lastFilterReport.providerRecords || 0,
     pairRequests: lastFilterReport.pairRequests || 0,
@@ -1279,7 +1389,7 @@ async function runScan(manual = false, options = {}) {
     rpcCommitment: lastFilterReport.rpcCommitment || "confirmed",
     timedOut: Boolean(lastFilterReport.timedOut),
     timeoutReason: lastFilterReport.timeoutReason || null,
-    decisionVersion: BASELINE_DECISION_VERSION,
+    decisionVersion: PHASE2_DECISION_VERSION,
     correlationId,
     requestId,
     sourceMetrics: lastFilterReport.sourceMetrics || {}
@@ -1291,7 +1401,7 @@ async function runScan(manual = false, options = {}) {
         status: "RUNNING",
         startedAt: new Date(started),
         provider: state.provider,
-        decisionVersion: BASELINE_DECISION_VERSION,
+        decisionVersion: PHASE2_DECISION_VERSION,
         correlationId,
         requestId,
         idempotencyKey,

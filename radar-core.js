@@ -1,6 +1,13 @@
 const BASELINE_DECISION_VERSION = "baseline-v1";
+const PHASE2_DECISION_VERSION = "phase2-v1";
 const MAX_TOP_HOLDER_PERCENT = 80;
 const MIN_LIQUIDITY_USD = 10_000;
+const MIN_LIQUIDITY_TO_MARKET_CAP = 0.005;
+const RESEARCH_ORDER_SIZE_USD = 100;
+const MAX_ESTIMATED_ENTRY_IMPACT_PERCENT = 2;
+const MAX_VOLUME_LIQUIDITY_RATIO = 100;
+const MIN_POOL_AGE_MS = 5 * 60 * 1000;
+const MAX_MARKET_DATA_AGE_MS = 10 * 60 * 1000;
 const TAXONOMY_VERSION = "taxonomy-v1";
 const PROVIDER_SCHEMA_VERSION = "dexscreener-v1";
 const PROVIDER_MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
@@ -32,16 +39,42 @@ const FILTER_CONFIG = Object.freeze({
   ctoFlag: false
 });
 
+const PHASE2_FILTER_CONFIG = Object.freeze({
+  ...FILTER_CONFIG,
+  version: PHASE2_DECISION_VERSION,
+  minimumLiquidityToMarketCap: MIN_LIQUIDITY_TO_MARKET_CAP,
+  researchOrderSizeUsd: RESEARCH_ORDER_SIZE_USD,
+  maximumEstimatedEntryImpactPercent: MAX_ESTIMATED_ENTRY_IMPACT_PERCENT,
+  maximumVolumeLiquidityRatio: MAX_VOLUME_LIQUIDITY_RATIO,
+  minimumPoolAgeMs: MIN_POOL_AGE_MS,
+  maximumMarketDataAgeMs: MAX_MARKET_DATA_AGE_MS
+});
+
 const REASON_LABELS = Object.freeze({
   SECURITY_UNKNOWN: "Security verification unavailable or stale.",
   MINT_AUTHORITY_ACTIVE: "Mint authority is still active.",
   FREEZE_AUTHORITY_ACTIVE: "Freeze authority is still active.",
   SECURITY_DATA_INCOMPLETE: "Security response is incomplete.",
+  MINT_ACCOUNT_INVALID: "Mint account is not a supported parsed SPL mint.",
+  RPC_CONTEXT_UNKNOWN: "RPC response did not include a complete slot context.",
+  SECURITY_DATA_INVALID: "Security response contains invalid numeric data.",
+  SUPPLY_NON_POSITIVE: "Token supply is not positive.",
+  LARGEST_HOLDER_DATA_INVALID: "Largest-holder response contains invalid account data.",
+  RPC_REQUEST_FAILED: "Security RPC request failed.",
   TOP_HOLDER_ABOVE_LIMIT: `Largest holder exceeds ${MAX_TOP_HOLDER_PERCENT}% of supply.`,
   SECURITY_REJECTED: "Security verification rejected the candidate.",
   PRICE_UNKNOWN: "Provider price is unavailable.",
   LIQUIDITY_UNKNOWN: "Provider liquidity is unavailable.",
   LIQUIDITY_BELOW_MINIMUM: `Liquidity is below $${MIN_LIQUIDITY_USD.toLocaleString("en-US")}.`,
+  MARKET_CAP_UNKNOWN: "Provider market cap is unavailable for the liquidity-quality ratio.",
+  LIQUIDITY_TO_MARKET_CAP_TOO_LOW: "Liquidity is too small relative to provider market cap.",
+  ESTIMATED_ENTRY_IMPACT_TOO_HIGH: `Estimated impact for a $${RESEARCH_ORDER_SIZE_USD} research entry is above ${MAX_ESTIMATED_ENTRY_IMPACT_PERCENT}%.`,
+  VOLUME_UNKNOWN: "Provider 24-hour volume is unavailable for the liquidity-quality ratio.",
+  VOLUME_LIQUIDITY_RATIO_TOO_HIGH: "24-hour volume is abnormally high relative to liquidity.",
+  POOL_AGE_UNKNOWN: "Pair creation time is unavailable.",
+  POOL_TOO_NEW: "Pair is too new for the Phase 2 market-quality gate.",
+  MARKET_DATA_FRESHNESS_UNKNOWN: "Provider market-data freshness is unavailable.",
+  MARKET_DATA_STALE: "Provider market data is stale.",
   PRICE_CHANGE_UNKNOWN: "Provider 24h change is unavailable.",
   PRICE_CHANGE_NOT_POSITIVE: "Provider 24h change is not positive.",
   CTO_FLAG: "Provider marked the token as CTO."
@@ -511,13 +544,71 @@ function normalizeDiscoveryUniverse({ boostEntries = [], profileEntries = [], wa
 
 function securityReasonCodes(security) {
   if (!security || ["UNVERIFIED", "UNKNOWN", "STALE"].includes(security.status)) return ["SECURITY_UNKNOWN"];
-  const codes = [];
+  const codes = Array.isArray(security.reasonCodes) ? [...security.reasonCodes] : [];
   if (security.authorities?.mint === "ACTIVE") codes.push("MINT_AUTHORITY_ACTIVE");
   if (security.authorities?.freeze === "ACTIVE") codes.push("FREEZE_AUTHORITY_ACTIVE");
   if (security.topHolderPercent == null || security.supply == null) codes.push("SECURITY_DATA_INCOMPLETE");
   else if (security.topHolderPercent > MAX_TOP_HOLDER_PERCENT) codes.push("TOP_HOLDER_ABOVE_LIMIT");
   if (!codes.length && security.verified !== true) codes.push("SECURITY_REJECTED");
-  return codes;
+  return [...new Set(codes)];
+}
+
+function evaluateMarketQuality(item, {
+  now = Date.now(),
+  orderSizeUsd = RESEARCH_ORDER_SIZE_USD,
+  minLiquidityToMarketCap = MIN_LIQUIDITY_TO_MARKET_CAP,
+  maxEstimatedEntryImpactPercent = MAX_ESTIMATED_ENTRY_IMPACT_PERCENT,
+  maxVolumeLiquidityRatio = MAX_VOLUME_LIQUIDITY_RATIO,
+  minPoolAgeMs = MIN_POOL_AGE_MS,
+  maxMarketDataAgeMs = MAX_MARKET_DATA_AGE_MS
+} = {}) {
+  const pair = item?.details?.pair || {};
+  const metadata = item?.details?.providerMetadata || {};
+  const liquidity = numeric(item?.liquidity ?? pair.liquidityUsd);
+  const marketCap = numeric(item?.marketCap ?? pair.marketCap);
+  const volume24h = numeric(pair.volume?.h24);
+  const updatedAt = providerTimestamp(pair.updatedAt ?? metadata.providerUpdatedAt, now);
+  const pairCreatedAt = providerTimestamp(pair.pairCreatedAt, now);
+  const reasons = [];
+  const metrics = {
+    liquidityUsd: liquidity,
+    marketCapUsd: marketCap,
+    liquidityToMarketCap: liquidity != null && marketCap > 0 ? Number((liquidity / marketCap).toFixed(8)) : null,
+    orderSizeUsd,
+    estimatedEntryImpactPercent: liquidity != null && liquidity > 0
+      ? Number(((orderSizeUsd / liquidity) * 100).toFixed(4))
+      : null,
+    volume24hUsd: volume24h,
+    volumeLiquidityRatio: volume24h != null && liquidity > 0
+      ? Number((volume24h / liquidity).toFixed(4))
+      : null,
+    poolAgeMs: pairCreatedAt == null ? null : Math.max(0, now - pairCreatedAt),
+    marketDataAgeMs: updatedAt == null ? null : Math.max(0, now - updatedAt)
+  };
+
+  if (liquidity == null) reasons.push("LIQUIDITY_UNKNOWN");
+  else if (liquidity < MIN_LIQUIDITY_USD) reasons.push("LIQUIDITY_BELOW_MINIMUM");
+  if (marketCap == null || marketCap <= 0) reasons.push("MARKET_CAP_UNKNOWN");
+  else if (metrics.liquidityToMarketCap < minLiquidityToMarketCap) reasons.push("LIQUIDITY_TO_MARKET_CAP_TOO_LOW");
+  if (metrics.estimatedEntryImpactPercent == null) reasons.push("LIQUIDITY_UNKNOWN");
+  else if (metrics.estimatedEntryImpactPercent > maxEstimatedEntryImpactPercent) reasons.push("ESTIMATED_ENTRY_IMPACT_TOO_HIGH");
+  if (volume24h == null) reasons.push("VOLUME_UNKNOWN");
+  else if (metrics.volumeLiquidityRatio > maxVolumeLiquidityRatio) reasons.push("VOLUME_LIQUIDITY_RATIO_TOO_HIGH");
+  if (pairCreatedAt == null) reasons.push("POOL_AGE_UNKNOWN");
+  else if (metrics.poolAgeMs < minPoolAgeMs) reasons.push("POOL_TOO_NEW");
+  if (updatedAt == null) reasons.push("MARKET_DATA_FRESHNESS_UNKNOWN");
+  else if (metrics.marketDataAgeMs > maxMarketDataAgeMs) reasons.push("MARKET_DATA_STALE");
+
+  const uniqueReasons = [...new Set(reasons)];
+  const blocking = uniqueReasons.some(code => !code.endsWith("_UNKNOWN"));
+  const unknown = uniqueReasons.some(code => code.endsWith("_UNKNOWN"));
+  return {
+    version: "market-quality-v1",
+    status: blocking ? "REJECTED" : unknown ? "UNKNOWN" : "PASSED",
+    passed: !blocking && !unknown,
+    reasons: uniqueReasons,
+    metrics
+  };
 }
 
 function evaluateBaselineCandidate(item) {
@@ -548,8 +639,31 @@ function evaluateBaselineCandidate(item) {
   };
 }
 
+function evaluatePhase2Candidate(item) {
+  const baseline = evaluateBaselineCandidate(item);
+  const marketQuality = item?.details?.marketQuality || evaluateMarketQuality(item);
+  const reasonCodes = [...new Set([...baseline.reasonCodes, ...(marketQuality.reasons || [])])];
+  const unknown = reasonCodes.some(code => code.endsWith("_UNKNOWN") || code === "SECURITY_DATA_INCOMPLETE");
+  const accepted = baseline.accepted && marketQuality.passed;
+  return {
+    accepted,
+    outcome: accepted ? "ACCEPTED" : unknown ? "UNRESOLVED" : "REJECTED",
+    reasonCodes,
+    marketQuality
+  };
+}
+
 function summarizeBaselineCandidates(candidates, metadata = {}) {
-  const decisions = (Array.isArray(candidates) ? candidates : []).map(evaluateBaselineCandidate);
+  return summarizeCandidates(candidates, metadata, evaluateBaselineCandidate, FILTER_CONFIG, BASELINE_DECISION_VERSION);
+}
+
+function summarizePhase2Candidates(candidates, metadata = {}) {
+  return summarizeCandidates(candidates, metadata, evaluatePhase2Candidate, PHASE2_FILTER_CONFIG, PHASE2_DECISION_VERSION);
+}
+
+function summarizeCandidates(candidates, metadata, evaluator, filterConfig, decisionVersion) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  const decisions = list.map(evaluator);
   const reasons = new Map();
   for (const decision of decisions) {
     for (const code of decision.reasonCodes) {
@@ -560,9 +674,9 @@ function summarizeBaselineCandidates(candidates, metadata = {}) {
   }
 
   const report = {
-    decisionVersion: BASELINE_DECISION_VERSION,
+    decisionVersion,
     recordsChecked: decisions.length,
-    filterConfig: FILTER_CONFIG,
+    filterConfig,
     accepted: decisions.filter(decision => decision.accepted).length,
     rejected: decisions.filter(decision => decision.outcome === "REJECTED").length,
     unresolved: decisions.filter(decision => decision.outcome === "UNRESOLVED").length,
@@ -574,9 +688,9 @@ function summarizeBaselineCandidates(candidates, metadata = {}) {
     providerRecordsWithPair: metadata.providerRecordsWithPair ?? 0,
     providerRecordsWithPrice: metadata.providerRecordsWithPrice ?? 0,
     providerRecordsWithLiquidity: metadata.providerRecordsWithLiquidity ?? 0,
-    securityVerified: candidates.filter(item => item?.security?.status === "VERIFIED").length,
-    securityUnknown: candidates.filter(item => ["UNVERIFIED", "UNKNOWN", "STALE"].includes(item?.security?.status)).length,
-    securityRejected: candidates.filter(item => item?.security?.status === "REJECTED").length,
+    securityVerified: list.filter(item => item?.security?.status === "VERIFIED").length,
+    securityUnknown: list.filter(item => ["UNVERIFIED", "UNKNOWN", "STALE"].includes(item?.security?.status)).length,
+    securityRejected: list.filter(item => item?.security?.status === "REJECTED").length,
     liquidityRejected: decisions.filter(decision => decision.reasonCodes.includes("LIQUIDITY_BELOW_MINIMUM")).length,
     momentumRejected: decisions.filter(decision => decision.reasonCodes.includes("PRICE_CHANGE_NOT_POSITIVE")).length,
     ctoRejected: decisions.filter(decision => decision.reasonCodes.includes("CTO_FLAG")).length,
@@ -598,9 +712,17 @@ function selectBoardTokens(previousTokens, acceptedTokens) {
 module.exports = {
   ACCOUNT_CLASSES,
   BASELINE_DECISION_VERSION,
+  PHASE2_DECISION_VERSION,
   FILTER_CONFIG,
+  PHASE2_FILTER_CONFIG,
   MAX_TOP_HOLDER_PERCENT,
   MIN_LIQUIDITY_USD,
+  MIN_LIQUIDITY_TO_MARKET_CAP,
+  RESEARCH_ORDER_SIZE_USD,
+  MAX_ESTIMATED_ENTRY_IMPACT_PERCENT,
+  MAX_VOLUME_LIQUIDITY_RATIO,
+  MIN_POOL_AGE_MS,
+  MAX_MARKET_DATA_AGE_MS,
   PROVIDER_SCHEMA_VERSION,
   PROVIDER_MAX_CLOCK_SKEW_MS,
   TAXONOMY_VERSION,
@@ -609,11 +731,14 @@ module.exports = {
   dedupePairs,
   dedupeMintEntries,
   evaluateBaselineCandidate,
+  evaluateMarketQuality,
+  evaluatePhase2Candidate,
   normalizePoolEvidence,
   normalizeDiscoveryUniverse,
   validateProviderFeed,
   validateProviderPair,
   selectBoardTokens,
   selectPrimaryPair,
-  summarizeBaselineCandidates
+  summarizeBaselineCandidates,
+  summarizePhase2Candidates
 };
