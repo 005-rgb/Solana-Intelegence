@@ -40,6 +40,14 @@ npm run db:push
 - `prisma/schema.prisma`: PostgreSQL schema for live tokens, signals, watchlists, paper trading, scan observability, and `TokenObservation` lineage rows.
 - `public/`: responsive research UI.
 
+The authoritative product specification is
+[`docs/integrated-radar-core-market-brain-prd.md`](docs/integrated-radar-core-market-brain-prd.md).
+It integrates the existing Radar Core implementation plan with the project-first
+Market Brain architecture. `docs/radar-core-system-phased-plan.md` remains the
+detailed Radar Core phase reference; where the documents overlap, the integrated
+PRD defines the product model and the phased plan defines implementation
+detail.
+
 ## Baseline-v1 auditability
 
 The current Radar board is a fail-closed research filter, not a validated prediction engine. Phase 0 records every scan as a durable `ScanRun` with:

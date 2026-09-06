@@ -1,0 +1,2728 @@
+# Integrated Radar Core + Market Brain
+
+## Product Requirements Document
+
+**Status:** Authoritative product and architecture specification  
+**Product:** Solana market intelligence, research Radar, and gated paper/execution platform  
+**Version:** Integrated PRD v1  
+**Scope:** Discovery, evidence collection, security, fundamental intelligence, market analysis, thesis lifecycle, outcome evaluation, and the gated post-core wallet roadmap  
+**Operating posture:** Research-first, precision-first, fail-closed, auditable  
+
+---
+
+## 1. Executive summary
+
+The product is a research-grade market intelligence system that detects structural
+change and asymmetric opportunity before broad repricing, while refusing to
+present incomplete, stale, manipulated, or unvalidated evidence as certainty.
+
+The product combines two complementary systems:
+
+```text
+Radar Core
+  = data contracts, provenance, security, reliability, scoring discipline,
+    lifecycle, evaluation, and operational safety
+
+Market Brain
+  = project-first discovery, product and adoption intelligence, economics,
+    token value capture, valuation, catalysts, capital migration, thesis,
+    entry quality, and continuous learning
+```
+
+The product is not a promise of return and is not initially a validated
+prediction engine. Until the core acceptance gate passes, the correct product
+description is:
+
+> A live research filter and evidence collector for structural market change.
+
+The system must prefer a small number of explainable candidates over a large
+number of noisy alerts. A candidate may be interesting as a project while not
+being suitable for entry; project quality, token quality, opportunity, risk,
+confidence, and entry quality are separate concepts.
+
+---
+
+## 2. Product vision
+
+### 2.1 Vision
+
+Find real traction before the market prices it in:
+
+```text
+PROJECT → PRODUCT → USERS → ECONOMICS → TOKEN → ON-CHAIN
+→ CAPITAL → CATALYST → MOMENTUM → VALIDATION → ENTRY
+```
+
+The product must not reduce market intelligence to:
+
+```text
+HYPE → VOLUME → PRICE → SIGNAL
+```
+
+### 2.2 Product promise
+
+For every displayed candidate, the system should make it possible to answer:
+
+1. What exact project, token, mint, pool, DEX, and quote asset are we evaluating?
+2. What evidence supports the candidate?
+3. How fresh, complete, and independently corroborated is that evidence?
+4. Is the project real and does its product show meaningful activity?
+5. Does project growth create value for the token?
+6. Is current valuation asymmetric relative to relevant comparables?
+7. Is a verified catalyst still ahead, and is it already priced in?
+8. Is capital entering organically or through coordinated activity?
+9. What is the strongest reason the thesis can fail?
+10. Is the opportunity attractive now, or is the entry already too extended?
+11. What conditions invalidate the thesis?
+12. What happened after the decision, measured without look-ahead bias?
+
+### 2.3 Success definition
+
+Success is measured primarily by:
+
+```text
+precision@top-k
+false-positive rate
+manipulation escape rate
+dead-token detection rate
+thesis accuracy
+risk classification accuracy
+chase detection accuracy
+early detection rate
+20× structural-feasibility accuracy
+calibration
+detection latency
+```
+
+The number of discovered tokens is not the primary success metric.
+
+---
+
+## 3. Goals and non-goals
+
+### 3.1 Goals
+
+- Create a canonical, multi-source market universe.
+- Resolve project, product, token, mint, pool, DEX, and quote-asset identity.
+- Persist immutable observations and source lineage.
+- Treat unknown, stale, invalid, partial, and contradictory evidence explicitly.
+- Preserve fail-closed security and market-quality gates.
+- Separate project quality from token quality and token quality from entry quality.
+- Support three distinct radars with distinct objectives and score policies.
+- Detect traction acceleration and reactivation, not only absolute size or price momentum.
+- Measure economic activity, organic adoption, capital flow, and manipulation.
+- Generate explainable thesis objects with positive and negative evidence.
+- Provide deterministic, versioned, reproducible decisions.
+- Track candidate state transitions and deduplicated alerts.
+- Capture forward outcomes independently of paper trading.
+- Support statistically valid evaluation, calibration, shadow mode, and rollback.
+- Keep wallet connectivity and real execution behind a hard core acceptance gate.
+- Keep monetization versioned, transparent, zero-fee by default, and reversible.
+
+### 3.2 Non-goals
+
+- Guaranteeing profit or a 20× return.
+- Calling a score a probability before calibration evidence exists.
+- Treating boosted or trending feeds as a complete market universe.
+- Treating raw wallet count as independent users or investors.
+- Calling pair-level flow “smart money” without wallet identity and history.
+- Treating token-account concentration as wallet ownership.
+- Mixing real-project and speculative-meme scores.
+- Enabling automatic trading, copy trading, background signing, or custody.
+- Receiving or storing seed phrases, private keys, wallet passwords, or signing
+  secrets.
+- Activating application fees before the execution and monetization gates pass.
+- Replacing the existing project stack or restructuring the imported application
+  without an approved follow-up scope.
+
+---
+
+## 4. Mandatory operating principles
+
+1. **Evidence before score.** Every score component must link to source,
+   timestamp, freshness, quality state, and calculation version.
+2. **Security and opportunity are separate.** A safe token is not automatically
+   a good candidate.
+3. **Unknown is not zero.** Missing data is null/unknown and cannot improve a
+   decision.
+4. **Stale is not current.** A stale observation cannot receive full confidence.
+5. **Partial is not success.** Partial provider or RPC coverage must be visible.
+6. **Boost is attention, not quality.** Promotion metadata may be a feature but
+   cannot dominate discovery, ranking, or precision claims.
+7. **Hard gates precede ranking.** A high score cannot compensate for a failed
+   critical gate.
+8. **Time series beat snapshots.** A single 24-hour change cannot establish
+   momentum, adoption, or acceleration.
+9. **Scores are not probabilities.** Probability language requires calibration.
+10. **Wallets are not economic entities.** Clustering requires evidence and
+    uncertainty labels.
+11. **Accounts are not automatically wallets.** Pool, vault, program, escrow,
+    treasury, and unknown accounts must be classified before holder claims.
+12. **A project can be good while its token is weak.** Project value and token
+    value capture are separate.
+13. **Opportunity and entry are separate.** A good thesis can still be too late
+    to enter.
+14. **Every alert is an experiment.** Preserve the decision snapshot and later
+    forward outcome.
+15. **Negative evidence is mandatory.** The strongest failure reason must be
+    visible before a strong signal can be issued.
+16. **Historical decisions are immutable.** Provider updates cannot rewrite the
+    evidence used at the time of a decision.
+17. **Execution is a separate trust boundary.** It may consume a research
+    decision but cannot rewrite or weaken it.
+18. **Precision before recall.** The primary view shows fewer, higher-quality
+    candidates.
+19. **Core before monetization.** Wallet execution and configurable fees remain
+    disabled until the core gate passes.
+
+---
+
+## 5. Product surfaces and user-facing modes
+
+### 5.1 Research Radar
+
+The main surface displays eligible candidates with:
+
+- radar type;
+- project/token/pool identity;
+- current state;
+- project quality;
+- traction and inflection;
+- economic activity;
+- token quality;
+- valuation asymmetry;
+- catalyst;
+- capital flow;
+- momentum;
+- risk;
+- confidence;
+- entry quality;
+- chase risk;
+- primary thesis;
+- supporting evidence;
+- contradictions;
+- invalidation conditions;
+- data freshness;
+- decision and feature versions.
+
+### 5.2 Candidate detail
+
+The detail view must show:
+
+- identity graph;
+- source evidence and lineage;
+- market and security observations;
+- time-series charts;
+- project/product evidence;
+- tokenomics and unlock schedule;
+- economic and adoption metrics;
+- capital and entity analysis;
+- manipulation diagnostics;
+- valuation comparables;
+- catalysts and timing;
+- thesis timeline;
+- state transitions;
+- forward outcomes;
+- model/configuration version.
+
+### 5.3 Discovery and source health
+
+The UI must distinguish:
+
+```text
+provider records checked
+accepted
+rejected
+unresolved
+stale
+partial
+source-only candidates
+source overlap
+```
+
+It must show provider, RPC, database, and analysis health separately.
+
+### 5.4 Outcome and evaluation
+
+The evaluation surface must expose:
+
+- precision@1, @3, @5, and @10;
+- median forward return;
+- win rate under a defined label;
+- false-positive rate;
+- maximum adverse excursion;
+- candidate survival;
+- stale-data rate;
+- security-failure rate;
+- sample size and time window;
+- confidence intervals where practical;
+- precision by discovery source;
+- score-version comparison;
+- calibration metrics when probability-like outputs are introduced.
+
+### 5.5 Paper trading
+
+Paper trading is virtual research only. It must remain visually and
+technically separate from real execution. It must not be required for outcome
+measurement.
+
+The current application defaults remain:
+
+- LIVE market data only;
+- virtual starting balance of `$100,000`;
+- fixed `$100` paper entries;
+- simulated `0.3%` paper fee;
+- no wallet, private key, signing, or real-fund transaction.
+
+These are implementation defaults, not evidence of execution quality.
+
+---
+
+## 6. Integrated architecture
+
+```text
+                         MARKET BRAIN
+                              │
+              ┌───────────────┴───────────────┐
+              │                               │
+        DISCOVERY BRAIN                  TRUTH BRAIN
+        project universe                 on-chain + source reality
+              │                               │
+              └───────────────┬───────────────┘
+                              │
+                     IDENTITY GRAPH
+                              │
+              ┌───────────────┴───────────────┐
+              │                               │
+      MARKET OBSERVATIONS              PROJECT EVIDENCE
+      price/volume/liquidity            product/users/economics
+              │                               │
+              └───────────────┬───────────────┘
+                              │
+                     DATA QUALITY LAYER
+                 fresh / stale / unknown / invalid
+                              │
+                  SECURITY & MARKET SAFETY GATES
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+ REAL PROJECT RADAR     REACTIVATION RADAR   SPECULATIVE MEME RADAR
+        │                     │                     │
+        └─────────────────────┼─────────────────────┘
+                              │
+                      DOMAIN FEATURE ENGINES
+                              │
+       quality / inflection / economics / token / valuation
+       catalyst / capital / entities / manipulation / regime
+                              │
+                    THESIS & NEGATIVE EVIDENCE
+                              │
+                     RISK AND ENTRY QUALITY
+                              │
+                    CANDIDATE STATE MACHINE
+                              │
+                    SIGNAL / ALERT / FOLLOW
+                              │
+                     FORWARD OUTCOME ENGINE
+                              │
+                     MEMORY & EVOLUTION BRAIN
+```
+
+### 6.1 Fast path and deep path
+
+The system must not perform the full Market Brain analysis synchronously for
+every 15-second market observation.
+
+#### Fast path
+
+```text
+discovery
+→ identity basics
+→ pair/market observation
+→ basic RPC security
+→ liquidity and freshness gates
+→ initial state
+```
+
+#### Deep path
+
+```text
+project resolution
+→ product evidence
+→ sector metrics
+→ tokenomics/value capture
+→ entity and capital analysis
+→ manipulation analysis
+→ valuation
+→ catalyst
+→ thesis
+→ radar-specific decision
+```
+
+Deep analysis may be asynchronous and must preserve the exact observation
+snapshot used by the decision.
+
+---
+
+## 7. Identity graph and canonical entities
+
+### 7.1 Required identity chain
+
+```text
+Chain
+  ↓
+Project
+  ↓
+Protocol
+  ↓
+Product
+  ↓
+Token
+  ↓
+Mint / Contract
+  ↓
+Pool
+  ↓
+DEX
+  ↓
+Quote Asset
+```
+
+### 7.2 Token/pair identity
+
+The canonical market identity is:
+
+```text
+chain_id + mint + pair_address
+```
+
+Ticker or symbol alone is never sufficient.
+
+The system must handle:
+
+- multiple tokens with the same symbol;
+- multiple mints for one project;
+- fake copies;
+- token migration;
+- multiple pools;
+- pool migration;
+- wrapped assets;
+- different quote assets;
+- delisted or disappeared pools;
+- project-token relationships that are unknown or contradicted.
+
+### 7.3 Pair selection
+
+For each mint:
+
+1. Exclude non-Solana pairs.
+2. Exclude pairs without price or liquidity from primary calculation.
+3. Prefer sufficient liquidity and fresh observations.
+4. Preserve every eligible pair observation.
+5. Mark the primary pair explicitly.
+6. Never mix volume from one pair with liquidity from another without labeling
+   the aggregation.
+7. Use a deterministic stable tie-break policy.
+
+The current baseline policy may use:
+
+```text
+Solana only
+→ price and liquidity required
+→ highest liquidity
+→ freshest provider update
+→ newest pair creation time
+→ stable pair address tie-break
+```
+
+---
+
+## 8. Discovery and source contracts
+
+### 8.1 Source categories
+
+#### Primary
+
+- official project documentation;
+- official website;
+- official GitHub;
+- on-chain contracts and protocol data;
+- governance;
+- official announcements.
+
+#### Secondary
+
+- DEX and pair data;
+- analytics platforms;
+- ecosystem data;
+- funding databases;
+- developer activity;
+- indexed wallet or transaction data.
+
+#### Tertiary
+
+- X;
+- Discord;
+- Telegram;
+- Reddit;
+- influencers;
+- launchpads such as Pump.fun.
+
+Launchpad and boost sources are discovery inputs, not a definition of project
+quality.
+
+### 8.2 Discovery denominators
+
+Every scan must preserve source-specific denominators:
+
+```text
+boost_feed_seen
+new_pair_feed_seen
+watchlist_seen
+indexed_source_seen
+unique_mints_before_dedup
+unique_pairs_before_dedup
+unique_mints_after_dedup
+source_overlap
+source_only_candidates
+```
+
+Precision must be reported separately for:
+
+```text
+boosted universe
+non-boosted universe
+combined universe
+```
+
+### 8.3 Provider input validation
+
+Every external response is untrusted input. Adapters must validate:
+
+- response shape;
+- required field types;
+- numeric finiteness;
+- non-negative quantities;
+- percentage bounds;
+- timestamp bounds and clock skew;
+- chain and mint identity;
+- duplicate records;
+- pair identity consistency;
+- impossible relationships among volume, liquidity, supply, and price.
+
+Invalid records are `INVALID`, missing values are `UNKNOWN`, and stale values
+are `STALE`. None may silently become an empty successful response.
+
+### 8.4 Source lineage
+
+Persist or derive:
+
+```text
+source_name
+source_endpoint_or_method
+source_request_id
+source_response_hash
+source_schema_version
+ingested_at
+source_updated_at
+observed_at
+provider_clock_skew_ms
+rpc_endpoint_class
+rpc_commitment
+rpc_slot_or_context
+quality_status
+quality_reason_codes[]
+```
+
+An immutable normalized observation or content-addressed raw payload reference
+is required. A mutable token details JSON snapshot is not sufficient.
+
+---
+
+## 9. Canonical observations and time series
+
+### 9.1 Market observation
+
+Each token/pair observation should support:
+
+```text
+mint
+pair_address
+chain_id
+dex_id
+base_token
+quote_token
+observed_at
+provider_updated_at
+pair_created_at
+price_usd
+market_cap
+fdv
+liquidity_usd
+volume_5m
+volume_1h
+volume_6h
+volume_24h
+buys_5m / sells_5m
+buys_1h / sells_1h
+buys_6h / sells_6h
+buys_24h / sells_24h
+makers_5m / makers_1h
+price_change_5m / 1h / 6h / 24h
+boost_amount
+cto_flag
+source
+source_request_id
+freshness_ms
+data_quality
+```
+
+### 9.2 Security observation
+
+```text
+mint
+observed_at
+token_program
+commitment
+slot_context
+mint_authority
+freeze_authority
+supply
+top-holder accounts
+account taxonomy
+pool-account classification
+concentration metrics
+metadata evidence
+Token-2022 extension evidence
+status
+reasons
+```
+
+### 9.3 Feature snapshot
+
+```text
+mint
+pair_address
+observed_at
+feature_version
+price_acceleration
+volume_acceleration
+buy_sell_imbalance
+maker_growth
+liquidity_growth
+volume_liquidity_ratio
+volatility
+drawdown
+concentration_penalty
+manipulation_flags
+freshness
+completeness
+```
+
+### 9.4 Time-series rules
+
+- Observations must be reproducible after restart.
+- Out-of-order observations must be detected.
+- Duplicate retries must be idempotent.
+- Future observations must be rejected.
+- Provider clock skew must be visible.
+- Provider-reported 24-hour windows must not leak future information into an
+  earlier decision.
+- Retention must preserve data needed for outcomes and backtests.
+- High-resolution recent data may be rolled into daily summaries only after
+  required outcome labels are safe.
+
+---
+
+## 10. Security, account taxonomy, and market-quality gates
+
+### 10.1 Mandatory security gates
+
+- parsed expected SPL mint account;
+- supported token program;
+- positive supply;
+- mint authority state known and acceptable;
+- freeze authority state known and acceptable;
+- complete largest-account data;
+- complete RPC response;
+- commitment and request time available;
+- internally valid numeric amounts;
+- no malformed, missing, timed-out, or partial mandatory evidence.
+
+Unknown or stale mandatory security evidence fails closed for qualification.
+
+### 10.2 Token-program coverage
+
+Identify:
+
+```text
+legacy SPL Token
+Token-2022
+unsupported/unknown program
+```
+
+Where supported, inspect:
+
+- transfer fees;
+- transfer hooks;
+- permanent delegate;
+- default account state;
+- non-transferable restrictions;
+- confidential transfer behavior;
+- metadata pointer and authority behavior.
+
+### 10.3 Account taxonomy
+
+Required classes:
+
+```text
+EOA_OR_WALLET
+ASSOCIATED_TOKEN_ACCOUNT
+AMM_POOL
+POOL_VAULT
+PROGRAM_OWNED
+ESCROW_OR_LOCK
+TREASURY
+UNKNOWN_ACCOUNT
+```
+
+A pair address alone cannot prove pool ownership. A system-owned non-executable
+owner remains unknown unless separate evidence distinguishes EOA from PDA.
+
+The UI must use `ACCOUNT_CONCENTRATION_ONLY` until wallet ownership is resolved.
+
+### 10.4 Concentration metrics
+
+Persist separately:
+
+```text
+top_1_account_percent
+top_5_account_percent
+top_10_account_percent
+top_20_account_percent
+top_1_wallet_percent
+top_5_wallet_percent
+top_10_wallet_percent
+pool_adjusted_top_1_wallet_percent
+pool_adjusted_top_10_wallet_percent
+```
+
+### 10.5 Pool and LP evidence
+
+Where available:
+
+```text
+pool_program_id
+amm_type
+amm_version
+base_vault
+quote_vault
+lp_mint
+lp_supply
+lp_holder_distribution
+lp_burn_status
+lp_lock_provider
+lp_lock_expiry
+withdraw_authority
+pool_creation_slot
+pool_last_update_slot
+```
+
+### 10.6 Metadata and project evidence
+
+Where supported:
+
+```text
+metadata_account
+update_authority
+is_mutable
+metadata_uri
+uri_fetch_status
+uri_content_hash
+name_symbol_mint_consistency
+verified_collection
+metadata_last_observed
+```
+
+Metadata is evidence, not a safety guarantee.
+
+### 10.7 Dynamic market-quality gates
+
+Use more than a fixed liquidity floor:
+
+```text
+minimum absolute liquidity
+liquidity / market_cap
+expected impact for configured research size
+volume / liquidity ratio
+pool age
+price freshness
+volume freshness
+FDV / market-cap consistency
+```
+
+The current `$10,000` floor may remain as a safety floor, but it is not
+sufficient by itself.
+
+### 10.8 Sellability and route evidence
+
+Before `ACTIONABLE_RESEARCH`, attempt buy and sell quote/simulation for explicit
+research sizes such as:
+
+```text
+$100
+$500
+$1,000
+```
+
+Capture:
+
+```text
+route availability
+minimum received
+price impact
+estimated slippage
+transfer fee
+transfer hook result
+compute failure
+account creation requirement
+quote freshness
+```
+
+Failed sell simulation blocks qualification. Missing sell evidence is
+`UNKNOWN`, never `PASS`.
+
+---
+
+## 11. Project reality and fundamental intelligence
+
+### 11.1 Project reality classification
+
+The system must evaluate:
+
+- website;
+- documentation;
+- GitHub;
+- smart contracts;
+- product;
+- users;
+- protocol activity;
+- team transparency;
+- integrations;
+- ecosystem presence.
+
+Output:
+
+```text
+REAL_PROJECT
+PARTIALLY_VERIFIED
+WEAK_PROJECT
+MEME_OR_CONCEPT
+UNVERIFIED
+FAKE_OR_SUSPICIOUS
+```
+
+If no product or use case can be verified:
+
+```text
+No fundamental signal
+```
+
+The token may still enter the Speculative Meme Radar if other safety
+requirements pass.
+
+### 11.2 Project Quality Score
+
+PQS is a quality description, not a trade signal.
+
+Initial conceptual dimensions:
+
+```text
+product_reality        15%
+product_maturity       10%
+user_adoption          10%
+user_growth            10%
+revenue_or_fees        10%
+TVL_or_economic_activity 10%
+developer_activity     10%
+token_utility          10%
+tokenomics             10%
+ecosystem/integration   5%
+```
+
+Suggested interpretation:
+
+```text
+0–39   REJECT
+40–54  LOW_QUALITY
+55–69  WATCH
+70–79  QUALITY
+80–89  HIGH_QUALITY
+90–100 ELITE
+```
+
+PQS must also expose:
+
+```text
+evidence_coverage
+confidence
+unknown_dimensions
+quality_version
+```
+
+### 11.3 Sector metric registry
+
+One formula must not be used for every sector.
+
+#### DeFi
+
+- TVL;
+- deposits and withdrawals;
+- active users;
+- volume;
+- fees;
+- revenue;
+- borrowing/lending activity;
+- utilization.
+
+#### DePIN
+
+- active nodes;
+- utilization;
+- jobs;
+- compute consumption;
+- bandwidth;
+- reward efficiency.
+
+#### AI
+
+- active users;
+- inference;
+- API calls;
+- compute utilization;
+- agents;
+- developer adoption.
+
+#### Gaming
+
+- active wallets;
+- transactions;
+- retention;
+- players;
+- in-game economy.
+
+#### Payments
+
+- transactions;
+- volume;
+- active wallets;
+- merchants;
+- payment frequency.
+
+Every sector metric definition must specify:
+
+```text
+source
+unit
+freshness window
+baseline window
+minimum sample
+missing-data behavior
+outlier behavior
+calculation version
+```
+
+### 11.4 Traction and inflection
+
+The system must distinguish absolute traction from traction acceleration.
+
+Example:
+
+```text
+10K → 11K → 12K → 13K
+```
+
+is stable growth, while:
+
+```text
+10K → 12K → 18K → 31K
+```
+
+is an inflection candidate.
+
+Required outputs:
+
+```text
+traction_level
+traction_growth
+traction_acceleration
+inflection_status
+baseline_window
+sample_quality
+```
+
+### 11.5 Economic activity
+
+Measure:
+
+- fees;
+- revenue;
+- volume;
+- TVL;
+- users;
+- transaction value;
+- utilization;
+- revenue/user;
+- fees/TVL;
+- volume/user.
+
+Classify:
+
+```text
+STABLE
+GROWING
+ACCELERATING
+EXPLODING
+DECLINING
+UNKNOWN
+```
+
+### 11.6 Token value capture
+
+Project value must be separated from token value capture.
+
+Evaluate:
+
+- utility;
+- fee capture;
+- staking;
+- governance;
+- collateral use;
+- buyback;
+- burn;
+- emissions;
+- token demand;
+- unlocks;
+- circulating supply.
+
+Output:
+
+```text
+STRONG_VALUE_CAPTURE
+MODERATE
+WEAK
+NO_CLEAR_VALUE_CAPTURE
+```
+
+A strong project with no clear token value capture must not receive a strong
+token thesis.
+
+### 11.7 Tokenomics
+
+Track:
+
+```text
+market_cap
+FDV
+circulating_supply
+max_supply
+emission
+unlock_schedule
+insider_allocation
+team_allocation
+investor_allocation
+treasury
+liquidity
+holder_distribution
+```
+
+Produce:
+
+```text
+supply_pressure_score
+unlock_risk = LOW | MODERATE | HIGH | CRITICAL
+```
+
+Critical unlock risk is a hard block for the applicable radar.
+
+---
+
+## 12. Valuation, catalysts, capital, and adoption
+
+### 12.1 Comparable project engine
+
+Candidates may be compared with projects in the same defined sector and
+development stage.
+
+The comparison must preserve:
+
+- comparable selection method;
+- sector definition;
+- comparison timestamp;
+- inclusion and exclusion rules;
+- market-cap and FDV definitions;
+- liquidity comparability;
+- token value-capture comparability;
+- survivorship-bias limitations.
+
+Output:
+
+```text
+valuation_asymmetry
+comparable_quality
+comparable_coverage
+valuation_unknowns
+```
+
+### 12.2 20× structural feasibility
+
+This is a scenario feasibility score, not a probability.
+
+Evaluate:
+
+- comparable valuation;
+- market size;
+- adoption;
+- revenue;
+- TVL;
+- users;
+- growth;
+- token capture;
+- liquidity;
+- sector regime;
+- catalysts.
+
+Interpretation:
+
+```text
+0–29   IMPROBABLE
+30–49  LOW
+50–64  POSSIBLE
+65–79  PLAUSIBLE
+80–89  STRONG
+90–100 EXCEPTIONAL
+```
+
+The UI must label this `structural feasibility`, not `20× probability`.
+
+### 12.3 Catalyst engine
+
+Potential catalysts:
+
+- mainnet;
+- product launch;
+- major integration;
+- listing;
+- new chain;
+- token utility activation;
+- protocol upgrade;
+- revenue mechanism;
+- major partnership;
+- ecosystem expansion;
+- incentive program.
+
+Every catalyst must have:
+
+```text
+source
+verification status
+expected time
+proximity
+market-awareness estimate
+pricing status
+```
+
+Rumors are not verified catalysts. A catalyst already fully priced in cannot
+receive the same value as a new, underappreciated catalyst.
+
+### 12.4 Capital flow
+
+Measure:
+
+- new capital;
+- whale inflow;
+- smart-money activity where qualified;
+- liquidity inflow;
+- stablecoin flow;
+- DEX volume;
+- net buying;
+- capital rotation.
+
+Raw volume is not capital inflow. Adjust for:
+
+- wash trading;
+- circular trading;
+- wallet recycling;
+- bundled activity;
+- coordinated wallets.
+
+### 12.5 Economic entities
+
+Estimate entities using:
+
+- funding source;
+- timing;
+- transaction pattern;
+- position similarity;
+- synchronized buying/selling;
+- repeated interaction;
+- wallet age;
+- common infrastructure.
+
+Expose both:
+
+```text
+raw_wallets
+estimated_entities
+entity_confidence
+cluster_coverage
+```
+
+Do not call every estimated entity an independent investor.
+
+### 12.6 Smart money
+
+Smart money requires historical predictive evidence:
+
+- historical entries;
+- historical exits;
+- realized returns;
+- early-detection accuracy;
+- rug avoidance;
+- holding duration;
+- sector specialization.
+
+Until wallet identity and historical outcome coverage exist, use:
+
+```text
+FLOW_QUALITY
+CAPITAL_ACTIVITY
+```
+
+not `SMART_MONEY`.
+
+### 12.7 Organic adoption
+
+Measure:
+
+```text
+new independent users
+returning users
+retention
+transaction diversity
+capital diversity
+```
+
+Organic expansion is stronger when:
+
+```text
+volume ↑
+wallets ↑
+independent entities ↑
+retention ↑
+liquidity ↑
+```
+
+than when volume and wallets rise only within the same clusters.
+
+---
+
+## 13. Manipulation, negative evidence, and market regime
+
+### 13.1 Manipulation/adversarial engine
+
+Check for:
+
+- bundled buys;
+- sniper concentration;
+- deployer-linked wallets;
+- common funding;
+- wallet recycling;
+- circular trading;
+- fake volume;
+- liquidity manipulation;
+- coordinated exits;
+- insider concentration;
+- creator-linked buyers;
+- repeated wallet round trips;
+- same-wallet buy/sell churn;
+- synchronized entries;
+- identical or repetitive trade sizes;
+- burst activity in a few slots;
+- buyer/seller overlap;
+- pool drain or liquidity pull;
+- price movement without reserve support;
+- same-slot sandwich/backrun indicators;
+- abnormal priority fee or bundle behavior.
+
+A minimum sample is required. Insufficient data produces:
+
+```text
+UNKNOWN_SAMPLE
+```
+
+not “no manipulation detected”.
+
+Output:
+
+```text
+economic_control_probability
+manipulation_flags[]
+manipulation_confidence
+```
+
+The probability label is an estimate of economic control risk, not a calibrated
+market-loss probability.
+
+### 13.2 Negative evidence
+
+Before issuing a signal, the system must produce:
+
+```text
+primary_thesis
+supporting_evidence[]
+contradicting_evidence[]
+strongest_failure_reason
+invalidation_conditions[]
+```
+
+Strong contradiction yields:
+
+```text
+THESIS_CONFLICT
+→ NO_SIGNAL or VALIDATING
+```
+
+It must not be hidden as a small numerical penalty.
+
+### 13.3 Market regime
+
+Monitor:
+
+- SOL;
+- BTC;
+- ETH;
+- Solana DEX volume;
+- stablecoin liquidity;
+- risk appetite;
+- meme sector;
+- DeFi sector;
+- AI sector;
+- DePIN sector;
+- new-token activity;
+- capital rotation.
+
+Output:
+
+```text
+RISK_ON
+NEUTRAL
+RISK_OFF
+PANIC
+ROTATION
+EXPANSION
+UNKNOWN
+```
+
+Opportunity ranking must account for regime fit without allowing regime to
+override a security or identity failure.
+
+### 13.4 Momentum and anti-chase
+
+Momentum inputs:
+
+- price velocity;
+- volume velocity;
+- transaction velocity;
+- buyer growth;
+- seller growth;
+- liquidity growth;
+- acceleration;
+- absorption.
+
+The system should seek early acceleration, not simply the biggest gainer.
+
+Anti-chase must evaluate:
+
+- price extension;
+- volatility;
+- distance from stable baseline;
+- liquidity depth;
+- current impact;
+- recent acceleration;
+- signal age;
+- catalyst pricing.
+
+Output:
+
+```text
+entry_quality
+chase_risk
+entry_state
+```
+
+---
+
+## 14. Three radar products
+
+### 14.1 Real Project Radar
+
+**Objective:** Find real projects with product traction, economic activity,
+token value capture, valuation asymmetry, and structural 5×–20×+ feasibility.
+
+Required evidence:
+
+- project identity;
+- product/use-case reality;
+- adoption or usage evidence;
+- economic activity;
+- token relationship;
+- security and market-quality gates;
+- sufficient freshness;
+- negative evidence review.
+
+No verified product/use case means no fundamental signal.
+
+### 14.2 Reactivation Radar
+
+**Objective:** Detect old or dormant projects entering a new development,
+adoption, capital, liquidity, and momentum cycle.
+
+Required historical sequence where available:
+
+```text
+dormant
+→ new development
+→ user growth
+→ capital inflow
+→ whale/entity accumulation
+→ liquidity expansion
+→ momentum
+```
+
+Reactivation must be measured against the project's historical baseline.
+
+### 14.3 Speculative Meme Radar
+
+**Objective:** Find short-term asymmetric speculation without pretending that
+the candidate has fundamental product evidence.
+
+Product reality is not required, but these remain required:
+
+- identity;
+- mint validity;
+- security;
+- liquidity survival;
+- sellability where actionable;
+- concentration;
+- deployer/creator risk;
+- volume quality;
+- manipulation evidence;
+- market regime;
+- entry/chase risk.
+
+The UI must explicitly label:
+
+```text
+SPECULATIVE
+LOW_FUNDAMENTAL_EVIDENCE
+HIGH_VOLATILITY
+SHORT_HORIZON
+EXECUTION_RISK
+```
+
+Meme candidates must never be included in Real Project Score or Real Project
+precision claims.
+
+---
+
+## 15. Scoring, confidence, and eligibility
+
+### 15.1 Required score outputs
+
+Where the minimum feature set exists:
+
+```text
+project_quality_score
+traction_score
+economic_activity_score
+token_quality_score
+valuation_score
+catalyst_score
+capital_flow_score
+market_regime_fit_score
+momentum_score
+opportunity_score
+risk_score
+confidence_score
+entry_quality_score
+chase_risk_score
+20x_structural_feasibility_score
+decision_state
+decision_version
+feature_version
+score_reasons[]
+score_warnings[]
+```
+
+If mandatory features are unknown, the output is `UNKNOWN` or capped rather
+than fabricated.
+
+### 15.2 Score semantics
+
+```text
+quality       = how good/healthy the project or market structure is
+inflection    = what is changing now
+opportunity   = quality + change + valuation + catalyst + flow, after gates
+risk          = probability/severity of structural failure or loss conditions
+confidence    = evidence completeness, freshness, persistence, agreement
+entry         = whether current timing and execution quality are acceptable
+```
+
+Confidence may cap eligibility, but it must never make weak evidence look
+stronger.
+
+### 15.3 Initial deterministic scoring
+
+The first scorer must be transparent and versioned. The previous Radar Core
+baseline may remain as a market-only challenger:
+
+```text
+35% momentum quality
+25% market quality
+20% flow quality
+20% security quality
+```
+
+This is not the Real Project scorer. It is a baseline hypothesis for
+comparison.
+
+For each new scorer:
+
+- store coefficients and thresholds as configuration;
+- persist configuration hash;
+- persist source set;
+- persist feature and decision versions;
+- expose component values and reasons;
+- run in shadow mode before promotion.
+
+### 15.4 Candidate eligibility
+
+Initial high-precision eligibility may require:
+
+```text
+security_state = VERIFIED
+confidence_score >= configured threshold
+risk_score <= configured threshold
+required domain score >= configured threshold
+no blocking manipulation flag
+freshness within configured window
+market-quality gates passed
+sellability passed or explicitly not required for the radar state
+```
+
+Thresholds are hypotheses until validated.
+
+---
+
+## 16. Signal object, state machine, and alerts
+
+### 16.1 Immutable signal object
+
+Every signal/decision must preserve:
+
+```text
+signal_id
+project_id
+protocol_id
+product_id
+token_id
+chain_id
+mint
+pair_address
+dex_id
+quote_asset
+detection_time
+radar_type
+project_quality
+traction
+economic_activity
+token_quality
+valuation
+20x_structural_feasibility
+catalyst
+capital_flow
+momentum
+opportunity
+confidence
+risk
+entry_quality
+chase_risk
+primary_thesis
+supporting_evidence
+contradicting_evidence
+invalidation_conditions
+expected_horizon
+current_state
+next_expected_state
+feature_snapshot_id
+decision_version
+configuration_hash
+```
+
+### 16.2 Candidate states
+
+Research pipeline states:
+
+```text
+OBSERVED
+WATCH
+QUALIFYING
+ACTIONABLE_RESEARCH
+STALE
+REJECTED
+INVALIDATED
+```
+
+Market Brain signal states:
+
+```text
+NO_SIGNAL
+WATCH
+VALIDATING
+EARLY
+CONFIRMED
+STRONG
+DEVELOPING
+MATURE
+WEAKENING
+INVALIDATED
+```
+
+Project states may independently be:
+
+```text
+UNVERIFIED
+EMERGING
+ACTIVE
+GROWING
+MATURE
+DECLINING
+DORMANT
+REACTIVATING
+```
+
+Entry states may independently be:
+
+```text
+NO_ENTRY
+EARLY_ENTRY
+ACCEPTABLE_ENTRY
+EXTENDED
+CHASE_RISK
+EXIT_RESEARCH
+```
+
+The project state, signal state, and entry state must not be collapsed into one
+field.
+
+### 16.3 Transitions
+
+Suggested research transitions:
+
+```text
+OBSERVED → WATCH
+WATCH → QUALIFYING
+QUALIFYING → ACTIONABLE_RESEARCH
+any active state → STALE
+any active state → INVALIDATED
+```
+
+Alerts must be produced for meaningful state changes:
+
+- entering `QUALIFYING`;
+- crossing a configured high-precision threshold;
+- material score change;
+- risk becoming blocked;
+- security state change;
+- liquidity deterioration;
+- stale transition;
+- requalification after invalidation;
+- thesis strengthening or weakening.
+
+### 16.4 Alert lifecycle
+
+Required concepts:
+
+```text
+CandidateState
+CandidateTransition
+AlertEvent
+AlertDelivery
+AlertAcknowledgement
+AlertResolution
+```
+
+Every transition contains:
+
+```text
+mint
+from_state
+to_state
+transition_reason
+feature_snapshot_id
+decision_id
+decision_version
+occurred_at
+dedupe_key
+cooldown_bucket
+```
+
+Durable dedupe may use:
+
+```text
+mint + transition + decision_version + cooldown_bucket
+```
+
+Security invalidation, sellability failure, LP withdrawal, and data staleness
+must supersede an earlier opportunity alert.
+
+Alert status must distinguish:
+
+```text
+open
+acknowledged
+resolved
+expired
+invalidated
+stale
+```
+
+---
+
+## 17. Adaptive horizon, follow, reactivation, and memory
+
+### 17.1 Adaptive horizon
+
+Supported horizons:
+
+```text
+15–60m
+1–4h
+4–12h
+12–24h
+24–72h
+3–7d
+```
+
+Select based on:
+
+- catalyst timing;
+- liquidity;
+- project maturity;
+- volatility;
+- traction speed;
+- market regime;
+- signal type.
+
+### 17.2 Follow engine
+
+After a signal, monitor thesis health:
+
+```text
+CONFIRMED
+  ↓
+FOLLOW
+  ↓
+THESIS HEALTH
+  ├── STRENGTHENING
+  ├── STABLE
+  ├── WEAKENING
+  └── INVALIDATED
+```
+
+### 17.3 Market memory
+
+Persist history for:
+
+```text
+projects
+tokens
+wallets/entities
+pools
+signals
+theses
+outcomes
+false positives
+false negatives
+```
+
+Known historical candidates may be kept as permanent regression cases,
+including prior pump, failure, manipulation, reactivation, and dead-token
+examples.
+
+---
+
+## 18. Forward outcomes, labels, and evaluation
+
+### 18.1 Outcome checkpoints
+
+For every qualifying or actionable research alert:
+
+```text
+T+1m
+T+5m
+T+15m
+T+30m
+T+1h
+T+3h
+T+6h
+T+12h
+T+24h
+T+3d
+T+7d
+```
+
+Measure:
+
+- return;
+- maximum favorable excursion;
+- maximum adverse excursion;
+- drawdown;
+- time to target;
+- rug event;
+- liquidity collapse;
+- security invalidation;
+- thesis validity;
+- catalyst success;
+- tradability;
+- slippage and executable outcome where available.
+
+### 18.2 Label contract
+
+Every outcome label must include:
+
+```text
+signal_time
+label_start_time
+label_end_time
+entry_price_definition
+exit_price_definition
+target_config_hash
+loss_limit_config_hash
+completion_state
+censoring_reason
+tradability_state
+security_state_at_horizon
+```
+
+Example research label:
+
+```text
+positive_1h =
+  forward_return_1h >= target_return
+  AND maximum_drawdown_1h > -loss_limit
+```
+
+Targets and loss limits are configuration, never hidden assumptions.
+
+### 18.3 Statistical validity
+
+Evaluation must address:
+
+- look-ahead from provider-reported windows;
+- overlapping 15-second signals;
+- correlated observations of the same token/pair;
+- boosted-universe selection bias;
+- survivor and availability bias;
+- missing-future censoring;
+- repeated requalification;
+- pair migration;
+- quote versus executable price;
+- slippage, fees, latency, and impact;
+- market and provider regime drift.
+
+Required evaluation design:
+
+- walk-forward time splits;
+- embargo around overlapping labels;
+- frozen as-of feature snapshots;
+- separate discovery baseline from scorer lift;
+- token-cluster or block bootstrap;
+- sample count and 95% confidence intervals;
+- temporal holdout excluded from tuning;
+- minimum sample and time window before claims;
+- pre-registered primary metric and guardrails.
+
+For probability-like outputs:
+
+```text
+Brier score
+log loss
+calibration curve
+expected calibration error
+calibration slope/intercept
+coverage at each threshold
+```
+
+---
+
+## 19. Model, configuration, and evolution governance
+
+Persist with every decision:
+
+```text
+decision_version
+feature_version
+configuration_hash
+threshold_configuration
+coefficient_configuration
+source_set
+scorer_code_or_build_identifier
+```
+
+Any change to thresholds, weights, feature definitions, source set, or gates
+requires:
+
+1. a new version;
+2. shadow comparison;
+3. validation report;
+4. approval record;
+5. rollback capability.
+
+### 19.1 Champion/challenger
+
+```text
+champion = current user-visible decision
+challenger = shadow decision
+```
+
+The challenger must not affect alerts or paper trades before promotion.
+
+### 19.2 Evolution pipeline
+
+```text
+Observation
+→ Hypothesis
+→ Backtest
+→ Out-of-sample
+→ Adversarial test
+→ Paper test
+→ Shadow mode
+→ Model guardian
+→ Approval
+→ Production
+```
+
+### 19.3 Model guardian
+
+Check:
+
+- leakage;
+- overfitting;
+- sample size;
+- out-of-sample performance;
+- regime robustness;
+- adversarial robustness;
+- calibration;
+- degradation.
+
+Failure means:
+
+```text
+REJECT_MODEL
+```
+
+### 19.4 Drift monitoring
+
+Monitor:
+
+- feature missingness;
+- feature distribution;
+- source coverage;
+- score distribution;
+- acceptance rate;
+- precision;
+- false positives;
+- provider schema;
+- security unknown rate;
+- sellability failure rate.
+
+---
+
+## 20. Operational reliability and recovery
+
+### 20.1 Scan and concurrency controls
+
+- database advisory lock or equivalent distributed scan lease;
+- one active scan per environment;
+- durable skipped/overlapping scan record;
+- deadline and `AbortSignal` propagated to provider/RPC requests;
+- no orphan request after timeout where cancellation is possible;
+- idempotency key for manual scans;
+- run correlation ID;
+- optimistic version or transaction guard;
+- atomic account/trade/position/ledger updates;
+- atomic watchlist mutation plus event;
+- atomic alert state plus outbox event;
+- startup reconciliation of orphaned `RUNNING` scans.
+
+### 20.2 Provider and RPC resilience
+
+Record per endpoint:
+
+```text
+request_count
+success_count
+timeout_count
+429_count
+4xx_count
+5xx_count
+schema_error_count
+latency_ms
+retry_count
+retry_after_ms
+last_success_at
+last_failure_at
+health_state
+```
+
+Required behavior:
+
+- bounded concurrency;
+- separate timeout budgets;
+- exponential backoff with jitter;
+- honor `Retry-After`;
+- circuit breaker;
+- endpoint health and recovery;
+- per-token partial response status;
+- explicit fallback policy;
+- `PARTIAL` scan status when coverage is incomplete.
+
+### 20.3 Freshness and failure behavior
+
+Each decision exposes:
+
+```text
+market_data_age
+security_data_age
+project_data_age
+economic_data_age
+catalyst_data_age
+last_observed_at
+```
+
+Rules:
+
+- provider failure preserves last known good state and marks it stale;
+- RPC failure fails closed for new qualification;
+- partial batch marks affected tokens unknown;
+- database failure is not a successful scan;
+- timeout records a timeout reason;
+- failed scan never overwrites last known good candidate set.
+
+### 20.4 SLOs and readiness
+
+Measure:
+
+```text
+scheduled-start adherence
+scan completion rate
+scan p50/p95/p99 latency
+provider freshness age
+RPC freshness age
+database persistence success
+last-known-good age
+partial scan rate
+timeout rate
+alert creation latency
+alert dedupe correctness
+```
+
+Expose:
+
+```text
+liveness  = process responds
+readiness = required database/provider/security paths usable
+degraded  = process up but data stale or partial
+```
+
+Recovery controls include:
+
+- backup and point-in-time recovery plan;
+- migration compatibility and rollback plan;
+- restore drill;
+- retention and export policy;
+- startup reconciliation;
+- destructive migration approval and audit;
+- incident runbook with replay from immutable observations.
+
+---
+
+## 21. Application and API security
+
+Before exposing the application beyond a trusted preview:
+
+- authentication and authorization for scan, watchlist, analysis, and paper
+  mutations;
+- CSRF/origin policy;
+- per-client rate limits;
+- request IDs and actor audit;
+- body timeout and connection limits;
+- security headers;
+- strict input validation;
+- safe error responses;
+- dependency and secret-handling review.
+
+Paper-trading endpoints must be:
+
+- idempotent;
+- protected against duplicate requests;
+- protected against negative balances;
+- protected against stale quotes;
+- protected against concurrent buy/sell races.
+
+---
+
+## 22. Phased implementation roadmap
+
+The following phases are the integrated implementation order. Phases must not
+be skipped by jumping directly to machine learning or execution.
+
+### Phase 0 — Baseline and auditability
+
+Deliver:
+
+- immutable scan/run records;
+- exact provider, checked, accepted, rejected, and unresolved counts;
+- stable rejection reason codes;
+- active filter configuration;
+- source denominators;
+- provider/RPC freshness;
+- correlation IDs;
+- canonical provider observations;
+- `baseline-v1` decision behavior;
+- unknown score fields remain explicitly unknown.
+
+Do not claim predictive effectiveness.
+
+### Phase 0A — Platform safety
+
+Deliver:
+
+- auth boundary;
+- request IDs;
+- limits;
+- scan locks;
+- idempotency;
+- atomicity;
+- recovery;
+- outbox/audit patterns.
+
+Do not activate public mutation behavior before tests pass.
+
+### Phase 1 — Discovery and source contracts
+
+Deliver:
+
+- non-boosted discovery;
+- latest/new pair source;
+- active watchlist source;
+- optional indexed source boundary;
+- response validation;
+- source lineage;
+- pair identity;
+- discovery denominators;
+- overlap and source-only diagnostics.
+
+### Phase 1A — Identity and pair/pool taxonomy
+
+Deliver:
+
+- project/protocol/product/token/mint/pool/DEX entities;
+- project-token relationship;
+- pool program and vault taxonomy;
+- LP evidence;
+- account classes;
+- pool-adjusted concentration;
+- migration and historical pair handling.
+
+### Phase 2 — Security evidence
+
+Deliver:
+
+- authority and supply checks;
+- concentration;
+- metadata;
+- Token-2022 extensions;
+- deployer and creator evidence where available;
+- explicit `VERIFIED`, `REJECTED`, `UNKNOWN`, and `STALE`.
+
+Do not claim universal safety.
+
+### Phase 2A — Execution safety evidence
+
+Deliver research-only:
+
+- buy and sell quotes;
+- route evidence;
+- simulation;
+- impact and slippage;
+- transfer fees/hooks;
+- account creation;
+- quote freshness.
+
+No wallet signing.
+
+### Phase 3 — Time-series and feature engineering
+
+Deliver:
+
+- immutable market/security/pool observations;
+- feature snapshots;
+- acceleration;
+- maker growth;
+- liquidity growth;
+- flow quality;
+- volatility;
+- drawdown;
+- completeness and freshness.
+
+Do not claim momentum quality without sufficient sample.
+
+### Phase 3A — Manipulation and entity evidence
+
+Deliver:
+
+- trade-level observations where source coverage permits;
+- clusters and economic entities;
+- wash/circular/burst/coordinated activity;
+- pool-drain and liquidity-pull flags;
+- unknown-sample behavior.
+
+Do not claim smart money without identity and history.
+
+### Phase 3B — Project and economic intelligence
+
+Deliver:
+
+- project reality;
+- sector metric registry;
+- product traction;
+- traction inflection;
+- economic activity;
+- token value capture;
+- tokenomics;
+- reactivation baselines.
+
+### Phase 4 — Deterministic radar-specific scorers
+
+Deliver:
+
+- Real Project scorer;
+- Reactivation scorer;
+- Speculative Meme scorer;
+- project quality;
+- token quality;
+- opportunity;
+- risk;
+- confidence;
+- entry;
+- chase;
+- structural feasibility;
+- explanations and score caps.
+
+Do not use probability language.
+
+### Phase 4A — Valuation, catalysts, and thesis
+
+Deliver:
+
+- comparable methodology;
+- valuation asymmetry;
+- catalyst verification and timing;
+- market regime;
+- primary thesis;
+- positive evidence;
+- negative evidence;
+- contradiction;
+- invalidation.
+
+### Phase 4B — Calibration governance
+
+Deliver:
+
+- shadow mode;
+- champion/challenger;
+- configuration hashes;
+- model guardian;
+- threshold governance;
+- drift monitoring.
+
+### Phase 5 — Candidate lifecycle and alerts
+
+Deliver:
+
+- candidate state machine;
+- signal state;
+- project state;
+- entry state;
+- transition history;
+- alert deduplication;
+- durable outbox;
+- invalidation and staleness precedence.
+
+### Phase 6 — Outcome labeling
+
+Deliver:
+
+- checkpoint outcomes;
+- executable and price-based labels;
+- tradability;
+- slippage;
+- drawdown;
+- censoring;
+- thesis validity;
+- catalyst outcome.
+
+### Phase 6A — Statistical evaluation
+
+Deliver:
+
+- walk-forward;
+- embargo;
+- temporal holdout;
+- block/token-cluster bootstrap;
+- confidence intervals;
+- precision@top-k;
+- calibration metrics;
+- discovery bias separation.
+
+No efficacy claim before minimum sample/time requirements.
+
+### Phase 7 — Controlled core rollout
+
+Deliver:
+
+- SLOs;
+- monitoring;
+- rollback;
+- incident runbook;
+- champion promotion;
+- degraded-state UI;
+- core acceptance gate.
+
+Only after Phase 7 may wallet work move beyond preparation.
+
+### Phase 8 — Wallet readiness
+
+Read-only non-custodial wallet support:
+
+- wallet-standard adapters;
+- connect/disconnect;
+- public address and balances;
+- nonce authentication;
+- domain binding;
+- replay prevention;
+- session revocation;
+- no transaction signing.
+
+### Phase 9 — Quote, route, and simulation
+
+Deliver:
+
+- quote contract;
+- route allowlist;
+- program/address validation;
+- complete transaction simulation;
+- buy/sell preview;
+- slippage and impact limits;
+- expiry;
+- transfer extension checks.
+
+Missing or failed sellability blocks signing.
+
+### Phase 10 — Controlled non-custodial execution
+
+Deliver only:
+
+- manual execution;
+- narrow route/program/token allowlist;
+- per-transaction/wallet/daily limits;
+- kill switch;
+- fresh quote and blockhash;
+- immutable intent-to-settlement lifecycle;
+- wallet-only signing;
+- chain reconciliation;
+- duplicate-submission protection.
+
+No auto-trading, copy trading, or background signing.
+
+### Phase 11 — Versioned fee policy
+
+Safe default:
+
+```text
+enabled = false
+buy_fee_bps = 0
+sell_fee_bps = 0
+```
+
+Fee policy must contain:
+
+```text
+fee_policy_version
+enabled
+buy_fee_bps
+sell_fee_bps
+fee_currency_policy
+treasury_account
+minimum_fee_policy
+maximum_fee_policy
+effective_from
+effective_until
+configuration_hash
+approved_by
+```
+
+Fees are charged only after confirmed successful execution.
+
+### Phase 12 — Free beta and controlled monetization
+
+Rollout:
+
+1. internal execution, restricted wallets, fee disabled;
+2. free beta at zero application fee;
+3. measured beta;
+4. controlled cohort fee activation;
+5. gradual expansion.
+
+Track:
+
+```text
+wallet_connect_success_rate
+nonce_auth_failure_rate
+quote_success_rate
+simulation_failure_rate
+quote_to_sign_conversion
+wallet_rejection_rate
+submission_success_rate
+confirmation_latency
+settlement_failure_rate
+duplicate_submission_rate
+actual_vs_estimated_output
+actual_price_impact
+fee_reconciliation_rate
+user_reported_fee_confusion
+execution_incident_rate
+```
+
+---
+
+## 23. Core acceptance gate
+
+The Radar Core is production-ready only when all criteria pass.
+
+### Reproducibility
+
+- decisions can be rebuilt from immutable observations;
+- source/schema/config versions are known;
+- feature and score versions persist;
+- provider revisions cannot rewrite history.
+
+### Data integrity
+
+- checked = accepted + rejected + unresolved/partial;
+- all row outcomes reconcile;
+- rejection reason counters remain explicitly multi-label;
+- source denominators are visible;
+- stale and partial are distinct from healthy.
+
+### Security and execution evidence
+
+- account concentration is not wallet ownership;
+- pool/program accounts are classified or unknown;
+- token-program extensions are considered;
+- LP, deployer, entity, and sellability evidence are separate;
+- missing/failed sell evidence cannot silently qualify a candidate.
+
+### Scoring
+
+- deterministic fixtures pass;
+- unknown mandatory features block or cap;
+- score, risk, confidence, and entry are distinct;
+- no smart-money claim without wallet methodology;
+- no probability language without calibration.
+
+### Lifecycle
+
+- every candidate transition is persisted;
+- alerts are deduplicated and replay-safe;
+- security and staleness supersede opportunity alerts;
+- alert status counts reconcile.
+
+### Evaluation
+
+- no-look-ahead tests pass;
+- walk-forward holdout is used;
+- overlap and correlation are handled;
+- labels include tradability, slippage, fees, and censoring;
+- metrics include sample size and uncertainty;
+- minimum sample/time gate is met before claims.
+
+### Operations
+
+- locks, cancellation, retry, timeout, and recovery work;
+- provider/RPC/database SLOs are measured;
+- degraded readiness is visible;
+- backup and restore procedures are tested;
+- shadow and rollback are available.
+
+Until this gate passes, the product must remain a research Radar.
+
+---
+
+## 24. Wallet execution and monetization acceptance gate
+
+Wallet monetization is not production-ready until:
+
+### Core prerequisite
+
+- complete Phase 7 gate passes;
+- Radar claims use measured outcomes;
+- paper and real execution remain separate.
+
+### Wallet and identity
+
+- wallet adapter tests pass;
+- nonce authentication is replay-safe and domain-bound;
+- no private key or seed phrase enters the system.
+
+### Execution safety
+
+- quote, simulation, route, program, token-program, slippage, and expiry checks
+  pass;
+- buy and sell evidence exists at configured sizes;
+- failed/missing sellability blocks execution;
+- duplicate requests, restart recovery, and chain reconciliation pass;
+- limits and kill switches operate.
+
+### Monetization
+
+- zero fee is the default;
+- policy is versioned, transparent, auditable, and reversible;
+- fees apply only to confirmed success;
+- treasury reconciles on-chain;
+- all cost components are visible before signing.
+
+### Governance
+
+- security review;
+- dependency review;
+- incident runbook;
+- rollback drill;
+- legal/compliance review for applicable jurisdictions;
+- monitoring distinguishing application, provider, wallet, route, token, and
+  market failures.
+
+---
+
+## 25. Testing requirements
+
+### Provider contract tests
+
+- malformed JSON;
+- missing fields;
+- wrong chain;
+- duplicate mints/pairs;
+- negative/non-finite values;
+- clock skew;
+- schema revision;
+- partial pair responses;
+- 429 with and without `Retry-After`.
+
+### RPC/security tests
+
+- partial batch;
+- missing result;
+- wrong account type;
+- zero/missing supply;
+- Token-2022 extension;
+- stale commitment;
+- pool account classification;
+- unknown owner;
+- authority changes between scans.
+
+### Identity and evidence tests
+
+- duplicate symbols;
+- fake copy;
+- migration;
+- multiple pools;
+- project-token contradiction;
+- source overlap;
+- stale evidence;
+- invalid evidence;
+- unknown evidence propagation.
+
+### Scoring tests
+
+- deterministic golden fixtures;
+- null/unknown propagation;
+- zero denominators;
+- score caps;
+- penalty precedence;
+- configuration hash reproducibility;
+- no score inflation from missing data;
+- separate scorer behavior by radar type.
+
+### Temporal tests
+
+- out-of-order observations;
+- duplicate retries;
+- late provider updates;
+- pair migration;
+- clock skew;
+- future observation rejection;
+- no-look-ahead fixture;
+- overlapping labels;
+- requalification.
+
+### Concurrency/recovery tests
+
+- two manual scans;
+- scheduler/manual collision;
+- timeout cancellation;
+- orphan scan recovery;
+- database retry;
+- duplicate trade request;
+- alert outbox replay;
+- restart during persistence.
+
+### Adversarial market tests
+
+- volume without maker growth;
+- concentrated cluster below top-1 threshold;
+- pool as largest account;
+- liquidity pull;
+- failed sell simulation;
+- Token-2022 transfer fee;
+- repeated wallet round trips;
+- same-slot burst;
+- coordinated exit;
+- fake project-token relationship.
+
+---
+
+## 26. Current application alignment
+
+The existing application remains the baseline implementation, not the final
+Market Brain.
+
+Current relevant behavior:
+
+- Node server and Prisma/PostgreSQL remain the stack;
+- DexScreener remains the initial market-data provider;
+- live scans run on a 15-second schedule;
+- Solana-only records are retained;
+- boost metadata is attention metadata;
+- missing provider fields remain unknown;
+- current paper trading is virtual only;
+- `baseline-v1` and `phase2-v1` remain available for comparison;
+- `TokenObservation` provides initial immutable provider lineage;
+- RPC verification uses bounded/fail-closed behavior;
+- scan failure preserves the last known good board.
+
+The integrated PRD extends the product with project identity, evidence
+contracts, fundamental intelligence, radar-specific scoring, thesis lifecycle,
+outcomes, and governed evolution. It does not require replacing the existing
+stack.
+
+---
+
+## 27. Traceability and completeness matrix
+
+This PRD intentionally preserves the major requirements from both source
+systems.
+
+| Source requirement area | Integrated PRD location |
+|---|---|
+| Project-first discovery | Sections 2, 6, 8, 11 |
+| Discovery sources and boost bias | Section 8 |
+| Project/chain/token/mint/pool/DEX identity | Section 7 |
+| Project reality gate | Section 11.1 |
+| PQS | Section 11.2 |
+| Sector-specific traction | Section 11.3 |
+| Traction inflection | Section 11.4 |
+| Economic activity | Section 11.5 |
+| Token value capture | Section 11.6 |
+| Tokenomics and unlock risk | Section 11.7 |
+| Valuation and comparables | Section 12.1 |
+| 20× feasibility | Section 12.2 |
+| Catalysts and timing | Section 12.3 |
+| Capital flow | Section 12.4 |
+| Economic entities | Section 12.5 |
+| Smart money governance | Section 12.6 |
+| Organic adoption | Section 12.7 |
+| Manipulation/adversarial checks | Section 13.1 |
+| Negative evidence | Section 13.2 |
+| Market regime | Section 13.3 |
+| Momentum and anti-chase | Section 13.4 |
+| Three radars | Section 14 |
+| Score/risk/confidence separation | Section 15 |
+| Signal object | Section 16.1 |
+| Candidate state machine | Section 16.2 |
+| Alert lifecycle/dedupe | Section 16.3–16.4 |
+| Adaptive horizon | Section 17.1 |
+| Follow engine | Section 17.2 |
+| Reactivation | Section 17.3 and 11.4 |
+| Market memory | Section 17.3 |
+| Forward outcomes | Section 18 |
+| Precision KPIs | Sections 2.3 and 18 |
+| Evolution brain/model guardian | Section 19 |
+| Canonical observations | Section 9 |
+| Data lineage and source contracts | Section 8 |
+| Security and Token-2022 | Section 10 |
+| Account and pool taxonomy | Section 10.3–10.5 |
+| Sellability and execution evidence | Section 10.8 |
+| Concurrency and idempotency | Section 20.1 |
+| Provider/RPC resilience | Section 20.2 |
+| Statistical validity | Section 18.3 |
+| Configuration governance | Section 19 |
+| Drift monitoring | Section 19.4 |
+| SLO and recovery | Section 20.4 |
+| API security | Section 21 |
+| Phases 0–7 | Section 22 |
+| Wallet phases 8–10 | Section 22 |
+| Fee phases 11–12 | Section 22 |
+| Core acceptance gate | Section 23 |
+| Execution/monetization gate | Section 24 |
+| Full test matrix | Section 25 |
+
+---
+
+## 28. Final product statement
+
+The integrated product is:
+
+```text
+An auditable, fail-closed, project-first market intelligence system
+that detects structural change and asymmetric opportunity through
+multi-source evidence, while separating project quality, token quality,
+opportunity, risk, confidence, and entry timing.
+```
+
+The product must be willing to say:
+
+```text
+NO SIGNAL
+WATCH
+VALIDATING
+THESIS CONFLICT
+NO ENTRY
+STALE
+INVALIDATED
+```
+
+Those outcomes are not failures. They are core product behavior for a
+precision-first system.

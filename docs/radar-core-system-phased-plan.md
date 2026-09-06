@@ -1,5 +1,11 @@
 # Radar Core System — Phased Precision Plan
 
+> **Relationship to the integrated product specification:**  
+> [`integrated-radar-core-market-brain-prd.md`](integrated-radar-core-market-brain-prd.md)
+> is the authoritative product and architecture document. This file remains the
+> detailed Radar Core implementation reference, including platform safety,
+> execution-boundary, and monetization controls.
+
 **Status:** Proposed implementation blueprint — expanded gap-audit edition  
 **Scope:** Radar core plus a gated post-core wallet execution and monetization roadmap
 **Mode:** Phases 0–7 remain paper/research only; wallet signing and real-fund execution begin only after the core acceptance gate
