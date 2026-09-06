@@ -110,6 +110,52 @@ function navItem([id, icon, label]) { const count = id === "alerts" ? (snapshot?
 function head(eyebrow, title, description, actions = "") { return `<div class="page-head"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p>${description}</p></div><div class="actions">${actions}</div></div>`; }
 function stat(label, value, foot, accent, cls = "") { return `<div class="card metric"><span class="metric-accent">${accent}</span><div class="metric-label">${label}</div><div class="metric-value ${cls}">${value}</div><div class="metric-foot">${foot}</div></div>`; }
 function statusBadge(item) { const t = item.status?.includes("RISK") || item.status === "DISTRIBUTING" ? "red" : item.status === "BREAKOUT" || item.status === "ACCUMULATING" || item.status === "ACTIVE" ? "green" : item.status === "HYPED" || item.status === "COOLING" ? "yellow" : "blue"; return `<span class="badge badge-${t}">${esc(item.status)}</span>`; }
+function manipulationFlag(flag) {
+  if (flag === true) return `<span class="phase3a-flag phase3a-flagged">FLAGGED</span>`;
+  if (flag === false) return `<span class="phase3a-flag phase3a-clear">CLEAR</span>`;
+  return `<span class="phase3a-flag phase3a-unknown">UNKNOWN</span>`;
+}
+function manipulationEvidenceMarkup(evidence) {
+  const item = evidence || {};
+  const flags = item.flags || {};
+  const reasons = Array.isArray(item.qualityReasons) ? item.qualityReasons : [];
+  const reasonMarkup = reasons.length
+    ? reasons.slice(0, 5).map(reason => `<li>${esc(typeof reason === "string" ? reason : reason.detail || reason.code || "Evidence quality is unknown.")}</li>`).join("")
+    : "<li>Trade-level evidence is complete for this snapshot.</li>";
+  return `<div class="phase3a-panel">
+    <div class="side-card-heading"><div><h3>Phase 3A · Manipulation & entity evidence</h3><span>Flags are evidence, not a conviction</span></div><span class="security-status ${evidenceStatusClass(item.status)}">${esc(item.status || "UNKNOWN")}</span></div>
+    <div class="phase3a-disclaimer">No smart-money claim is made without identity evidence and prior entity history. Account concentration is not wallet ownership.</div>
+    <div class="phase3a-grid">
+      <div><span>Wash / round-trip</span>${manipulationFlag(flags.washTrading || flags.circularActivity)}</div>
+      <div><span>Burst activity</span>${manipulationFlag(flags.burstActivity)}</div>
+      <div><span>Coordinated activity</span>${manipulationFlag(flags.coordinatedActivity)}</div>
+      <div><span>Pool drain</span>${manipulationFlag(flags.poolDrain)}</div>
+      <div><span>Smart-money status</span><strong>${esc(item.smartMoneyStatus || "UNKNOWN")}</strong></div>
+      <div><span>Trade sample</span><strong>${item.sampleSize ?? "UNKNOWN"} · ${esc(item.sampleStatus || "UNKNOWN")}</strong></div>
+    </div>
+    <div class="health-row"><span>Known entities / clusters</span><strong class="health-value">${item.metrics?.knownEntityCount ?? "UNKNOWN"} / ${item.metrics?.knownClusterCount ?? "UNKNOWN"}</strong></div>
+    <div class="health-row"><span>Liquidity change</span><strong class="health-value">${item.metrics?.liquidityChangePercent == null ? "UNKNOWN" : `${Number(item.metrics.liquidityChangePercent).toFixed(2)}%`}</strong></div>
+    <ul class="security-reasons">${reasonMarkup}</ul>
+  </div>`;
+}
+function scorecardMarkup(scorecard) {
+  const item = scorecard || {};
+  const components = item.components || {};
+  const radarValues = item.radars || {};
+  const value = key => components[key] == null ? "UNKNOWN" : Math.round(Number(components[key]));
+  const radarValue = key => radarValues[key] == null ? "UNKNOWN" : Math.round(Number(radarValues[key]));
+  const warnings = Array.isArray(item.scoreWarnings) ? item.scoreWarnings : [];
+  return `<div class="phase4-panel">
+    <div class="side-card-heading"><div><h3>Phase 4 · Deterministic scorers</h3><span>${esc(item.version || "UNKNOWN")} · configuration ${esc((item.configurationHash || "UNKNOWN").slice(0, 12))}</span></div><span class="security-status ${item.decisionState === "QUALIFYING" ? "security-status-good" : "security-status-warn"}">${esc(item.decisionState || "UNKNOWN")}</span></div>
+    <div class="phase4-radar-grid"><div><span>Real Project</span><strong>${radarValue("REAL_PROJECT")}</strong></div><div><span>Reactivation</span><strong>${radarValue("REACTIVATION")}</strong></div><div><span>Speculative Meme</span><strong>${radarValue("SPECULATIVE_MEME")}</strong></div></div>
+    <div class="phase4-score-grid">
+      <div><span>Project quality</span><strong>${value("projectQuality")}</strong></div><div><span>Token quality</span><strong>${value("tokenQuality")}</strong></div><div><span>Opportunity</span><strong>${value("opportunity")}</strong></div><div><span>Risk</span><strong>${value("risk")}</strong></div><div><span>Confidence</span><strong>${value("confidence")}</strong></div><div><span>Entry / chase</span><strong>${value("entryQuality")} / ${value("chaseRisk")}</strong></div><div><span>Structural feasibility</span><strong>${value("structuralFeasibility")}</strong></div>
+    </div>
+    <div class="phase4-reasons"><strong>Score explanation</strong><ul>${(item.scoreReasons || []).map(reason => `<li>${esc(reason)}</li>`).join("") || "<li>No score explanation is available.</li>"}</ul></div>
+    ${warnings.length ? `<div class="phase4-warnings"><strong>Caps / warnings</strong><ul>${warnings.slice(0, 8).map(reason => `<li>${esc(reason)}</li>`).join("")}</ul></div>` : ""}
+    <div class="data-note">These are deterministic evidence scores, not profit probabilities. Unknown features reduce confidence or keep the candidate in WATCH.</div>
+  </div>`;
+}
 function positionFor(item) { return snapshot?.portfolio?.positions?.find(position => position.mint === item.mint) || null; }
 function tokenPnl(item) {
   const position = positionFor(item);
@@ -284,7 +330,7 @@ function radar() {
    return head("Discovery", `${report?.decisionVersion || "phase2-v1"} candidate board`, "Review the current LIVE universe after the active fail-closed market and security filters. Predictive scores remain UNKNOWN and are never estimated.", `<button class="btn btn-primary" onclick="scan()">↻ Scan now</button>`) +
     filterNotice +
     baselineAuditPanel(report || {}, snapshot.scanRuns?.[0] || {}) +
-      `<section class="card page-panel"><div class="toolbar"><label class="filter-control">Status <select onchange="setRadarStatus(this.value)"><option value="all" ${radarStatus === "all" ? "selected" : ""}>All statuses</option><option value="provider" ${radarStatus === "provider" ? "selected" : ""}>Provider</option><option value="cto flag" ${radarStatus === "cto flag" ? "selected" : ""}>CTO flag</option></select></label><label class="filter-control">Sort <select onchange="setRadarSort(this.value)"><option value="radar" ${radarSort === "radar" ? "selected" : ""}>Active gate order</option><option value="opportunity" ${radarSort === "opportunity" ? "selected" : ""}>Opportunity (UNKNOWN)</option><option value="risk" ${radarSort === "risk" ? "selected" : ""}>Risk (UNKNOWN)</option><option value="smart" ${radarSort === "smart" ? "selected" : ""}>Flow (UNKNOWN)</option><option value="newest" ${radarSort === "newest" ? "selected" : ""}>Newest first</option></select></label><span class="filter">${items.length} of ${snapshot.tokens.length} tokens</span></div><div class="table-wrap"><table><thead><tr><th>#</th><th>Token</th><th>Age</th><th>MC</th><th>Liquidity</th><th>Radar (not calculated)</th><th>Opportunity</th><th>Flow</th><th>Momentum</th><th>Hype</th><th>Risk</th><th>Confidence</th><th>Status</th><th>P/L</th><th>Actions</th></tr></thead><tbody>${items.map((item, i) => { return `<tr><td class="rank">${String(i+1).padStart(2,"0")}</td><td><button class="token-link" onclick="showToken('${encodeURIComponent(item.mint)}')" aria-label="Open details for ${esc(item.symbol)}"><div class="token-cell">${tokenLogo(item)}<div class="token-meta"><strong>${esc(item.symbol)}</strong><span>${esc(item.name)}</span></div></div></button></td><td>${esc(item.age)}</td><td>${compact(item.marketCap)}</td><td>${compact(item.liquidity)}</td><td class="score">${item.radar ?? "UNKNOWN"}</td><td>${item.opportunity ?? "UNKNOWN"}</td><td>${item.smartMoney ?? "UNKNOWN"}</td><td>${item.momentum ?? "UNKNOWN"}</td><td>${item.hype ?? "UNKNOWN"}</td><td class="${item.risk > 55 ? "negative":""}">${item.risk ?? "UNKNOWN"}</td><td>${item.confidence ?? "UNKNOWN"}${item.confidence != null ? "%" : ""}</td><td>${statusBadge(item)}</td><td>${pnlMarkup(item)}</td><td>${tokenActions(item)}</td></tr>`; }).join("")}</tbody></table></div><div class="data-note">Showing ${items.length} accepted ${esc(report?.decisionVersion || "phase2-v1")} provider records. Score columns remain UNKNOWN until a versioned scoring engine exists.</div></section>`;
+      `<section class="card page-panel"><div class="toolbar"><label class="filter-control">Status <select onchange="setRadarStatus(this.value)"><option value="all" ${radarStatus === "all" ? "selected" : ""}>All statuses</option><option value="provider" ${radarStatus === "provider" ? "selected" : ""}>Provider</option><option value="cto flag" ${radarStatus === "cto flag" ? "selected" : ""}>CTO flag</option></select></label><label class="filter-control">Sort <select onchange="setRadarSort(this.value)"><option value="radar" ${radarSort === "radar" ? "selected" : ""}>Phase 4 radar score</option><option value="opportunity" ${radarSort === "opportunity" ? "selected" : ""}>Opportunity</option><option value="risk" ${radarSort === "risk" ? "selected" : ""}>Risk</option><option value="smart" ${radarSort === "smart" ? "selected" : ""}>Flow</option><option value="newest" ${radarSort === "newest" ? "selected" : ""}>Newest first</option></select></label><span class="filter">${items.length} of ${snapshot.tokens.length} tokens</span></div><div class="table-wrap"><table><thead><tr><th>#</th><th>Token</th><th>Age</th><th>MC</th><th>Liquidity</th><th>Radar / Phase 4</th><th>Opportunity</th><th>Flow</th><th>Momentum</th><th>Hype</th><th>Risk</th><th>Confidence</th><th>Status</th><th>P/L</th><th>Actions</th></tr></thead><tbody>${items.map((item, i) => { return `<tr><td class="rank">${String(i+1).padStart(2,"0")}</td><td><button class="token-link" onclick="showToken('${encodeURIComponent(item.mint)}')" aria-label="Open details for ${esc(item.symbol)}"><div class="token-cell">${tokenLogo(item)}<div class="token-meta"><strong>${esc(item.symbol)}</strong><span>${esc(item.name)}</span></div></div></button></td><td>${esc(item.age)}</td><td>${compact(item.marketCap)}</td><td>${compact(item.liquidity)}</td><td class="score">${item.radar ?? "UNKNOWN"}</td><td>${item.opportunity ?? "UNKNOWN"}</td><td>${item.smartMoney ?? "UNKNOWN"}</td><td>${item.momentum ?? "UNKNOWN"}</td><td>${item.hype ?? "UNKNOWN"}</td><td class="${item.risk > 55 ? "negative":""}">${item.risk ?? "UNKNOWN"}</td><td>${item.confidence ?? "UNKNOWN"}${item.confidence != null ? "%" : ""}</td><td>${statusBadge(item)}</td><td>${pnlMarkup(item)}</td><td>${tokenActions(item)}</td></tr>`; }).join("")}</tbody></table></div><div class="data-note">Showing ${items.length} accepted ${esc(report?.decisionVersion || "phase2-v1")} records with ${esc(report?.scoreVersion || snapshot?.system?.scoreVersion || "phase4-v1")} deterministic evidence scores. Scores are not profit probabilities.</div></section>`;
 }
 function terminalInspector(item) {
   if (!item) {
@@ -614,6 +660,8 @@ async function showToken(id, reload = true) {
   const executionEvidence = executionSafety.evidence || {};
   const featureSnapshot = details.featureSnapshot || {};
   const features = featureSnapshot.features || {};
+  const manipulationEvidence = details.manipulationEvidence || {};
+  const scorecard = details.scorecard || {};
   const executionReasons = Array.isArray(executionSafety.reasons) && executionSafety.reasons.length
     ? executionSafety.reasons
     : ["Buy/sell quote, simulation, and token-program evidence must all pass before actionable research status."];
@@ -646,7 +694,7 @@ async function showToken(id, reload = true) {
         ${headerUrl ? `<div class="detail-banner"><img src="${esc(headerUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer"><span>DEXSCREENER PROFILE</span></div>` : ""}
         <div class="detail-heading">
           <div class="big-token">${tokenLogo(t, true)}<div><h2>${esc(t.name)} <span class="token-symbol">${esc(t.symbol)}</span></h2><p class="token-mint">${esc(t.mint)}</p></div></div>
-           <div class="score-hero"><strong>${t.radar ?? "UNKNOWN"}</strong><span>Radar score · not calculated</span></div>
+           <div class="score-hero"><strong>${t.radar ?? "UNKNOWN"}</strong><span>Phase 4 score · ${esc(scorecard.activeRadar || "UNKNOWN")}</span></div>
         </div>
         <div class="token-link-row">${externalLinks(links)}</div>
         <div class="detail-section-title"><span>Live market data</span><small>DexScreener · refreshed every 30s</small></div>
@@ -703,6 +751,8 @@ async function showToken(id, reload = true) {
            <div class="health-row"><span>Volatility / drawdown</span><strong class="health-value">${features.volatility == null ? "UNKNOWN" : `${Number(features.volatility).toFixed(2)}%`} / ${features.drawdown == null ? "UNKNOWN" : `${Number(features.drawdown).toFixed(2)}%`}</strong></div>
            <div class="health-row"><span>Market / security age</span><strong class="health-value">${featureSnapshot.freshness?.marketDataAgeMs == null ? "UNKNOWN" : formatAgeMs(featureSnapshot.freshness.marketDataAgeMs)} / ${featureSnapshot.freshness?.securityDataAgeMs == null ? "UNKNOWN" : formatAgeMs(featureSnapshot.freshness.securityDataAgeMs)}</strong></div>
            <ul class="security-reasons">${(featureSnapshot.qualityReasons || []).slice(0, 8).map(reason => `<li>${esc(reason)}</li>`).join("") || "<li>Feature inputs complete for the current snapshot.</li>"}</ul>
+         ${manipulationEvidenceMarkup(manipulationEvidence)}
+         ${scorecardMarkup(scorecard)}
          <div class="side-divider"></div>
         <div class="side-card-heading"><div><h3>Pair identity</h3><span>Selected by highest live liquidity</span></div></div>
         <div class="pair-identity"><span>Pair address</span><code>${esc(pair.address || "UNKNOWN")}</code></div>

@@ -47,6 +47,7 @@ const {
   validateProviderPairFeed,
   PROVIDER_SCHEMA_VERSION
 } = require("./radar-core");
+const { SCORE_VERSION, scoreRadarCandidate } = require("./radar-scoring");
 const { createSolanaRpcPool } = require("./solana-rpc-pool");
 const {
   EXECUTION_SAFETY_VERSION,
@@ -1046,6 +1047,7 @@ function observationData(item, endpoint, sourceRequestId, observedAt, pairOverri
     marketQuality: item.details?.marketQuality || decision.marketQuality || null,
     executionSafety: item.details?.executionSafety || null,
     executionEvidence: item.details?.executionEvidence || null
+    , tradeObservations: item.details?.tradeObservations || pair.tradeObservations || pair.trades || null
   };
   return {
     mint: item.mint,
@@ -1382,16 +1384,19 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
     const decisions = executionSecured.map(evaluateActiveCandidate);
     const safeTokens = executionSecured.filter((item, index) => decisions[index].accepted).map(item => {
       const rationale = buildTokenReview(item, item.security);
-      return {
+      const previous = state.tokens.find(token => token.mint === item.mint);
+      return scoreRadarCandidate({
         ...item, rationale, potential: "UPWARD BIAS",
         details: {
-          ...item.details, holders: item.security.holders,
+          ...item.details,
+          ...(previous?.details?.manipulationEvidence ? { manipulationEvidence: previous.details.manipulationEvidence } : {}),
+          holders: item.security.holders,
           holderConcentration: item.security.topHolderPercent,
           authorities: item.security.authorities,
           security: item.security,
           evidence: [...item.details.evidence, ...item.security.reasons, rationale]
         }
-      };
+      });
     });
     const providerAgeMs = fresh.reduce((maxAge, item) => {
       const updatedAt = timestampMs(item.details?.providerMetadata?.providerUpdatedAt);
@@ -1416,6 +1421,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
            ? "PARTIAL"
            : "FAILED",
         filterConfig: ACTIVE_FILTER_CONFIG,
+        scoreVersion: SCORE_VERSION,
       sourceMetrics: {
         ...discovery.sourceMetrics,
          unique_pairs_before_dedup: new Set(rawPairs.map(pair => pair.pairAddress).filter(Boolean)).size,
@@ -1933,7 +1939,9 @@ const server = http.createServer((req, res) => {
 async function start() {
   try {
     state = await readState(state);
+    state.tokens = state.tokens.map(item => scoreRadarCandidate(item));
     state.system.database = "POSTGRESQL / PRISMA";
+    state.system.scoreVersion = SCORE_VERSION;
     state.system.scheduler = "RUNNING · 15s";
     state.nextScanAt = Date.now() + AUTO_SCAN_MS;
     if (!state.patterns.length && state.tokens.length) {

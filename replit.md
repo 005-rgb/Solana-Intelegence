@@ -43,6 +43,8 @@ npm run db:push
 - `server.js`: HTTP API, DexScreener provider boundary, automatic scan scheduler, and paper-trade logic.
 - `db.js`: Prisma repository layer, LIVE-only cleanup, watchlist events, paper trades, scan runs, and immutable provider observations.
 - `radar-core.js`: versioned baseline-v1 comparison helpers and active phase2-v1 market-quality decision helpers with count reconciliation.
+- `radar-scoring.js`: phase4-v1 deterministic Real Project, Reactivation, and Speculative Meme scorecards with configuration hashing, confidence caps, and non-predictive explanations.
+- `manipulation-evidence.js`: phase3a-v1 fail-closed wash, circular, burst, coordination, entity, and pool-drain evidence evaluator.
 - `execution-safety.js`: phase2a-v1 buy/sell quote, route, simulation, slippage, transfer-evidence, account-creation, and freshness evaluator.
 - `solana-rpc-pool.js`: isolated Solana RPC pool with provider rotation, circuit cooldowns, failover telemetry, and safe health summaries.
 - `prisma/schema.prisma`: PostgreSQL schema for live tokens, signals, watchlists, paper trading, scan observability, and `TokenObservation` lineage rows.
@@ -60,6 +62,32 @@ npm run db:push
 - Missing history or provider fields remain `null` and produce `PARTIAL` status
   with explicit quality reasons. These features are evidence only and are not a
   predictive score.
+
+## Phase 3A manipulation and entity evidence
+
+- Every persisted `TokenObservation` also creates one `ManipulationSnapshot` in
+  the same transaction.
+- Trade-based wash, circular, burst, and coordinated flags remain `UNKNOWN`
+  when trade-level provider coverage is unavailable or below the minimum sample.
+- Liquidity-pull evidence is evaluated independently from trade coverage and
+  remains unknown without a prior liquidity observation.
+- Smart-money status requires explicit entity identity/funding lineage and prior
+  entity history. Account concentration never becomes wallet ownership by
+  inference.
+
+## Phase 4 deterministic scorecards
+
+- `phase4-v1` computes separate Real Project, Reactivation, and Speculative Meme
+  scores plus project quality, token quality, momentum, market quality, flow,
+  opportunity, risk, confidence, entry quality, chase risk, and structural
+  feasibility.
+- Every scorecard stores its configuration hash, source set, feature version,
+  component values, reasons, warnings, eligibility state, and confidence caps
+  inside the token details JSON.
+- Phase 4 does not replace Phase 2/2A acceptance gates and does not claim
+  probability or predictive effectiveness. Unknown evidence caps confidence or
+  leaves a component unknown; blocking Phase 3A flags keep the score in
+  `WATCH`.
 
 The authoritative product specification is
 [`docs/integrated-radar-core-market-brain-prd.md`](docs/integrated-radar-core-market-brain-prd.md).

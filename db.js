@@ -1,5 +1,6 @@
 const { PrismaClient } = require("@prisma/client");
 const { deriveFeatureSnapshot } = require("./radar-features");
+const { deriveManipulationEvidence } = require("./manipulation-evidence");
 
 const prisma = new PrismaClient();
 const LIVE_ONLY_MIGRATION = "liveOnlyInitialized";
@@ -259,6 +260,30 @@ async function readState(fallback) {
       orderBy: { observedAt: "desc" }
     })
     : [];
+  const manipulationRows = dbTokens.length
+    ? await prisma.manipulationSnapshot.findMany({
+      where: { mint: { in: dbTokens.map(token => token.mint) } },
+      orderBy: { observedAt: "desc" }
+    })
+    : [];
+  const latestManipulation = new Map();
+  for (const row of manipulationRows) {
+    if (!latestManipulation.has(row.mint)) {
+      latestManipulation.set(row.mint, {
+        version: row.version,
+        observedAt: row.observedAt.toISOString(),
+        status: row.status,
+        sampleStatus: row.sampleStatus,
+        sampleSize: row.sampleSize,
+        flags: row.flags,
+        entities: row.entities,
+        metrics: row.metrics,
+        qualityReasons: row.qualityReasons,
+        smartMoneyStatus: row.smartMoneyStatus,
+        poolDrainStatus: row.poolDrainStatus
+      });
+    }
+  }
   const latestFeatures = new Map();
   for (const row of featureRows) {
     if (!latestFeatures.has(row.mint)) {
@@ -312,7 +337,11 @@ async function readState(fallback) {
     lastScan: radar.lastScan?.toISOString() || null,
     nextScanAt: radar.nextScanAt?.getTime() || Date.now() + 15000,
     scanRunning: false,
-    tokens: tokens.map(token => fromToken(token, latestFeatures.get(token.mint))),
+    tokens: tokens.map(token => {
+      const item = fromToken(token, latestFeatures.get(token.mint));
+      item.details.manipulationEvidence = latestManipulation.get(token.mint) || null;
+      return item;
+    }),
     watchlist: activeWatchlist.filter(item => safeMints.has(item.token.mint)).map(item => item.token.mint),
     watchlistHistory: events.filter(event => safeMints.has(event.token.mint)).map(event => ({ mint: event.token.mint, action: event.action, at: event.createdAt.toISOString() })),
     alerts: alerts.map(alert => ({ type: alert.type, token: alert.token, text: alert.text, tone: alert.tone, time: alert.timeLabel || alert.createdAt.toISOString() })),
@@ -694,6 +723,25 @@ async function recordTokenObservations(observations, scanRunId) {
           completeness: snapshot.completeness,
           status: snapshot.status,
           qualityReasons: snapshot.qualityReasons
+        }
+      });
+      const manipulation = deriveManipulationEvidence(history, { asOf: observation.observedAt });
+      await tx.manipulationSnapshot.create({
+        data: {
+          observationId: observation.id,
+          mint: observation.mint,
+          pairAddress: observation.pairAddress,
+          observedAt: observation.observedAt,
+          version: manipulation.version,
+          status: manipulation.status,
+          sampleStatus: manipulation.sampleStatus,
+          sampleSize: manipulation.sampleSize,
+          flags: manipulation.flags,
+          entities: manipulation.entities,
+          metrics: manipulation.metrics,
+          qualityReasons: manipulation.qualityReasons,
+          smartMoneyStatus: manipulation.smartMoneyStatus,
+          poolDrainStatus: manipulation.poolDrainStatus
         }
       });
     }

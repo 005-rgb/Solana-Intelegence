@@ -269,10 +269,34 @@ model TokenObservation {
   createdAt          DateTime  @default(now())
   scanRun            ScanRun?  @relation(fields: [scanRunId], references: [id], onDelete: SetNull)
   featureSnapshot    RadarFeatureSnapshot?
+  manipulationSnapshot ManipulationSnapshot?
 
   @@index([mint, observedAt])
   @@index([pairAddress, observedAt])
   @@index([scanRunId])
+}
+
+model ManipulationSnapshot {
+  id              String           @id @default(cuid())
+  observationId   String           @unique
+  mint            String
+  pairAddress     String?
+  observedAt      DateTime
+  version         String
+  status          String
+  sampleStatus    String
+  sampleSize      Int              @default(0)
+  flags           Json
+  entities        Json
+  metrics         Json
+  qualityReasons  Json
+  smartMoneyStatus String
+  poolDrainStatus String
+  createdAt       DateTime         @default(now())
+  observation     TokenObservation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+
+  @@index([mint, observedAt])
+  @@index([status])
 }
 
 model RadarFeatureSnapshot {

@@ -7,3 +7,5 @@
 - [Live lease test isolation](live-lease-test-isolation.md) — database lease integration tests need the running scheduler lease released or they race the live scan worker.
 - [Wallet concentration taxonomy](wallet-concentration-taxonomy.md) — ATA and token-account percentages are not wallet ownership without explicit owner evidence.
 - [Phase 2A decision gate](phase2a-decision-gate.md) — execution-safety evidence is a mandatory final gate for actionable research candidates.
+- [Phase 3A evidence boundaries](phase3a-evidence-boundaries.md) — manipulation flags need trade coverage; smart-money requires identity and history, never concentration alone.
+- [Phase 4 scorecard boundaries](phase4-scorecard-boundaries.md) — deterministic evidence scores may rank research candidates, but unknown inputs cap confidence and never become probability claims.
