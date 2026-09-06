@@ -24,6 +24,7 @@ test("Phase 0A database controls are exclusive, recoverable, and atomic", { skip
   const mutationOwnerA = `phase0a-mutation-a-${suffix}`;
   const mutationOwnerB = `phase0a-mutation-b-${suffix}`;
   const idempotencyKey = `phase0a-skip-${suffix}`;
+  const idempotencyFingerprint = `phase0a-fingerprint-${suffix}`;
   const tradeKey = `phase0a-trade-${suffix}`;
   let scanRunId;
   let skippedRunId;
@@ -75,6 +76,7 @@ test("Phase 0A database controls are exclusive, recoverable, and atomic", { skip
       correlationId: `phase0a-skip-correlation-${suffix}`,
       requestId: `phase0a-request-${suffix}`,
       idempotencyKey,
+      idempotencyFingerprint,
       reason: "overlapping_scan"
     });
     skippedRunId = skipped.id;
@@ -88,6 +90,7 @@ test("Phase 0A database controls are exclusive, recoverable, and atomic", { skip
     });
     assert.equal(replayed.id, skipped.id);
     assert.equal((await findScanByIdempotencyKey(idempotencyKey)).status, "SKIPPED");
+    assert.equal((await findScanByIdempotencyKey(idempotencyKey)).idempotencyFingerprint, idempotencyFingerprint);
 
     const alerts = await recordAlertsAtomic([{
       type: "PHASE0A_TEST",

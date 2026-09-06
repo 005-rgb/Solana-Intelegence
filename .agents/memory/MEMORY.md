@@ -2,3 +2,4 @@
 - [Audit count semantics](audit-count-semantics.md) — rejection reason counters are multi-label; reconcile row outcomes, not the sum of reason occurrences.
 - [Prisma nullable unique push](prisma-nullable-unique-push.md) — inspect existing values before confirming nullable unique idempotency indexes.
 - [Core before monetization](core-before-monetization.md) — finish and validate Radar reliability before wallet execution or configurable fees.
+- [Phase 0A safety boundaries](phase0a-safety-boundaries.md) — mutation idempotency needs payload fingerprints, and scan audit/state finalization must commit atomically.

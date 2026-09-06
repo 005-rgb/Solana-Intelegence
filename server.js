@@ -12,7 +12,6 @@ const {
   recordAlert,
   recordAlertsAtomic,
   createScanRun,
-  finishScanRun,
   recordTokenObservations,
   acquireScanLease,
   releaseScanLease,
@@ -54,6 +53,8 @@ const LIVE_SCAN_TIMEOUT_MS = 20_000;
 const ANALYSIS_MS = 6 * 60 * 60 * 1000;
 const MAX_BODY_BYTES = 100_000;
 const BODY_TIMEOUT_MS = 5_000;
+const API_RESPONSE_TIMEOUT_MS = 30_000;
+const MUTATION_LEASE_TTL_MS = 60_000;
 const RATE_WINDOW_MS = 60_000;
 const API_RATE_LIMIT = 120;
 const MUTATION_RATE_LIMIT = 20;
@@ -189,6 +190,45 @@ function requestId(req) {
   return /^[A-Za-z0-9._:-]{1,128}$/.test(supplied) ? supplied : crypto.randomUUID();
 }
 
+function readIdempotencyKey(req) {
+  const raw = String(req.headers["idempotency-key"] || "");
+  if (!raw) return null;
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(raw)) {
+    throw new Error("Idempotency-Key must contain 1-128 letters, numbers, dots, underscores, colons, or hyphens.");
+  }
+  return raw;
+}
+
+function requestFingerprint(scope, value) {
+  return crypto.createHash("sha256")
+    .update(`${scope}:${JSON.stringify(value)}`)
+    .digest("hex");
+}
+
+function idempotencyReplay(previousRun, fingerprint, requestId) {
+  if (previousRun.idempotencyFingerprint && previousRun.idempotencyFingerprint !== fingerprint) {
+    return {
+      ok: false,
+      conflict: true,
+      status: previousRun.status,
+      message: "Idempotency-Key was already used for a different request.",
+      requestId
+    };
+  }
+  const skipped = previousRun.status === "SKIPPED";
+  return {
+    ok: previousRun.status === "SUCCESS",
+    duplicate: true,
+    skipped,
+    scanRunId: previousRun.id,
+    status: previousRun.status,
+    message: skipped
+      ? "The scan request was already recorded as skipped."
+      : "The scan request was already recorded.",
+    requestId
+  };
+}
+
 function mutationRoute(url, method) {
   return method === "POST" && (url.pathname === "/api/scan" || url.pathname === "/api/analysis" || url.pathname === "/api/trades" || url.pathname.startsWith("/api/watchlist/"))
     || method === "DELETE" && url.pathname.startsWith("/api/watchlist/");
@@ -230,7 +270,7 @@ function rateLimit(req, url) {
 
 async function lockMutation(req) {
   const owner = `${req.requestId}:${crypto.randomUUID()}`;
-  const acquired = await acquireMutationLease(owner, BODY_TIMEOUT_MS + 10_000);
+  const acquired = await acquireMutationLease(owner, MUTATION_LEASE_TTL_MS);
   return acquired ? owner : null;
 }
 
@@ -1309,21 +1349,14 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
 async function runScan(manual = false, options = {}) {
   const correlationId = crypto.randomUUID();
   const idempotencyKey = options.idempotencyKey || null;
+  const idempotencyFingerprint = options.idempotencyFingerprint || null;
   const requestId = options.requestId || null;
   if (idempotencyKey) {
     const previousRun = await findScanByIdempotencyKey(idempotencyKey);
-    if (previousRun) {
-      return {
-        ok: previousRun.status === "SUCCESS",
-        duplicate: true,
-        scanRunId: previousRun.id,
-        status: previousRun.status,
-        message: "The scan request was already accepted."
-      };
-    }
+    if (previousRun) return idempotencyReplay(previousRun, idempotencyFingerprint, requestId);
   }
   if (state.scanRunning) {
-    await recordSkippedScan({ manual, provider: state.provider, correlationId, requestId, idempotencyKey, reason: "overlapping_scan" });
+    await recordSkippedScan({ manual, provider: state.provider, correlationId, requestId, idempotencyKey, idempotencyFingerprint, reason: "overlapping_scan" });
     return { ok: false, skipped: true, message: "A scan is already running.", requestId };
   }
   let leaseAcquired = false;
@@ -1334,7 +1367,7 @@ async function runScan(manual = false, options = {}) {
     return { ok: false, message: "Scan lock is temporarily unavailable.", requestId };
   }
   if (!leaseAcquired) {
-    await recordSkippedScan({ manual, provider: state.provider, correlationId, requestId, idempotencyKey, reason: "distributed_scan_lock" });
+    await recordSkippedScan({ manual, provider: state.provider, correlationId, requestId, idempotencyKey, idempotencyFingerprint, reason: "distributed_scan_lock" });
     return { ok: false, skipped: true, message: "A scan is already running.", requestId };
   }
   state.scanRunning = true;
@@ -1398,20 +1431,32 @@ async function runScan(manual = false, options = {}) {
     sourceMetrics: lastFilterReport.sourceMetrics || {}
   });
   try {
-    scanRun = await Promise.race([
-      createScanRun({
-        manual,
-        status: "RUNNING",
-        startedAt: new Date(started),
-        provider: state.provider,
-        decisionVersion: BASELINE_DECISION_VERSION,
-        correlationId,
-        requestId,
-        idempotencyKey,
-        ...scanAudit()
-      }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Scan run could not be registered in the database.")), 8000))
-    ]);
+    try {
+      scanRun = await Promise.race([
+        createScanRun({
+          manual,
+          status: "RUNNING",
+          startedAt: new Date(started),
+          provider: state.provider,
+          decisionVersion: BASELINE_DECISION_VERSION,
+          correlationId,
+          requestId,
+          idempotencyKey,
+          idempotencyFingerprint,
+          ...scanAudit()
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Scan run could not be registered in the database.")), 8000))
+      ]);
+    } catch (error) {
+      if (error.code === "P2002" && idempotencyKey) {
+        const previousRun = await findScanByIdempotencyKey(idempotencyKey);
+        if (previousRun) {
+          state.scanRunning = false;
+          return idempotencyReplay(previousRun, idempotencyFingerprint, requestId);
+        }
+      }
+      throw error;
+    }
     state.mode = "live";
     state.provider = "DexScreener";
     const previousTokens = state.tokens;
@@ -1453,7 +1498,7 @@ async function runScan(manual = false, options = {}) {
     state.scanRunning = false;
     const finishedAt = new Date();
     const durationMs = Date.now() - started;
-    await finishScanRun(scanRun.id, {
+    const finishData = {
       status: "SUCCESS",
       finishedAt,
       durationMs,
@@ -1461,7 +1506,7 @@ async function runScan(manual = false, options = {}) {
       transactionsProcessed: 0,
       errorCount: 0,
       ...scanAudit()
-    });
+    };
     appendScanRunToState(scanRun, "SUCCESS", scanAudit(), {
       finishedAt: finishedAt.toISOString(),
       durationMs,
@@ -1470,8 +1515,8 @@ async function runScan(manual = false, options = {}) {
       errorCount: 0
     });
     state.patterns = derivePatterns(state.tokens, state.scanRuns);
+    await persistState(state, { scanRun: { id: scanRun.id, data: finishData } });
     await persistPatterns(state.patterns);
-    await saveState();
     return { ok: true, manual, duration: Date.now() - started, tokens: state.tokens.length };
   } catch (error) {
     if (scanDeadline) clearTimeout(scanDeadline);
@@ -1508,7 +1553,7 @@ async function runScan(manual = false, options = {}) {
       const durationMs = Date.now() - started;
       const status = filtered ? "FILTERED" : partial ? "PARTIAL" : "FAILED";
       const audit = scanAudit();
-      await finishScanRun(scanRun.id, {
+      const finishData = {
         status,
         finishedAt,
         durationMs,
@@ -1519,7 +1564,7 @@ async function runScan(manual = false, options = {}) {
         timeoutReason: timedOut ? error.message : null,
         tokensPersisted: 0,
         ...audit
-      });
+      };
       appendScanRunToState(scanRun, status, audit, {
         finishedAt: finishedAt.toISOString(),
         durationMs,
@@ -1527,8 +1572,10 @@ async function runScan(manual = false, options = {}) {
         transactionsProcessed: 0,
         errorCount: filtered || partial ? 0 : 1
       });
+      await persistState(state, { scanRun: { id: scanRun.id, data: finishData } });
+    } else {
+      await saveState();
     }
-    await saveState();
     return { ok: false, message: filtered ? "No token passed the active security filters. No token was added to Radar." : "DexScreener provider temporarily unavailable. Data remains unchanged.", securityFilter: lastFilterReport, requestId };
   } finally {
     if (leaseAcquired) {
@@ -1551,9 +1598,18 @@ async function handleApi(req, res, url) {
     return item ? send(res, 200, { token: item, mode: state.mode }) : send(res, 404, { error: "Token not found" });
   }
   if (req.method === "POST" && url.pathname === "/api/scan") {
-    const rawIdempotencyKey = String(req.headers["idempotency-key"] || "");
-    const idempotencyKey = /^[A-Za-z0-9._:-]{1,128}$/.test(rawIdempotencyKey) ? rawIdempotencyKey : null;
-    return send(res, 200, await runScan(true, { requestId: req.requestId, idempotencyKey }));
+    let key;
+    try {
+      key = readIdempotencyKey(req);
+    } catch (error) {
+      return send(res, 400, { error: error.message, requestId: req.requestId });
+    }
+    const result = await runScan(true, {
+      requestId: req.requestId,
+      idempotencyKey: key,
+      idempotencyFingerprint: requestFingerprint("scan", { method: "LIVE", version: BASELINE_DECISION_VERSION })
+    });
+    return send(res, result.conflict ? 409 : 200, result);
   }
   if (req.method === "POST" && url.pathname === "/api/analysis") {
     const mutationOwner = await lockMutation(req);
@@ -1617,15 +1673,27 @@ async function handleApi(req, res, url) {
       if (typeof body.mint !== "string" || body.mint.length < 1 || body.mint.length > 128 || !["BUY", "SELL"].includes(body.side)) {
         return send(res, 422, { error: "Trade requires a valid mint and BUY or SELL side.", requestId: req.requestId });
       }
-      const rawIdempotencyKey = String(req.headers["idempotency-key"] || "");
-      idempotencyKey = /^[A-Za-z0-9._:-]{1,128}$/.test(rawIdempotencyKey) ? rawIdempotencyKey : null;
-      if (idempotencyKey && await findTradeByIdempotencyKey(idempotencyKey)) {
+      try {
+        idempotencyKey = readIdempotencyKey(req);
+      } catch (error) {
+        return send(res, 400, { error: error.message, requestId: req.requestId });
+      }
+      const idempotencyFingerprint = requestFingerprint("paper-trade", { mint: body.mint, side: body.side });
+      const existingTrade = idempotencyKey && await findTradeByIdempotencyKey(idempotencyKey);
+      if (existingTrade) {
+        if (existingTrade.idempotencyFingerprint && existingTrade.idempotencyFingerprint !== idempotencyFingerprint) {
+          return send(res, 409, { error: "Idempotency-Key was already used for a different paper trade.", requestId: req.requestId });
+        }
         return send(res, 200, { ok: true, duplicate: true, state: jsonState(), requestId: req.requestId });
       }
       mutationOwner = await lockMutation(req);
       if (!mutationOwner) return send(res, 409, { error: "Another state mutation is in progress.", requestId: req.requestId });
       state = await readState(state);
-      if (idempotencyKey && await findTradeByIdempotencyKey(idempotencyKey)) {
+      const existingTradeAfterLock = idempotencyKey && await findTradeByIdempotencyKey(idempotencyKey);
+      if (existingTradeAfterLock) {
+        if (existingTradeAfterLock.idempotencyFingerprint && existingTradeAfterLock.idempotencyFingerprint !== idempotencyFingerprint) {
+          return send(res, 409, { error: "Idempotency-Key was already used for a different paper trade.", requestId: req.requestId });
+        }
         return send(res, 200, { ok: true, duplicate: true, state: jsonState(), requestId: req.requestId });
       }
       const item = tokenById(body.mint);
@@ -1646,7 +1714,7 @@ async function handleApi(req, res, url) {
         nextPortfolio.positions.push(position);
         const tradeTime = Date.now();
         nextPortfolio.history.unshift({ symbol: item.symbol, side: "BUY", amount, price, fee, score: item.radar, time: tradeTime });
-        tradeRecord = { mint: item.mint, symbol: item.symbol, side: "BUY", amount, price, fee, score: item.radar, time: tradeTime, idempotencyKey };
+        tradeRecord = { mint: item.mint, symbol: item.symbol, side: "BUY", amount, price, fee, score: item.radar, time: tradeTime, idempotencyKey, idempotencyFingerprint };
       } else if (body.side === "SELL") {
         const position = nextPortfolio.positions.find(p => p.mint === item.mint);
         if (!position) return send(res, 422, { error: "No open paper position for this token." });
@@ -1658,7 +1726,7 @@ async function handleApi(req, res, url) {
         const tradeTime = Date.now();
         nextPortfolio.history.unshift({ symbol: item.symbol, side: "SELL", amount: value, price, fee, score: item.radar, time: tradeTime });
         nextPortfolio.positions = nextPortfolio.positions.filter(p => p !== position);
-        tradeRecord = { mint: item.mint, symbol: item.symbol, side: "SELL", amount: value, price, fee, score: item.radar, time: tradeTime, idempotencyKey };
+        tradeRecord = { mint: item.mint, symbol: item.symbol, side: "SELL", amount: value, price, fee, score: item.radar, time: tradeTime, idempotencyKey, idempotencyFingerprint };
       }
       const nextState = { ...state, portfolio: nextPortfolio };
       await persistState(nextState, { tradeRecord });
@@ -1698,8 +1766,8 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   req.requestId = requestId(req);
   res.setHeader("X-Request-ID", req.requestId);
-  req.setTimeout(BODY_TIMEOUT_MS, () => {
-    if (!res.headersSent) send(res, 408, { error: "Request timed out.", requestId: req.requestId });
+  res.setTimeout(API_RESPONSE_TIMEOUT_MS, () => {
+    if (!res.headersSent) send(res, 504, { error: "API request timed out.", requestId: req.requestId });
     req.destroy();
   });
   const limit = rateLimit(req, url);

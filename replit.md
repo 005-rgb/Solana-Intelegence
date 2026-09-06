@@ -103,9 +103,10 @@ The server keeps scan execution safe across restarts and concurrent callers:
 
 - PostgreSQL-backed scan lease prevents overlapping scans across processes; overlapping requests are recorded as `SKIPPED`.
 - Startup reconciliation marks orphaned `RUNNING` scans as `INTERRUPTED` and releases the lease.
-- Manual scans and paper trades accept bounded `Idempotency-Key` values.
+- Manual scans and paper trades accept bounded `Idempotency-Key` values; the request fingerprint is persisted so reusing a key for a different operation returns a conflict instead of silently replaying.
 - Every request receives an `X-Request-ID`; scan runs persist request and correlation IDs.
-- API rate limits, same-origin mutation checks, security headers, bounded JSON bodies, and request timeouts are enabled.
+- API rate limits, same-origin mutation checks, security headers, bounded JSON bodies, a 5-second body timeout, and a 30-second response timeout are enabled.
+- Scan outcome finalization and the corresponding durable radar snapshot commit in one PostgreSQL transaction, so a restart cannot leave a successful/failed run disconnected from the state that describes it.
 - Watchlist changes, paper trades, and alert creation use database transactions; alert creation also writes a durable outbox event.
 
 Mutation authentication can be enforced by setting the `RADAR_AUTH_TOKEN` secret. Without it, the app remains suitable for the trusted Replit preview boundary, not an unauthenticated public deployment.

@@ -155,7 +155,8 @@ model PaperTrade {
   price     Float
   fee       Float        @default(0)
   score     Int?
-  idempotencyKey String? @unique
+  idempotencyKey        String? @unique
+  idempotencyFingerprint String?
   time      DateTime     @default(now())
   account   PaperAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
   token     Token?       @relation(fields: [tokenId], references: [id], onDelete: SetNull)
@@ -206,6 +207,7 @@ model ScanRun {
   correlationId                String?
   requestId                    String?
   idempotencyKey               String?            @unique
+  idempotencyFingerprint       String?
   sourceMetrics                Json?
   tokenObservations            TokenObservation[]
 

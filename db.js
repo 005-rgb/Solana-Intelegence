@@ -414,8 +414,16 @@ async function persistState(state, mutation = {}) {
           fee: trade.fee || 0,
           score: trade.score,
           idempotencyKey: trade.idempotencyKey || null,
+          idempotencyFingerprint: trade.idempotencyFingerprint || null,
           time: new Date(trade.time)
         }
+      });
+    }
+
+    if (mutation.scanRun) {
+      await tx.scanRun.update({
+        where: { id: mutation.scanRun.id },
+        data: mutation.scanRun.data
       });
     }
   });
@@ -579,7 +587,7 @@ async function reconcileInterruptedScans() {
   return { interrupted: true, active: false };
 }
 
-async function recordSkippedScan({ manual = true, provider, correlationId, requestId, idempotencyKey, reason }) {
+async function recordSkippedScan({ manual = true, provider, correlationId, requestId, idempotencyKey, idempotencyFingerprint, reason }) {
   try {
     return await prisma.scanRun.create({
       data: {
@@ -591,6 +599,7 @@ async function recordSkippedScan({ manual = true, provider, correlationId, reque
         correlationId,
         requestId,
         idempotencyKey,
+        idempotencyFingerprint: idempotencyFingerprint || null,
         qualityStatus: "SKIPPED",
         timeoutReason: reason
       }
