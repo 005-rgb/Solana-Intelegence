@@ -1,0 +1,323 @@
+WIFHAT
+0.002410
+▲18.4%
+|
+PNUT2
+0.000880
+▲42.1%
+|
+SLOPE
+0.000170
+▲9.3%
+|
+MOONKI
+0.000040
+▼2.1%
+|
+RAYGUN
+0.000310
+▼61.0%
+|
+BONKAI
+0.006120
+▲27.8%
+|
+FOMO3
+0.000740
+▲5.6%
+|
+SLERP
+0.001930
+▲14.2%
+|
+DERP
+0.000090
+▼33.4%
+|
+ZKDOG
+0.000030
+▲1.2%
+|
+GIGA2
+0.004470
+▼8.9%
+|
+SOL
+184.21
+▲2.1%
+|
+WIFHAT
+0.002410
+▲18.4%
+|
+PNUT2
+0.000880
+▲42.1%
+|
+SLOPE
+0.000170
+▲9.3%
+|
+MOONKI
+0.000040
+▼2.1%
+|
+RAYGUN
+0.000310
+▼61.0%
+|
+BONKAI
+0.006120
+▲27.8%
+|
+FOMO3
+0.000740
+▲5.6%
+|
+SLERP
+0.001930
+▲14.2%
+|
+DERP
+0.000090
+▼33.4%
+|
+ZKDOG
+0.000030
+▲1.2%
+|
+GIGA2
+0.004470
+▼8.9%
+|
+SOL
+184.21
+▲2.1%
+|
+MARKET BRAIN 4.0
+Real Project · Asymmetric Intelligence
+Market Regime
+EXPANSION
+System Health
+NORMAL
+Kill Switch
+NORMAL
+Precision@10
+71.4%
+uncalibrated · shadow-validated
+Active Model
+market-brain-v4.0.1
+market-brain-v4.1.0-rc1 (shadow)
+Structural analysis only — not financial advice. 20× feasibility is a structural score, never a profit probability. Engines abstain (NO SIGNAL) when evidence is insufficient.
+
+Real Project
+Reactivation
+Speculative Meme
+REACTIVATION Radar · 1 candidates evaluated
+SIM $99100
+LIVE · DEXSCREENER
+· 1788678414066
+SCAN
+1
+Rule-based · deterministic
+Signal	Project	PQS	Traction	20× Feas.	Catalyst	Capital	Manip.	Chase	Entry	Opp
+CONFIRMED	
+SAARBACK
+DeFi · $5.50M
+66 WATCH	INFLECTION	PLAUSIBLE 79	6d	ACCUMULATION	6%	35	ENTRY VALID	87
+Market Memory · Permanent Regression Cases
+PUMPANY
+FALSE POSITIVE
+Volume +200% but 70% of volume concentrated in 12 economic entities — coordination, not adoption.
+
+Invalidated · -94%
+COIN
+FALSE NEGATIVE
+Rejected on stale flow data — the inflection was real but evidence latency was too high.
+
+Missed repricing · +6.2× vs rejection
+TROLLONFONE
+MANIPULATION ESCAPE
+Sniper wallets funded from fresh wallets — evaded cluster detection v1.
+
+Rug · liquidity removed
+Maggie
+FALSE POSITIVE
+Traction inflection was real — but the token had NO value capture. Project grew, token didn't.
+
+Flat vs sector +140%
+Mobi
+FALSE NEGATIVE
+Economic-entity merge overestimated coordination (shared infra ≠ same actor).
+
+Missed · +3.1×
+Juror
+IDENTITY AMBIGUITY
+Multiple contracts under one ticker — signal attributed to the wrong pool.
+
+Wrong-pool entry · -38%
+STONKLESS
+CALIBRATION
+Entry-quality model under-weighted chase risk at extension > 80%.
+
+Chase loss · -52%
+SAAR
+REACTIVATION CASE
+Dormant → dev activity + whale accumulation preceded a 4-week repricing.
+
+Validated · +2.8×
+SAARBACK
+CONFIRMED
+ENTRY VALID
+SaarSwap DEX
+MB4-SAARBACK · REACTIVATION · horizon 24–72h
+Solana · CA sar…5Bv9 · SAARBACK/USDC @ Orca / USDC
+-2.7% (-$2.72)
+
+87
+Opportunity
+63
+Confidence
+76
+Entry Q
+Chase risk
+35
+Risk
+LOW
+Follow
+STRENGTHENING
+Regime
+EXPANSION
+Primary Thesis
+DeFi project · inflection traction (Weekly active users (K)) · MC $5.50M vs peer median $30.00M · strong value capture · plausible 20× feasibility
+
+Project Quality — PQS 66 · WATCH
+Product reality
+12 / 15
+Product maturity
+9 / 10
+User adoption
+5 / 10
+User growth
+7 / 10
+Revenue / fees
+6 / 10
+TVL / econ activity
+5 / 10
+Developer activity
+7 / 10
+Token utility
+8 / 10
+Tokenomics
+4 / 10
+Ecosystem
+3 / 5
+Traction & Economic Activity
+Weekly active users (K)
+INFLECTION · slope ×15.0
+Revenue · K$ / mo
+EXPLODING
+Token — Value Capture & Supply
+Value capture
+STRONG VALUE CAPTURE
+100% swap fees → fee switch, live since v2
+
+Supply pressure 14/100
+Unlock risk: LOW
+MC / FDV
+$5.50M / $22.00M
+Circulating
+25% of 600M
+Next unlock
+no near-term unlock
+Valuation & 20× Feasibility — PLAUSIBLE
+20× target MC
+$110.00M
+Peer median MC
+$30.00M
+Valuation gap
+82% below peers
+LongTail DEX A
+$24.00M · fundamentals 64
+LongTail DEX B
+$30.00M · fundamentals 68
+LongTail DEX C
+$38.00M · fundamentals 72
+Structural feasibility 79/100
+target ≠ probability
+Catalyst
+Verified
+v3 rollout + perp feature launch
+Proximity
+6d away · IMMINENT
+Priced-in
+~15%
+Catalyst score
+86
+Capital Flow & Independence
+State
+ACCUMULATION
+Clean inflow (24h)
+$193.0K
+Wash-adjusted volume
+$651.2K · 12% wash est.
+Independent entities
+620/1400 wallets (44%)
+Smart money quality
+62/100 — 2 wallets with prior reactivation-pattern entries detected
+Reactivation
+Dormant 8mo → 47 commits/30d · users +38% · whale accumulation $620.0K · liquidity +64%
+Manipulation — control 6% (VERY LOW)
+VERY LOW economic control probability — coordination patterns (bundled buys, circular volume, common funding, sniper concentration), not raw wallet count, drive this score.
+
+Evidence — Supporting
+Project reality: REAL_PROJECT — live DEX (v2) — dormant 8 months
+Traction INFLECTION in Weekly active users (K) (slope ×15.0)
+Economic activity EXPLODING
+Value capture: STRONG VALUE CAPTURE
+MC $5.50M vs peer median $30.00M (gap 82%)
+20× feasibility 79 (PLAUSIBLE)
+Capital: ACCUMULATION — clean inflow $193.0K (wash-adjusted)
+Economic entities: 620/1400 independent
+Catalyst (verified): v3 rollout + perp feature launch — 6d away, ~15% priced-in
+Reactivation: Dormant 8mo → 47 commits/30d · users +38% · whale accumulation $620.0K · liquidity +64%
+Evidence — Contradicting (Negative Evidence)
+8-month dormancy — retention base must rebuild before structural re-rate is durable
+Circulating supply only 25% — long-tail emission overhang
+Invalidation Conditions
+Dev activity stalls again (commits < 10 / 30d)
+User growth fails to hold above 25K WAU
+Whale accumulation reverses before v3 ships
+Hard Gates
+G1 ✓
+Project reality
+REAL_PROJECT — live DEX (v2) — dormant 8 months
+G2 ✓
+Contract risk
+contract risk: NONE
+G3 ✓
+Tokenomics risk
+unlock risk: LOW
+G4 ✓
+Economic control
+economic control probability 6% (VERY LOW)
+G5 ✓
+Liquidity survival
+liquidity $160.0K · depth 68
+G6 ✓
+Identity ambiguity
+Solana · sar…5Bv9 · SAARBACK/USDC @ Orca / USDC
+G7 ✓
+Data freshness
+all evidence streams fresh
+G8 ✓
+Dead token
+protocol activity verifiable
+G9 ✓
+Identifiable thesis
+primary thesis: DeFi project · inflection traction (Weekly active users (K)) · MC $5.50M vs peer median $30.00M · strong value capture · plausible 20× feasibility
+Market Memory
+REACTIVATION CASE
+Prior SAAR regression case — dormancy → dev activity + whale accumulation preceded a 4-week repricing (+2.8×). Pattern now validated as regression input.
+
+Validated pattern · under re-evaluation

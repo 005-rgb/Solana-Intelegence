@@ -259,6 +259,8 @@ model TokenObservation {
   sourceResponseHash String?
   freshnessMs        Int?
   dataQuality        String
+  decisionOutcome    String?
+  decisionVersion    String?
   qualityReasons     Json
   accountTaxonomy    Json?
   poolEvidence       Json?

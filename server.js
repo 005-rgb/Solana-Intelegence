@@ -13,6 +13,7 @@ const {
   recordAlertsAtomic,
   createScanRun,
   recordTokenObservations,
+  readReactivationHistory,
   acquireScanLease,
   releaseScanLease,
   acquireMutationLease,
@@ -1085,6 +1086,8 @@ function observationData(item, endpoint, sourceRequestId, observedAt, pairOverri
       ? Math.max(0, Date.now() - timestampMs(pair.updatedAt || providerMetadata.providerUpdatedAt))
       : null,
     dataQuality: pair.address ? `${pairRole.toUpperCase()}_PAIR_SECURITY_SEPARATE` : "MISSING_PAIR",
+    decisionOutcome: decision.outcome,
+    decisionVersion: BASELINE_DECISION_VERSION,
     qualityReasons: decision.reasonCodes,
     accountTaxonomy: item.details?.security?.accountTaxonomy || null,
     poolEvidence: item.details?.security?.poolEvidence || poolEvidenceFromItem(item),
@@ -1704,6 +1707,13 @@ async function handleApi(req, res, url) {
     return send(res, 403, { error: "Mutation is not authorized for this origin.", requestId: req.requestId });
   }
   if (req.method === "GET" && url.pathname === "/api/state") return send(res, 200, jsonState());
+  if (req.method === "GET" && url.pathname === "/api/reactivation") {
+    try {
+      return send(res, 200, { ok: true, records: await readReactivationHistory() });
+    } catch (error) {
+      return send(res, 500, { error: "Unable to load persisted Radar history.", detail: error.message });
+    }
+  }
   if (req.method === "GET" && url.pathname.startsWith("/api/tokens/")) {
     const item = tokenById(decodeURIComponent(url.pathname.split("/").pop()));
     return item ? send(res, 200, { token: item, mode: state.mode }) : send(res, 404, { error: "Token not found" });

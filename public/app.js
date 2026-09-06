@@ -7,6 +7,8 @@ let radarSort = "radar";
 let radarStatus = "all";
 let bubbleMapTokenMint = null;
 let refreshInFlight = false;
+let reactivationRecords = null;
+let reactivationLoading = false;
 
 const NAV_GROUPS = [
   ["Workspace", [
@@ -31,7 +33,7 @@ const NAV_GROUPS = [
   ]],
   ["System", [
     ["settings", "⚙", "Settings"],
-    ["health", "◌", "System Health"]
+    ["health", "◌", "Reactivation"]
   ]]
 ];
 const NAV = NAV_GROUPS.flatMap(([, items]) => items);
@@ -367,7 +369,51 @@ function patterns() {
   return head("Historical memory", "Pattern intelligence", "These metrics are calculated from the current provider records and persisted scan history. No synthetic outcomes are shown.", `<button class="btn btn-primary" onclick="analyzePatterns()">↻ Analyze current data</button>`) +
     `<div class="grid section-grid">${patterns.map(p => `<section class="card insight-card"><div class="insight-label">${esc(p.id)} · ${p.sample} current records</div><div class="insight-number" style="font-size:20px">${esc(p.name)}</div><div class="insight-note">${esc(p.desc)}</div><div class="progress" style="margin-top:14px"><span style="width:${p.match}%;background:${p.tone === "red" ? "var(--red)" : p.tone === "yellow" ? "#efb83e" : "var(--green)"}"></span></div><div class="insight-note"><strong>${p.match}% coverage</strong> · ${esc(p.outcome)}</div></section>`).join("")}</div><section class="card page-panel" style="margin-top:14px"><div class="card-head"><div><div class="card-title">Analysis provenance</div><div class="card-kicker">What the engine can prove from stored data</div></div><span class="badge badge-blue">${snapshot.scanRuns.length} SCANS</span></div><div class="grid metrics" style="padding:14px;margin:0">${stat("Provider records", snapshot.tokens.length, "current LIVE universe", "◈")}${stat("Successful scans", snapshot.scanRuns.filter(run => run.status === "SUCCESS").length, "persisted executions", "✓", "metric-positive")}${stat("Watchlist records", snapshot.watchlistHistory.length, "event history", "☆")}${stat("Last analysis", snapshot.lastScan ? formatDate(snapshot.lastScan) : "NOT RUN", "based on latest provider data", "◷")}</div></section>`;
 }
-  function health() { const s=snapshot.system || {}; const report=s.securityFilter || {}; const age=report.providerAgeMs == null ? "UNKNOWN" : formatAgeMs(report.providerAgeMs); const rpcAge=report.rpcFreshnessMs == null ? "UNKNOWN" : formatAgeMs(report.rpcFreshnessMs); const quality=s.lastScanQuality || report.qualityStatus || "UNKNOWN"; const qualityClass=quality === "FULL" ? "health-ok" : quality === "PARTIAL" ? "health-warn" : "health-muted"; const rows=[["Scheduler",s.scheduler,"health-ok"],["Worker",s.worker,"health-ok"],["Database",s.database,"health-muted"],["Solana RPC",`${s.rpc || "UNKNOWN"} · ${report.rpcStatus || "UNKNOWN"}`,report.rpcStatus === "LIVE" ? "health-ok" : "health-warn"],["RPC freshness",`${rpcAge} · ${report.rpcCommitment || "UNKNOWN"}`,"health-muted"],["Market provider",`${s.market || "UNKNOWN"} · ${quality}`,qualityClass],["Last scan",snapshot.lastScan ? formatDate(snapshot.lastScan) : "NOT RUN YET","health-muted"],["Provider data age",age,report.providerAgeMs == null ? "health-warn" : "health-muted"],["Records checked",report.checked ?? 0,"health-muted"],["Accepted candidates",report.accepted ?? 0,"health-ok"],["Records persisted",report.tokensPersisted ?? 0,"health-muted"],["Rejected candidates",report.rejected ?? 0,"health-muted"],["Unresolved candidates",report.unresolved ?? 0,report.unresolved ? "health-warn" : "health-muted"],["Security verified / unknown / rejected",`${report.securityVerified ?? 0} / ${report.securityUnknown ?? 0} / ${report.securityRejected ?? 0}`,"health-muted"],["Pair / price / liquidity coverage",`${report.providerRecordsWithPair ?? 0} / ${report.providerRecordsWithPrice ?? 0} / ${report.providerRecordsWithLiquidity ?? 0}`,"health-muted"],["Liquidity / momentum / CTO rejected",`${report.liquidityRejected ?? 0} / ${report.momentumRejected ?? 0} / ${report.ctoRejected ?? 0}`,"health-muted"],["Pair failures",report.pairFailures ?? 0,report.pairFailures ? "health-warn" : "health-muted"],["Filter baseline",report.filterConfig?.version || "UNKNOWN","health-muted"],["Average scan duration",s.avgDuration,"health-muted"],["Provider errors",s.errors,"health-muted"]]; return head("Operations", "System health", "The operational view separates provider freshness, scan execution, and storage health.", `<button class="btn btn-primary" onclick="scan()">↻ Run health scan</button>`) + `<section class="card page-panel">${rows.map(row => `<div class="health-row"><span>${row[0]}</span><span class="health-value ${row[2]}">${row[1]}</span></div>`).join("")}<div class="data-note">Baseline-v1 is a live research filter, not a validated prediction engine. Missing or unresolved data remains visible and does not increase eligibility.</div></section>`; }
+function reactivationTone(status) {
+  const normalized = String(status || "UNKNOWN").toUpperCase();
+  if (normalized === "ACTIVE" || normalized === "ACCEPTED") return "green";
+  if (normalized === "REJECTED" || normalized.includes("RISK") || normalized.includes("FALSE")) return "red";
+  if (normalized === "UNRESOLVED" || normalized === "UNKNOWN" || normalized.includes("WATCH")) return "yellow";
+  return "blue";
+}
+function reactivationBadge(status) {
+  const value = status || "UNKNOWN";
+  return `<span class="badge badge-${reactivationTone(value)}">${esc(value)}</span>`;
+}
+function reactivationDate(value, withTime = false) {
+  if (!value) return "UNKNOWN";
+  const options = withTime
+    ? { dateStyle: "medium", timeStyle: "short" }
+    : { dateStyle: "medium" };
+  return new Date(value).toLocaleString([], options);
+}
+function reactivationTimeline(record) {
+  if (!record.history?.length) return `<div class="reactivation-empty">No observation detail was captured for this token.</div>`;
+  return `<div class="reactivation-timeline">${record.history.map(point => `
+    <div class="reactivation-event">
+      <span class="reactivation-event-dot ${reactivationTone(point.status)}"></span>
+      <div><strong>${esc(point.status)}</strong><small>${esc(reactivationDate(point.at, true))} · ${esc(point.source || "UNKNOWN SOURCE")}</small><span>${esc(point.reason)}</span></div>
+      <div class="reactivation-event-metrics"><b>${point.priceUsd == null ? "UNKNOWN" : `$${Number(point.priceUsd).toPrecision(6)}`}</b><small>price</small></div>
+    </div>`).join("")}</div>`;
+}
+function reactivation() {
+  const records = reactivationRecords || [];
+  const active = records.filter(record => record.current?.status === "ACTIVE").length;
+  const recurring = records.filter(record => record.recurrence === "RECURRING").length;
+  const rejected = records.filter(record => ["REJECTED", "FALSE POSITIVE", "FALSE NEGATIVE"].includes(String(record.latest?.status || "").toUpperCase())).length;
+  const warning = records.filter(record => ["UNRESOLVED", "UNKNOWN"].includes(String(record.latest?.status || "").toUpperCase())).length;
+  const status = record => record.current?.status === "ACTIVE" ? "ACTIVE" : record.latest?.status || "UNKNOWN";
+  const body = reactivationLoading && !reactivationRecords
+    ? `<div class="reactivation-loading"><span class="terminal-pulse"></span> Loading persisted Radar observations…</div>`
+    : records.length ? `<div class="table-wrap reactivation-table-wrap"><table class="reactivation-table"><thead><tr><th>Token</th><th>Current</th><th>Last decision</th><th>First seen</th><th>Last seen</th><th>Observations</th><th>Recurrence</th><th>History</th></tr></thead><tbody>${records.map(record => {
+      const currentStatus = status(record);
+      return `<tr><td><div class="token-cell"><div class="token-logo">${esc(String(record.symbol || "?").slice(0, 2))}</div><div class="token-meta"><strong>${esc(record.symbol)}</strong><span>${esc(record.name)} · ${esc(record.mint)}</span></div></div></td><td>${reactivationBadge(currentStatus)}${record.current?.price ? `<small class="reactivation-subvalue">${esc(record.current.price)}</small>` : ""}</td><td>${reactivationBadge(record.latest?.status)}<small class="reactivation-subvalue">${esc(record.latest?.reason || "No latest decision")}</small></td><td>${esc(reactivationDate(record.firstSeenAt))}</td><td>${esc(reactivationDate(record.lastSeenAt, true))}</td><td class="reactivation-count">${record.observationCount}</td><td><span class="reactivation-recurrence ${record.recurrence === "RECURRING" ? "recurring" : ""}">${esc(record.recurrence)}</span></td><td><details class="reactivation-details"><summary>View ${record.history.length} events</summary>${reactivationTimeline(record)}</details></td></tr>`;
+    }).join("")}</tbody></table></div><div class="data-note">Every row is a unique mint retained from Radar observations. Current status reflects the latest persisted board state; last decision remains separate evidence from the latest scan.</div>`
+    : `<div class="terminal-empty"><div class="terminal-empty-icon">∅</div><strong>NO RADAR HISTORY</strong><span>Run a live scan to create the first immutable observation.</span><small>Tokens are retained here even when they leave the active baseline board.</small><button class="btn btn-small btn-primary" onclick="scan()">◎ Capture observation</button></div>`;
+  return head("Market memory", "Reactivation", "Every token that has appeared in Radar, preserved beyond the active board. Review current state, historical decisions, recurrence, and the evidence trail.", `<button class="btn btn-primary" onclick="loadReactivation()">↻ Refresh history</button><button class="btn btn-quiet" onclick="scan()">◎ Run scan</button>`) +
+    `<div class="grid metrics reactivation-metrics">${stat("Historical mints", records.length, "unique tokens retained", "◈")}${stat("Active now", active, "currently on the baseline board", "✓", "metric-positive")}${stat("Recurring", recurring, "seen in more than one scan", "↻", "metric-positive")}${stat("Warnings / rejected", `${warning} / ${rejected}`, "uncertain and failed decisions", "!", rejected ? "metric-negative" : "")}</div>` +
+    `<section class="card page-panel reactivation-panel"><div class="card-head"><div><div class="card-title">Radar history · permanent regression memory</div><div class="card-kicker">LIVE PERSISTED OBSERVATIONS · status colors separate positive, uncertain, and risk states</div></div><span class="badge badge-blue">${records.length} MINTS</span></div>${body}</section>`;
+}
 function settingsBase() { return head("Configuration", "Provider settings", "DexScreener is the only market-data source. No API keys are stored in the browser.", `<button class="btn btn-primary" onclick="scan()">↻ Test provider</button>`) + `<div class="grid settings-grid"><section class="card settings-card"><h3>Live data source</h3><p>The server always uses DexScreener LIVE data and keeps unavailable provider values as UNKNOWN.</p><div class="health-row"><span>Runtime mode</span><strong class="health-value health-ok">LIVE ONLY</strong></div><div class="health-row"><span>Market provider</span><strong class="health-value health-ok">DEXSCREENER</strong></div></section><section class="card settings-card"><h3>Engine defaults</h3><p>Current policy values used by the server-side scan and paper trading engine.</p><div class="health-row"><span>Automatic scan</span><strong class="health-value health-ok">30 seconds</strong></div><div class="health-row"><span>Watchlist analysis</span><strong class="health-value health-muted">6 hours</strong></div><div class="health-row"><span>Paper buy size</span><strong class="health-value health-muted">$100 fixed</strong></div><div class="health-row"><span>Virtual starting capital</span><strong class="health-value health-muted">$100,000</strong></div></section><section class="card settings-card"><h3>Provider coverage</h3><p>Data coverage is shown honestly. RPC/indexed holders, social intelligence, and deep historical data may require additional provider configuration.</p><div class="health-row"><span>Current provider</span><strong class="health-value">${esc(snapshot.provider)}</strong></div><div class="health-row"><span>Market / price</span><strong class="health-value health-ok">LIVE WHEN PROVIDED</strong></div><div class="health-row"><span>Social intelligence</span><strong class="health-value health-warn">PARTIAL</strong></div></section><section class="card settings-card"><h3>Safety boundary</h3><p>Solana 20× Radar is analytics and paper trading only. It never requests seed phrases, private keys, wallet signing, or real transactions.</p><span class="badge badge-blue">VIRTUAL FUNDS ONLY</span></section></div>`; }
  function settings() {
   return liveSettings();
@@ -396,12 +442,32 @@ function render() {
     "token-search": tokenSearch,
     "bubble-map": bubbleMapPage,
     settings,
-    health
+    health: reactivation
   };
   layout((pages[activePage] || dashboard)());
 }
 async function refresh() { if (refreshInFlight) return; refreshInFlight = true; try { const previous = snapshot; const next = await api("/api/state"); if (previous) { const known = new Set(previous.alerts.map(alert => `${alert.type}|${alert.token}|${alert.text}`)); next.alerts.filter(alert => !known.has(`${alert.type}|${alert.token}|${alert.text}`)).slice(0, 3).forEach(alert => toast(`Potential token: ${alert.token} · ${alert.text}`, false)); } snapshot = next; if (selectedToken) await showToken(selectedToken.mint, false); else render(); } finally { refreshInFlight = false; } }
-function go(page) { selectedToken = null; activePage = page; window.location.hash = page; render(); }
+function go(page) {
+  selectedToken = null;
+  activePage = page;
+  window.location.hash = page;
+  render();
+  if (page === "health") loadReactivation();
+}
+async function loadReactivation() {
+  if (reactivationLoading) return;
+  reactivationLoading = true;
+  try {
+    const result = await api("/api/reactivation");
+    reactivationRecords = Array.isArray(result.records) ? result.records : [];
+    if (activePage === "health") render();
+  } catch (error) {
+    reactivationRecords = [];
+    if (activePage === "health") toast(error.message, true);
+  } finally {
+    reactivationLoading = false;
+  }
+}
 async function scan() { toast("Scan started · checking provider, security, and recording baseline evidence."); try { const result = await api("/api/scan", { method:"POST", body:"{}" }); if (!result.ok) throw new Error(result.message); toast(`Scan complete · ${result.tokens} accepted records updated.`); await refresh(); } catch (error) { toast(error.message, true); await refresh(); } }
 async function showToken(id) { const tokenId = decodeURIComponent(id); const data = await api(`/api/tokens/${encodeURIComponent(tokenId)}`); selectedToken = data.token; const t = selectedToken; const watch = snapshot.watchlist.includes(t.mint); layout(head("Token intelligence", `${esc(t.symbol)} / ${esc(t.name)}`, "Evidence-first profile. Scores stay separate from confidence, and unavailable fields remain explicit.", `<button class="btn btn-primary" onclick="trade('${encodeURIComponent(t.mint)}','BUY')">Paper buy $100</button>`) + `<div class="token-detail"><section class="card detail-hero"><div class="detail-heading"><div class="big-token"><div class="big-logo">${esc(t.symbol.slice(0,2))}</div><div><h2>${esc(t.symbol)}</h2><p>${esc(t.name)} · ${esc(t.mint)}</p></div></div><div class="score-hero"><strong>${t.radar ?? "?"}</strong><span>Radar score</span></div></div><div class="detail-stats"><div class="detail-stat"><label>Opportunity</label><strong>${t.opportunity ?? "UNKNOWN"}</strong></div><div class="detail-stat"><label>Smart money</label><strong>${t.smartMoney ?? "UNKNOWN"}</strong></div><div class="detail-stat"><label>Confidence</label><strong>${t.confidence ?? "UNKNOWN"}${t.confidence != null ? "%" : ""}</strong></div><div class="detail-stat"><label>Risk</label><strong class="${t.risk > 55 ? "negative":""}">${t.risk ?? "UNKNOWN"}</strong></div><div class="detail-stat"><label>Market cap</label><strong>${compact(t.marketCap)}</strong></div><div class="detail-stat"><label>Liquidity</label><strong>${compact(t.liquidity)}</strong></div><div class="detail-stat"><label>Holders</label><strong>${t.details.holders?.toLocaleString() || "UNKNOWN"}</strong></div><div class="detail-stat"><label>Potential</label><strong>${esc(t.potential)}</strong></div></div><div class="chart"><svg viewBox="0 0 500 90" preserveAspectRatio="none"><defs><linearGradient id="fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#2f6fed" stop-opacity=".18"/><stop offset="1" stop-color="#2f6fed" stop-opacity="0"/></linearGradient></defs><path class="chart-grid" d="M0 20H500M0 45H500M0 70H500"/><path class="chart-area" d="M0 70 L40 63 L75 67 L112 45 L145 52 L183 32 L220 39 L258 21 L302 30 L341 18 L380 28 L420 13 L460 20 L500 8 L500 90 L0 90Z"/><path class="chart-line" d="M0 70 L40 63 L75 67 L112 45 L145 52 L183 32 L220 39 L258 21 L302 30 L341 18 L380 28 L420 13 L460 20 L500 8"/></svg></div><div class="data-note" style="margin:16px -22px -22px">Data quality ${t.dataQuality ?? "UNKNOWN"} · social coverage ${esc(t.details.social)} · status ${statusBadge(t)}</div></section><section class="card evidence"><h3>Why this score?</h3><ul>${t.details.evidence.map(e => `<li>${esc(e)}</li>`).join("")}</ul><h3 style="margin-top:26px">Token security</h3><div class="health-row"><span>Mint authority</span><strong class="health-value">${esc(t.details.authorities.mint)}</strong></div><div class="health-row"><span>Freeze authority</span><strong class="health-value">${esc(t.details.authorities.freeze)}</strong></div><div class="health-row"><span>Metadata authority</span><strong class="health-value health-warn">${esc(t.details.authorities.metadata)}</strong></div><div class="health-row"><span>Pattern match</span><strong class="health-value health-ok">${t.details.patternMatch ?? "UNKNOWN"}%</strong></div><button class="btn ${watch ? "btn-danger":"btn-quiet"}" style="margin-top:18px;width:100%" onclick="toggleWatch('${encodeURIComponent(t.mint)}')">${watch ? "Remove from active watchlist" : "☆ Add to permanent watchlist"}</button></section></div>`); }
 async function showToken(id, reload = true) {
@@ -601,12 +667,12 @@ async function analyzePatterns() { try { const result = await api("/api/analysis
 function setTokenSearch(value) { tokenSearchQuery = value; if (activePage === "token-search") render(); }
 const hashPage = window.location.hash.slice(1);
 if (NAV.some(([id]) => id === hashPage)) activePage = hashPage;
-window.addEventListener("hashchange", () => {
+  window.addEventListener("hashchange", () => {
   const page = window.location.hash.slice(1);
-  if (NAV.some(([id]) => id === page)) { activePage = page; render(); }
+  if (NAV.some(([id]) => id === page)) { activePage = page; render(); if (page === "health") loadReactivation(); }
 });
 window.go=go; window.scan=scan; window.showToken=showToken; window.toggleWatch=toggleWatch; window.removeWatch=removeWatch; window.trade=trade; window.setWhaleRange=setWhaleRange; window.setRadarSort=setRadarSort; window.setRadarStatus=setRadarStatus; window.analyzePatterns=analyzePatterns; window.setTokenSearch=setTokenSearch; window.setBubbleMapToken=setBubbleMapToken;
-refresh().catch(error => { app.innerHTML = `<div class="empty" style="margin:40px"><strong>Unable to load radar</strong>${esc(error.message)}</div>`; });
+refresh().then(() => { if (activePage === "health") loadReactivation(); }).catch(error => { app.innerHTML = `<div class="empty" style="margin:40px"><strong>Unable to load radar</strong>${esc(error.message)}</div>`; });
 setInterval(() => {
   const label = document.querySelector("#next-scan-label");
   if (label && snapshot) label.textContent = nextScanLabel();

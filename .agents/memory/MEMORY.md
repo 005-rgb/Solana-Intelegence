@@ -4,3 +4,4 @@
 - [Core before monetization](core-before-monetization.md) — finish and validate Radar reliability before wallet execution or configurable fees.
 - [Phase 0A safety boundaries](phase0a-safety-boundaries.md) — mutation idempotency needs payload fingerprints, and scan audit/state finalization must commit atomically.
 - [Provider lineage fallback](provider-lineage-fallback.md) — missing pair responses retain discovery lineage; synthesized snapshots must not masquerade as provider response hashes.
+- [Live lease test isolation](live-lease-test-isolation.md) — database lease integration tests need the running scheduler lease released or they race the live scan worker.

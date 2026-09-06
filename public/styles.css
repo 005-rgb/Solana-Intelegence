@@ -430,3 +430,34 @@ tbody tr:hover { background: rgba(54,217,220,.045); }
 @media (prefers-reduced-motion: reduce) {
   .ticker-track { animation: none; }
 }
+
+/* Reactivation keeps the terminal hierarchy but makes state semantics explicit. */
+.reactivation-metrics { margin-bottom: 12px; }
+.reactivation-panel { overflow: hidden; }
+.reactivation-table-wrap { overflow-x: auto; }
+.reactivation-table { min-width: 1080px; }
+.reactivation-table td { vertical-align: top; }
+.reactivation-table td:nth-child(2),
+.reactivation-table td:nth-child(3) { min-width: 145px; white-space: normal; }
+.reactivation-subvalue { display: block; max-width: 190px; margin-top: 6px; color: var(--muted); font-size: 8px; line-height: 1.35; white-space: normal; }
+.reactivation-count { color: var(--blue); font-size: 14px; font-weight: 700; text-align: center; }
+.reactivation-recurrence { color: var(--yellow); font-size: 8px; letter-spacing: .6px; }
+.reactivation-recurrence.recurring { color: var(--green); }
+.reactivation-details { min-width: 190px; }
+.reactivation-details summary { color: var(--blue); cursor: pointer; font-size: 9px; list-style: none; }
+.reactivation-details summary::before { content: "＋ "; color: var(--green); }
+.reactivation-details[open] summary::before { content: "− "; }
+.reactivation-timeline { margin-top: 10px; padding-left: 3px; border-left: 1px solid #28514d; }
+.reactivation-event { display: grid; grid-template-columns: 10px minmax(125px, 1fr) 55px; gap: 7px; padding: 7px 0 7px 8px; }
+.reactivation-event-dot { width: 6px; height: 6px; margin-top: 4px; border-radius: 50%; background: var(--blue); }
+.reactivation-event-dot.green { background: var(--green); box-shadow: 0 0 8px rgba(185, 243, 83, .45); }
+.reactivation-event-dot.yellow { background: var(--yellow); }
+.reactivation-event-dot.red { background: var(--red); }
+.reactivation-event strong { display: block; color: #d6ebe4; font-size: 8px; letter-spacing: .5px; }
+.reactivation-event small, .reactivation-event span { display: block; color: var(--muted); font-size: 8px; line-height: 1.35; }
+.reactivation-event-metrics { text-align: right; }
+.reactivation-event-metrics b { display: block; color: var(--blue); font-size: 8px; }
+.reactivation-empty { padding: 9px 0; color: var(--yellow); font-size: 8px; }
+.reactivation-loading { display: flex; min-height: 220px; align-items: center; justify-content: center; gap: 10px; color: var(--yellow); font-size: 10px; }
+.terminal-pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--yellow); box-shadow: 0 0 0 5px var(--yellow-soft); animation: terminal-pulse 1.2s ease-in-out infinite; }
+@keyframes terminal-pulse { 50% { opacity: .35; transform: scale(.7); } }
