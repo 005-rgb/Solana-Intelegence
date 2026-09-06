@@ -1046,8 +1046,10 @@ function observationData(item, endpoint, sourceRequestId, observedAt, pairOverri
     discoverySources: item.details?.discoverySources || [],
     marketQuality: item.details?.marketQuality || decision.marketQuality || null,
     executionSafety: item.details?.executionSafety || null,
-    executionEvidence: item.details?.executionEvidence || null
-    , tradeObservations: item.details?.tradeObservations || pair.tradeObservations || pair.trades || null
+    executionEvidence: item.details?.executionEvidence || null,
+    profile: item.details?.profile || null,
+    projectEvidence: providerMetadata.projectEvidence || providerMetadata.tractionEvidence || null,
+    tradeObservations: item.details?.tradeObservations || pair.tradeObservations || pair.trades || null
   };
   return {
     mint: item.mint,
@@ -1271,6 +1273,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
       const providerMetadata = {
         chainId: "solana", symbol, name, icon: imageUrl, header: headerUrl,
         openGraph: sourceItem.openGraph || null, description, links, websites, socials, pairInfo,
+        projectEvidence: sourceItem.projectEvidence || sourceItem.tractionEvidence || null,
         cto: typeof boost.cto === "boolean" ? boost.cto : null,
         boostAmount: boost.amount ?? null, totalBoostAmount: boost.totalAmount ?? null,
          providerUpdatedAt: pair?.updatedAt || boost.updatedAt || profile.updatedAt || latestPair.pair?.updatedAt || indexed.updatedAt || null,
@@ -1337,6 +1340,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
           primaryPairPolicy: "SOLANA_ONLY_WITH_PRICE_AND_LIQUIDITY_THEN_LIQUIDITY_UPDATED_CREATED_ADDRESS",
           providerMetadata,
           profile: { description, imageUrl, headerUrl, websites, socials, openGraph: sourceItem.openGraph || null },
+          projectEvidence: providerMetadata.projectEvidence || null,
           evidence
         }
       };

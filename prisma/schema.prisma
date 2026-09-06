@@ -270,6 +270,7 @@ model TokenObservation {
   scanRun            ScanRun?  @relation(fields: [scanRunId], references: [id], onDelete: SetNull)
   featureSnapshot    RadarFeatureSnapshot?
   manipulationSnapshot ManipulationSnapshot?
+  projectTractionSnapshot ProjectTractionSnapshot?
 
   @@index([mint, observedAt])
   @@index([pairAddress, observedAt])
@@ -297,6 +298,36 @@ model ManipulationSnapshot {
 
   @@index([mint, observedAt])
   @@index([status])
+}
+
+model ProjectTractionSnapshot {
+  id                 String           @id @default(cuid())
+  observationId      String           @unique
+  mint               String
+  pairAddress        String?
+  observedAt         DateTime
+  version            String
+  status             String
+  classification     String
+  projectQualityScore Float?
+  qualityCap         Int
+  capLifted          Boolean
+  evidenceCoverage   Int
+  confidence         Float?
+  evidenceCount      Int              @default(0)
+  invalidEvidenceCount Int             @default(0)
+  unknownDimensions  Json
+  dimensions         Json
+  identityEvidence   Json
+  sourceSet          Json
+  traction           Json
+  qualityReasons     Json
+  createdAt          DateTime         @default(now())
+  observation        TokenObservation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+
+  @@index([mint, observedAt])
+  @@index([status])
+  @@index([classification])
 }
 
 model RadarFeatureSnapshot {

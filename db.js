@@ -1,6 +1,7 @@
 const { PrismaClient } = require("@prisma/client");
 const { deriveFeatureSnapshot } = require("./radar-features");
 const { deriveManipulationEvidence } = require("./manipulation-evidence");
+const { deriveProjectTraction } = require("./project-traction");
 
 const prisma = new PrismaClient();
 const LIVE_ONLY_MIGRATION = "liveOnlyInitialized";
@@ -266,6 +267,12 @@ async function readState(fallback) {
       orderBy: { observedAt: "desc" }
     })
     : [];
+  const projectTractionRows = dbTokens.length
+    ? await prisma.projectTractionSnapshot.findMany({
+      where: { mint: { in: dbTokens.map(token => token.mint) } },
+      orderBy: { observedAt: "desc" }
+    })
+    : [];
   const latestManipulation = new Map();
   for (const row of manipulationRows) {
     if (!latestManipulation.has(row.mint)) {
@@ -281,6 +288,30 @@ async function readState(fallback) {
         qualityReasons: row.qualityReasons,
         smartMoneyStatus: row.smartMoneyStatus,
         poolDrainStatus: row.poolDrainStatus
+      });
+    }
+  }
+  const latestProjectTraction = new Map();
+  for (const row of projectTractionRows) {
+    if (!latestProjectTraction.has(row.mint)) {
+      latestProjectTraction.set(row.mint, {
+        version: row.version,
+        observedAt: row.observedAt.toISOString(),
+        status: row.status,
+        classification: row.classification,
+        projectQualityScore: row.projectQualityScore,
+        qualityCap: row.qualityCap,
+        capLifted: row.capLifted,
+        evidenceCoverage: row.evidenceCoverage,
+        confidence: row.confidence,
+        evidenceCount: row.evidenceCount,
+        invalidEvidenceCount: row.invalidEvidenceCount,
+        unknownDimensions: row.unknownDimensions,
+        dimensions: row.dimensions,
+        identityEvidence: row.identityEvidence,
+        sourceSet: row.sourceSet,
+        traction: row.traction,
+        qualityReasons: row.qualityReasons
       });
     }
   }
@@ -340,6 +371,7 @@ async function readState(fallback) {
     tokens: tokens.map(token => {
       const item = fromToken(token, latestFeatures.get(token.mint));
       item.details.manipulationEvidence = latestManipulation.get(token.mint) || null;
+      item.details.projectTraction = latestProjectTraction.get(token.mint) || null;
       return item;
     }),
     watchlist: activeWatchlist.filter(item => safeMints.has(item.token.mint)).map(item => item.token.mint),
@@ -742,6 +774,35 @@ async function recordTokenObservations(observations, scanRunId) {
           qualityReasons: manipulation.qualityReasons,
           smartMoneyStatus: manipulation.smartMoneyStatus,
           poolDrainStatus: manipulation.poolDrainStatus
+        }
+      });
+      const projectTraction = deriveProjectTraction({
+        providerMetadata: observation.rawPayload?.providerMetadata || {},
+        profile: observation.rawPayload?.profile || {},
+        projectEvidence: observation.rawPayload?.projectEvidence || null
+      }, { asOf: observation.observedAt });
+      await tx.projectTractionSnapshot.create({
+        data: {
+          observationId: observation.id,
+          mint: observation.mint,
+          pairAddress: observation.pairAddress,
+          observedAt: observation.observedAt,
+          version: projectTraction.version,
+          status: projectTraction.status,
+          classification: projectTraction.classification,
+          projectQualityScore: projectTraction.projectQualityScore,
+          qualityCap: projectTraction.qualityCap,
+          capLifted: projectTraction.capLifted,
+          evidenceCoverage: projectTraction.evidenceCoverage,
+          confidence: projectTraction.confidence,
+          evidenceCount: projectTraction.evidenceCount,
+          invalidEvidenceCount: projectTraction.invalidEvidenceCount,
+          unknownDimensions: projectTraction.unknownDimensions,
+          dimensions: projectTraction.dimensions,
+          identityEvidence: projectTraction.identityEvidence,
+          sourceSet: projectTraction.sourceSet,
+          traction: projectTraction.traction,
+          qualityReasons: projectTraction.qualityReasons
         }
       });
     }

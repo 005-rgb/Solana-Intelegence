@@ -218,6 +218,12 @@ body {
 .phase3a-flagged { color: #ff7d8a; background: rgba(255,125,138,.08); }
 .phase3a-clear { color: var(--green); background: rgba(180,232,107,.06); }
 .phase3a-unknown { color: var(--yellow); background: rgba(255,211,105,.06); }
+.traction-panel { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+.traction-disclaimer { margin: 10px 0 12px; color: var(--muted-2); font-size: 9px; line-height: 1.55; }
+.traction-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 11px 0; }
+.traction-grid > div { display: flex; flex-direction: column; gap: 5px; padding: 8px; background: rgba(255,255,255,.018); border: 1px solid var(--line); }
+.traction-grid span { color: var(--muted); font-size: 8px; text-transform: uppercase; letter-spacing: .5px; }
+.traction-grid strong { color: var(--ink); font-size: 10px; }
 .phase4-panel { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
 .phase4-radar-grid, .phase4-score-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 11px 0; }
 .phase4-score-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

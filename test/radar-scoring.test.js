@@ -72,7 +72,8 @@ test("Phase 4 produces deterministic versioned scores with configuration lineage
   assert.equal(first.details.scorecard.activeRadar, "SPECULATIVE_MEME");
   assert.equal(first.radar, Math.round(first.details.scorecard.radars.SPECULATIVE_MEME));
   assert.ok(first.confidence >= 60);
-  assert.ok(first.details.scorecard.scoreWarnings.includes("PROJECT_TRACTION_NOT_IMPLEMENTED_PHASE3B"));
+  assert.ok(first.details.scorecard.scoreWarnings.includes("PROJECT_TRACTION_UNKNOWN"));
+  assert.ok(first.details.scorecard.scoreWarnings.includes("CAP_PROJECT_TRACTION_70"));
 });
 
 test("unknown Phase 3A coverage caps confidence and does not become a clear manipulation pass", () => {

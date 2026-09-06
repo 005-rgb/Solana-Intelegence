@@ -75,6 +75,25 @@ npm run db:push
   entity history. Account concentration never becomes wallet ownership by
   inference.
 
+## Phase 3B project traction verification
+
+- `phase3b-v1` validates project evidence records against an as-of timestamp,
+  seven-day freshness window, HTTP(S) source lineage, verified adapter status,
+  bounded dimension scores, and independent source coverage.
+- The verifier covers product reality/maturity, users and growth, revenue/fees,
+  TVL/economic activity, developer activity, token utility/tokenomics, and
+  ecosystem integrations.
+- It derives a Project Quality Score, evidence coverage, confidence, unknown
+  dimensions, project classification, and traction level/growth/acceleration
+  from a minimum three-point baseline when available.
+- Evidence is persisted as `ProjectTractionSnapshot` alongside the immutable
+  `TokenObservation`. Stale, future, invalid, or single-source evidence cannot
+  lift the quality cap.
+- The current DexScreener adapter does not claim product or user traction, so
+  live candidates remain capped until a supported evidence source supplies
+  verified project traction. Market activity is never substituted for product
+  traction.
+
 ## Phase 4 deterministic scorecards
 
 - `phase4-v1` computes separate Real Project, Reactivation, and Speculative Meme

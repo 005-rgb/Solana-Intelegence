@@ -138,6 +138,32 @@ function manipulationEvidenceMarkup(evidence) {
     <ul class="security-reasons">${reasonMarkup}</ul>
   </div>`;
 }
+function projectTractionMarkup(traction) {
+  const item = traction || {};
+  const trend = item.traction || {};
+  const sources = Array.isArray(item.sourceSet) ? item.sourceSet : [];
+  const unknown = Array.isArray(item.unknownDimensions) ? item.unknownDimensions : [];
+  const score = item.projectQualityScore == null ? "UNKNOWN" : Math.round(Number(item.projectQualityScore));
+  const cap = item.qualityCap == null ? "UNKNOWN" : item.qualityCap;
+  const trendGrowth = trend.tractionGrowth == null ? "UNKNOWN" : `${Number(trend.tractionGrowth).toFixed(2)}%`;
+  const trendAcceleration = trend.tractionAcceleration == null ? "UNKNOWN" : `${Number(trend.tractionAcceleration).toFixed(2)} pts`;
+  return `<div class="traction-panel">
+    <div class="side-card-heading"><div><h3>Project traction verification</h3><span>${esc(item.version || "UNKNOWN")} · source-backed, as-of evidence</span></div><span class="security-status ${evidenceStatusClass(item.status)}">${esc(item.classification || item.status || "UNKNOWN")}</span></div>
+    <div class="traction-disclaimer">Market activity is not treated as product traction. Project quality stays capped until verified product, activity, and independent source evidence are present.</div>
+    <div class="traction-grid">
+      <div><span>Project quality</span><strong>${score}</strong></div>
+      <div><span>Current cap</span><strong>${cap}</strong></div>
+      <div><span>Evidence coverage</span><strong>${item.evidenceCoverage == null ? "UNKNOWN" : `${item.evidenceCoverage}%`}</strong></div>
+      <div><span>Evidence confidence</span><strong>${item.confidence == null ? "UNKNOWN" : Math.round(Number(item.confidence))}</strong></div>
+      <div><span>Traction level</span><strong>${trend.tractionLevel == null ? "UNKNOWN" : esc(String(trend.tractionLevel))}</strong></div>
+      <div><span>Growth / acceleration</span><strong>${trendGrowth} / ${trendAcceleration}</strong></div>
+      <div><span>Inflection status</span><strong>${esc(trend.inflectionStatus || "UNKNOWN")}</strong></div>
+      <div><span>Independent sources</span><strong>${sources.length || "UNKNOWN"}</strong></div>
+    </div>
+    <div class="health-row"><span>Unknown dimensions</span><strong class="health-value">${unknown.length ? esc(unknown.join(" · ")) : "None"}</strong></div>
+    <ul class="security-reasons">${(item.qualityReasons || []).slice(0, 8).map(reason => `<li>${esc(reason)}</li>`).join("") || "<li>All project traction requirements are covered.</li>"}</ul>
+  </div>`;
+}
 function scorecardMarkup(scorecard) {
   const item = scorecard || {};
   const components = item.components || {};
@@ -661,6 +687,7 @@ async function showToken(id, reload = true) {
   const featureSnapshot = details.featureSnapshot || {};
   const features = featureSnapshot.features || {};
   const manipulationEvidence = details.manipulationEvidence || {};
+  const projectTraction = details.projectTraction || {};
   const scorecard = details.scorecard || {};
   const executionReasons = Array.isArray(executionSafety.reasons) && executionSafety.reasons.length
     ? executionSafety.reasons
@@ -752,6 +779,7 @@ async function showToken(id, reload = true) {
            <div class="health-row"><span>Market / security age</span><strong class="health-value">${featureSnapshot.freshness?.marketDataAgeMs == null ? "UNKNOWN" : formatAgeMs(featureSnapshot.freshness.marketDataAgeMs)} / ${featureSnapshot.freshness?.securityDataAgeMs == null ? "UNKNOWN" : formatAgeMs(featureSnapshot.freshness.securityDataAgeMs)}</strong></div>
            <ul class="security-reasons">${(featureSnapshot.qualityReasons || []).slice(0, 8).map(reason => `<li>${esc(reason)}</li>`).join("") || "<li>Feature inputs complete for the current snapshot.</li>"}</ul>
          ${manipulationEvidenceMarkup(manipulationEvidence)}
+         ${projectTractionMarkup(projectTraction)}
          ${scorecardMarkup(scorecard)}
          <div class="side-divider"></div>
         <div class="side-card-heading"><div><h3>Pair identity</h3><span>Selected by highest live liquidity</span></div></div>

@@ -1,11 +1,12 @@
 const crypto = require("crypto");
+const { TRACTION_VERSION } = require("./project-traction");
 
 const SCORE_VERSION = "phase4-v1";
 const FEATURE_VERSION = "phase3-v1";
 const RADAR_TYPES = Object.freeze(["REAL_PROJECT", "REACTIVATION", "SPECULATIVE_MEME"]);
 const SCORE_CONFIG = Object.freeze({
   version: SCORE_VERSION,
-  sourceSet: ["security", "marketQuality", "phase3Features", "phase3AManipulation", "executionSafety", "providerProfile"],
+  sourceSet: ["security", "marketQuality", "phase3Features", "phase3AManipulation", "executionSafety", "providerProfile", "projectTraction"],
   thresholds: {
     confidenceForQualifying: 60,
     maximumRiskForQualifying: 55,
@@ -73,6 +74,7 @@ function profileEvidence(item) {
   const details = item?.details || {};
   const profile = details.profile || {};
   const metadata = details.providerMetadata || {};
+  const traction = details.projectTraction;
   const pair = details.pair || {};
   const websites = Array.isArray(profile.websites) ? profile.websites : [];
   const socials = Array.isArray(profile.socials) ? profile.socials : [];
@@ -87,9 +89,17 @@ function profileEvidence(item) {
   ];
   const raw = evidence.reduce((sum, [present, points]) => sum + (present ? points : 0), 0);
   const warnings = [];
+  if (traction?.version === TRACTION_VERSION && traction.projectQualityScore != null) {
+    const cap = finite(traction.qualityCap) ?? 70;
+    const value = clamp(Math.min(traction.projectQualityScore, cap));
+    if (!traction.capLifted) warnings.push(`CAP_PROJECT_TRACTION_${cap}`);
+    warnings.push(...(traction.qualityReasons || []));
+    if (traction.status !== "VERIFIED") warnings.push(`PROJECT_TRACTION_${traction.status || "UNKNOWN"}`);
+    return { value, warnings };
+  }
   if (!profile.description && !metadata.description) warnings.push("PROJECT_DESCRIPTION_UNKNOWN");
   if (!websites.length && !socials.length) warnings.push("PROJECT_LINK_EVIDENCE_UNKNOWN");
-  warnings.push("PROJECT_TRACTION_NOT_IMPLEMENTED_PHASE3B");
+  warnings.push("PROJECT_TRACTION_UNKNOWN", "CAP_PROJECT_TRACTION_70");
   return { value: clamp(raw, 0, 70), warnings };
 }
 
@@ -321,6 +331,7 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
   const scorecard = {
     version: SCORE_VERSION,
     featureVersion: candidate.details.featureSnapshot?.featureVersion || FEATURE_VERSION,
+    projectTractionVersion: candidate.details.projectTraction?.version || null,
     configurationHash: CONFIGURATION_HASH,
     sourceSet: SCORE_CONFIG.sourceSet,
     activeRadar,
