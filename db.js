@@ -643,81 +643,76 @@ function reactivationReason(observation) {
   return reasons.slice(0, 4).join(" · ") || "No decision reason recorded";
 }
 
+function reactivationPoint(observation) {
+  return {
+    at: observation.observedAt.toISOString(),
+    status: observation.decisionOutcome || "UNKNOWN",
+    decisionVersion: observation.decisionVersion || "UNKNOWN",
+    source: observation.source,
+    dataQuality: observation.dataQuality,
+    pairAddress: observation.pairAddress,
+    priceUsd: observation.priceUsd,
+    marketCap: observation.marketCap,
+    liquidityUsd: observation.liquidityUsd,
+    priceChange: observation.priceChange,
+    reason: reactivationReason(observation),
+    responseHash: observation.sourceResponseHash,
+    scanRunId: observation.scanRunId
+  };
+}
+
+async function readTokenHistory(mint) {
+  const observations = await prisma.tokenObservation.findMany({
+    where: { mint },
+    orderBy: { observedAt: "desc" },
+    take: 100
+  });
+  return observations.map(reactivationPoint);
+}
+
 async function readReactivationHistory() {
-  const [tokens, observations] = await Promise.all([
-    prisma.token.findMany({ where: { providerUrl: { not: null } } }),
-    prisma.tokenObservation.findMany({ orderBy: { observedAt: "desc" } })
-  ]);
-  const activeByMint = new Map(tokens.map(token => [token.mint, token]));
-  const records = new Map();
+  const tokens = (await prisma.token.findMany({ where: { providerUrl: { not: null } } }))
+    .filter(token => token.details?.security?.verified === true);
+  const acceptedMints = tokens.map(token => token.mint);
+  const observations = acceptedMints.length
+    ? await prisma.tokenObservation.findMany({
+      where: { mint: { in: acceptedMints } },
+      orderBy: { observedAt: "desc" }
+    })
+    : [];
+  const tokenByMint = new Map(tokens.map(token => [token.mint, token]));
+  const records = new Map(tokens.map(token => [token.mint, {
+    mint: token.mint,
+    symbol: token.symbol,
+    name: token.name,
+    sourceBoards: ["REAL_PROJECT", "SPECULATIVE_MEME"],
+    current: {
+      status: "PASSED_RADAR",
+      providerStatus: token.status,
+      price: token.price,
+      marketCap: token.marketCap,
+      liquidity: token.liquidity,
+      updatedAt: token.updatedAt.toISOString()
+    },
+    firstSeenAt: token.createdAt.toISOString(),
+    lastSeenAt: token.updatedAt.toISOString(),
+    observationCount: 0,
+    statusCounts: {},
+    latest: null,
+    history: []
+  }]));
 
   for (const observation of observations) {
-    const activeToken = activeByMint.get(observation.mint);
-    const base = observation.baseToken && typeof observation.baseToken === "object" ? observation.baseToken : {};
-    const status = observation.decisionOutcome || "UNKNOWN";
-    const point = {
-      at: observation.observedAt.toISOString(),
-      status,
-      decisionVersion: observation.decisionVersion || "UNKNOWN",
-      source: observation.source,
-      dataQuality: observation.dataQuality,
-      pairAddress: observation.pairAddress,
-      priceUsd: observation.priceUsd,
-      marketCap: observation.marketCap,
-      liquidityUsd: observation.liquidityUsd,
-      priceChange: observation.priceChange,
-      reason: reactivationReason(observation),
-      responseHash: observation.sourceResponseHash,
-      scanRunId: observation.scanRunId
-    };
+    const point = reactivationPoint(observation);
+    const status = point.status;
     const existing = records.get(observation.mint);
-    if (!existing) {
-      records.set(observation.mint, {
-        mint: observation.mint,
-        symbol: activeToken?.symbol || base.symbol || "UNKNOWN",
-        name: activeToken?.name || base.name || "Unknown token",
-        current: activeToken ? {
-          status: "ACTIVE",
-          price: activeToken.price,
-          marketCap: activeToken.marketCap,
-          liquidity: activeToken.liquidity,
-          updatedAt: activeToken.updatedAt.toISOString()
-        } : { status },
-        firstSeenAt: observation.observedAt.toISOString(),
-        lastSeenAt: observation.observedAt.toISOString(),
-        observationCount: 1,
-        statusCounts: { [status]: 1 },
-        latest: point,
-        history: [point]
-      });
-    } else {
-      existing.firstSeenAt = observation.observedAt.toISOString();
-      existing.observationCount += 1;
-      existing.statusCounts[status] = (existing.statusCounts[status] || 0) + 1;
-      if (existing.history.length < 12) existing.history.push(point);
-    }
-  }
-
-  for (const token of tokens) {
-    if (records.has(token.mint)) continue;
-    records.set(token.mint, {
-      mint: token.mint,
-      symbol: token.symbol,
-      name: token.name,
-      current: {
-        status: "ACTIVE",
-        price: token.price,
-        marketCap: token.marketCap,
-        liquidity: token.liquidity,
-        updatedAt: token.updatedAt.toISOString()
-      },
-      firstSeenAt: token.updatedAt.toISOString(),
-      lastSeenAt: token.updatedAt.toISOString(),
-      observationCount: 0,
-      statusCounts: { ACTIVE: 1 },
-      latest: null,
-      history: []
-    });
+    if (!existing) continue;
+    existing.firstSeenAt = new Date(Math.min(new Date(existing.firstSeenAt).getTime(), observation.observedAt.getTime())).toISOString();
+    existing.lastSeenAt = new Date(Math.max(new Date(existing.lastSeenAt).getTime(), observation.observedAt.getTime())).toISOString();
+    existing.observationCount += 1;
+    existing.statusCounts[status] = (existing.statusCounts[status] || 0) + 1;
+    if (!existing.latest) existing.latest = point;
+    if (existing.history.length < 12) existing.history.push(point);
   }
 
   return [...records.values()]
@@ -781,6 +776,7 @@ module.exports = {
   findScanByIdempotencyKey,
   findTradeByIdempotencyKey,
   recordTokenObservations,
+  readTokenHistory,
   readReactivationHistory,
   disconnectDb
 };

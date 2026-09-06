@@ -13,6 +13,7 @@ const {
   recordAlertsAtomic,
   createScanRun,
   recordTokenObservations,
+  readTokenHistory,
   readReactivationHistory,
   acquireScanLease,
   releaseScanLease,
@@ -1716,7 +1717,9 @@ async function handleApi(req, res, url) {
   }
   if (req.method === "GET" && url.pathname.startsWith("/api/tokens/")) {
     const item = tokenById(decodeURIComponent(url.pathname.split("/").pop()));
-    return item ? send(res, 200, { token: item, mode: state.mode }) : send(res, 404, { error: "Token not found" });
+    return item
+      ? send(res, 200, { token: item, history: await readTokenHistory(item.mint), mode: state.mode })
+      : send(res, 404, { error: "Token not found" });
   }
   if (req.method === "POST" && url.pathname === "/api/scan") {
     let key;
