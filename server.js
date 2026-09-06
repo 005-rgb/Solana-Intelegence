@@ -1048,6 +1048,8 @@ function observationData(item, endpoint, sourceRequestId, observedAt, pairOverri
   const providerMetadata = item.details?.providerMetadata || {};
   const decision = evaluateBaselineCandidate(item);
   const pairContext = pair.__sourceContext || item.details?.pairSourceContext || {};
+  const discoveryLineage = Array.isArray(providerMetadata.discoveryLineage) ? providerMetadata.discoveryLineage : [];
+  const fallbackLineage = discoveryLineage.find(lineage => lineage?.requestId || lineage?.responseHash || lineage?.endpoint) || discoveryLineage[0] || {};
   const rawPayload = {
     providerMetadata,
     pair,
@@ -1075,10 +1077,10 @@ function observationData(item, endpoint, sourceRequestId, observedAt, pairOverri
     priceChange: pair.priceChange || null,
     boostAmount: Number.isFinite(Number(providerMetadata.boostAmount)) ? Number(providerMetadata.boostAmount) : null,
     ctoFlag: typeof providerMetadata.cto === "boolean" ? providerMetadata.cto : null,
-    source: "DexScreener",
-    sourceEndpoint: pairContext.endpoint || endpoint,
-    sourceRequestId: pairContext.requestId || sourceRequestId,
-    sourceResponseHash: pairContext.responseHash || crypto.createHash("sha256").update(JSON.stringify(rawPayload)).digest("hex"),
+    source: pairContext.sourceName || fallbackLineage.source || providerMetadata.source || "DexScreener",
+    sourceEndpoint: pairContext.endpoint || fallbackLineage.endpoint || null,
+    sourceRequestId: pairContext.requestId || fallbackLineage.requestId || null,
+    sourceResponseHash: pairContext.responseHash || fallbackLineage.responseHash || null,
     freshnessMs: Number.isFinite(timestampMs(pair.updatedAt || providerMetadata.providerUpdatedAt))
       ? Math.max(0, Date.now() - timestampMs(pair.updatedAt || providerMetadata.providerUpdatedAt))
       : null,
@@ -1128,6 +1130,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
       const requestId = `${sourceName}:${crypto.randomUUID()}`;
       try {
         const payload = await fetchProviderJson(endpoint, { signal: requestSignal });
+        const responseHash = hashPayload(payload);
         const validation = validator(payload);
         invalidFeedRecords += validation.invalidRecords || 0;
         for (const [reason, count] of Object.entries(validation.invalidReasonCounts || {})) {
@@ -1135,21 +1138,22 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
         }
         if (!validation.ok) {
           schemaErrors += 1;
-          return { ok: false, configured: true, entries: [], error: validation.errors.join("; "), schemaVersion: validation.schemaVersion, requestId, responseHash: hashPayload(payload) };
+          return { ok: false, configured: true, entries: [], error: validation.errors.join("; "), schemaVersion: validation.schemaVersion, requestId, responseHash };
         }
         return {
           ok: true,
           configured: true,
           entries: validation.entries.map(entry => ({
             ...entry,
+            __sourceName: sourceName,
             __sourceEndpoint: endpoint,
             __sourceRequestId: requestId,
-            __sourceResponseHash: hashPayload(payload)
+            __sourceResponseHash: responseHash
           })),
           error: null,
           schemaVersion: validation.schemaVersion,
           requestId,
-          responseHash: hashPayload(payload)
+          responseHash
         };
       } catch (error) {
         if (signal?.aborted) throw error;
@@ -1177,8 +1181,8 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
     pairRequests = discovery.entries.length;
     const pairResponses = await mapWithConcurrency(discovery.entries, PROVIDER_MAX_CONCURRENCY, async entry => {
       const mint = entry.tokenAddress;
-      try {
         const requestId = `pair_fetch:${crypto.randomUUID()}`;
+      try {
         const payload = await fetchProviderJson(`${pairEndpoint}/${encodeURIComponent(mint)}`, { signal: requestSignal });
         const responseHash = hashPayload(payload);
         const raw = Array.isArray(payload?.pairs) ? payload.pairs : [];
@@ -1190,6 +1194,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
               ...validation.pair,
               __sourceContext: {
                 endpoint: `${pairEndpoint}/${encodeURIComponent(mint)}`,
+                sourceName: "pair_fetch",
                 requestId,
                 responseHash
               }
@@ -1200,12 +1205,30 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
         if (!Array.isArray(payload?.pairs)) {
           schemaErrors += 1;
           pairFailures += 1;
-          return { pairs: [], schemaError: "Pair response must contain a pairs array." };
+          return {
+            pairs: [],
+            schemaError: "Pair response must contain a pairs array.",
+            endpoint: `${pairEndpoint}/${encodeURIComponent(mint)}`,
+            requestId,
+            responseHash
+          };
         }
-        return { pairs, invalidPairs: raw.length - pairs.length, requestId, responseHash };
-      } catch {
+        return {
+          pairs,
+          invalidPairs: raw.length - pairs.length,
+          endpoint: `${pairEndpoint}/${encodeURIComponent(mint)}`,
+          requestId,
+          responseHash
+        };
+      } catch (error) {
         pairFailures += 1;
-        return { pairs: [] };
+        return {
+          pairs: [],
+          endpoint: `${pairEndpoint}/${encodeURIComponent(mint)}`,
+          requestId,
+          responseHash: null,
+          error: error.message
+        };
       }
     });
     const seededPairs = discovery.entries
@@ -1215,13 +1238,13 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
       ...pairResponses.flatMap(result => Array.isArray(result?.pairs) ? result.pairs : []),
       ...seededPairs
     ];
-    const allPairs = dedupePairs(rawPairs);
     const fresh = discovery.entries.map((entry, index) => {
       const mint = entry.tokenAddress || `live-${index}`;
       const discoveredPair = entry.sourceEntries.latest_pair_feed?.pair;
       const discoveredPairWithContext = discoveredPair ? {
         ...discoveredPair,
         __sourceContext: {
+           sourceName: entry.sourceEntries.latest_pair_feed.__sourceName || "latest_pair_feed",
           endpoint: entry.sourceEntries.latest_pair_feed.__sourceEndpoint || newPairEndpoint,
           requestId: entry.sourceEntries.latest_pair_feed.__sourceRequestId || null,
           responseHash: entry.sourceEntries.latest_pair_feed.__sourceResponseHash || null
@@ -1231,7 +1254,8 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
         ...(Array.isArray(pairResponses[index]?.pairs) ? pairResponses[index].pairs : []),
         ...(discoveredPairWithContext ? [discoveredPairWithContext] : [])
       ]);
-       const pair = selectPrimaryPair(pairs);
+      const pairResponse = pairResponses[index] || {};
+      const pair = selectPrimaryPair(pairs);
       const boost = entry.sourceEntries.boost_feed || {};
       const profile = entry.sourceEntries.new_pair_feed || {};
       const latestPair = entry.sourceEntries.latest_pair_feed || {};
@@ -1253,12 +1277,13 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
         openGraph: sourceItem.openGraph || null, description, links, websites, socials, pairInfo,
         cto: typeof boost.cto === "boolean" ? boost.cto : null,
         boostAmount: boost.amount ?? null, totalBoostAmount: boost.totalAmount ?? null,
-        providerUpdatedAt: boost.updatedAt || profile.updatedAt || latestPair.pair?.updatedAt || indexed.updatedAt || null,
+         providerUpdatedAt: pair?.updatedAt || boost.updatedAt || profile.updatedAt || latestPair.pair?.updatedAt || indexed.updatedAt || null,
         discoverySources: entry.sources,
         discoveryLineage: entry.sources.map(source => {
           const sourceEntry = entry.sourceEntries[source] || {};
           return {
             source,
+            sourceName: sourceEntry.__sourceName || source,
             endpoint: sourceEntry.__sourceEndpoint || null,
             requestId: sourceEntry.__sourceRequestId || null,
             responseHash: sourceEntry.__sourceResponseHash || null
@@ -1273,7 +1298,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
       ];
       if (providerMetadata.boostAmount != null) evidence.push(`Reported boost amount: ${providerMetadata.boostAmount}.`);
       if (providerMetadata.providerUpdatedAt) evidence.push(`Provider metadata updated ${providerMetadata.providerUpdatedAt}.`);
-      const providerTime = providerMetadata.providerUpdatedAt ? Date.parse(providerMetadata.providerUpdatedAt) : NaN;
+       const providerTime = timestampMs(providerMetadata.providerUpdatedAt);
       const providerAge = Number.isFinite(providerTime) ? formatAge(Math.max(0, Date.now() - providerTime)) : "UNKNOWN";
       const price = pair?.priceUsd ? `$${pair.priceUsd}` : "UNKNOWN";
       const marketCap = Number.isFinite(Number(pair?.marketCap)) ? Number(pair.marketCap) : null;
@@ -1296,6 +1321,12 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
             info: pair.info || null, pairCountForMint: pairs.length
           } : null,
            pairSourceContext: pair?.__sourceContext || null,
+           pairFetch: {
+             endpoint: pairResponse.endpoint || null,
+             requestId: pairResponse.requestId || null,
+             responseHash: pairResponse.responseHash || null,
+             error: pairResponse.error || pairResponse.schemaError || null
+           },
           pairs: pairs.map(candidate => ({
             address: candidate.pairAddress || null, dexId: candidate.dexId || null, url: candidate.url || null,
             chainId: candidate.chainId || null, baseToken: candidate.baseToken || null, quoteToken: candidate.quoteToken || null,

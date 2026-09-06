@@ -156,6 +156,27 @@ test("phase 1 discovery merges sources, preserves watchlist priority, and record
   assert.equal(discovery.sourceMetrics.source_only_candidates.watchlist, 1);
 });
 
+test("phase 1 discovery keeps audit denominators before the selection limit", () => {
+  const discovery = normalizeDiscoveryUniverse({
+    boostEntries: [
+      { tokenAddress: "boost-a", chainId: "solana" },
+      { tokenAddress: "boost-b", chainId: "solana" }
+    ],
+    pairEntries: [
+      { tokenAddress: "pair-a", chainId: "solana", pairAddress: "pair-a" },
+      { tokenAddress: "pair-b", chainId: "solana", pairAddress: "pair-b" }
+    ],
+    watchlistMints: ["watch-a"],
+    limit: 1
+  });
+  assert.equal(discovery.entries.length, 1);
+  assert.equal(discovery.sourceMetrics.unique_mints_after_dedup, 5);
+  assert.equal(discovery.sourceMetrics.selected_mints_after_limit, 1);
+  assert.equal(discovery.sourceMetrics.unique_pairs_before_dedup, 2);
+  assert.equal(discovery.sourceMetrics.source_only_candidates.boost_feed, 2);
+  assert.equal(discovery.sourceMetrics.source_only_candidates.watchlist, 1);
+});
+
 test("phase 1 latest pair feed validates pair identity and adds non-boosted mints", () => {
   const validation = validateProviderPairFeed({
     pairs: [
@@ -203,6 +224,26 @@ test("phase 1 pair observations are deduplicated without dropping other valid pa
   ]);
   assert.deepEqual(pairs.map(pair => pair.pairAddress), ["pair-b", "pair-a"]);
   assert.equal(selectPrimaryPair(pairs).pairAddress, "pair-a");
+});
+
+test("phase 1 pair validation permits negative price changes but rejects negative quantities", () => {
+  const valid = validateProviderPair({
+    chainId: "solana",
+    pairAddress: "pair-negative-change",
+    priceUsd: "1",
+    liquidity: { usd: 1_000 },
+    priceChange: { h24: -12.5 },
+    volume: { h24: 1_000 }
+  });
+  assert.equal(valid.valid, true);
+  assert.equal(valid.pair.priceChange.h24, -12.5);
+  assert.equal(validateProviderPair({
+    chainId: "solana",
+    pairAddress: "pair-negative-volume",
+    priceUsd: "1",
+    liquidity: { usd: 1_000 },
+    volume: { h24: -1 }
+  }).valid, false);
 });
 
 test("partial candidate data remains unresolved and cannot reconcile as accepted", () => {

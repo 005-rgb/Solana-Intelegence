@@ -161,6 +161,17 @@ function validateProviderPair(pair, { now = Date.now() } = {}) {
   if (!pair || typeof pair !== "object" || Array.isArray(pair)) return invalidProviderRecord("pair_not_object", pair);
   if (typeof pair.pairAddress !== "string" || !pair.pairAddress.trim()) return invalidProviderRecord("pair_address_missing_or_invalid", pair);
   if (pair.chainId !== "solana") return invalidProviderRecord("unsupported_pair_chain", pair);
+  for (const field of ["baseToken", "quoteToken", "liquidity"]) {
+    if (pair[field] != null && (typeof pair[field] !== "object" || Array.isArray(pair[field]))) {
+      return invalidProviderRecord(`${field}_invalid`, pair);
+    }
+  }
+  if (pair.baseToken?.address != null && (typeof pair.baseToken.address !== "string" || !pair.baseToken.address.trim())) {
+    return invalidProviderRecord("base_token_address_missing_or_invalid", pair);
+  }
+  if (pair.quoteToken?.address != null && (typeof pair.quoteToken.address !== "string" || !pair.quoteToken.address.trim())) {
+    return invalidProviderRecord("quote_token_address_missing_or_invalid", pair);
+  }
 
   const numericFields = [
     ["priceUsd", "price_invalid", true],
@@ -186,11 +197,22 @@ function validateProviderPair(pair, { now = Date.now() } = {}) {
     if (pair[field]) {
       for (const [window, value] of Object.entries(pair[field])) {
         if (value == null || typeof value !== "object" || Array.isArray(value)) {
-          if (value != null && numeric(value) == null) return invalidProviderRecord(`${field}_value_invalid`, pair);
+          if (value != null) {
+            const parsed = numeric(value);
+            const valid = field === "priceChange"
+              ? parsed != null && parsed >= -100 && parsed <= 10_000
+              : nonNegativeNumeric(value) != null;
+            if (!valid) return invalidProviderRecord(`${field}_${window}_value_invalid`, pair);
+          }
           continue;
         }
-        for (const metric of Object.values(value)) {
-          if (metric != null && nonNegativeNumeric(metric) == null) return invalidProviderRecord(`${field}_${window}_value_invalid`, pair);
+        for (const [metricName, metric] of Object.entries(value)) {
+          if (metric == null) continue;
+          const parsed = numeric(metric);
+          const valid = field === "priceChange"
+            ? parsed != null && parsed >= -100 && parsed <= 10_000
+            : nonNegativeNumeric(metric) != null;
+          if (!valid) return invalidProviderRecord(`${field}_${window}_${metricName}_value_invalid`, pair);
         }
       }
     }
@@ -557,12 +579,15 @@ function normalizeDiscoveryUniverse({ boostEntries = [], profileEntries = [], pa
       merged.set(mint, current);
     }
   }
-  const entries = [...merged.values()]
+  const allEntries = [...merged.values()]
     .sort((left, right) => {
       const sourcePriority = entry => entry.sources.includes("watchlist") ? 0 : entry.sources.includes("latest_pair_feed") ? 1 : entry.sources.includes("indexed_feed") ? 2 : entry.sources.includes("new_pair_feed") ? 3 : 4;
       return sourcePriority(left) - sourcePriority(right) || left.tokenAddress.localeCompare(right.tokenAddress);
-    })
-    .slice(0, limit);
+    });
+  const entries = allEntries.slice(0, limit);
+  const pairAddresses = values => new Set((Array.isArray(values) ? values : [])
+    .map(item => item?.pair?.pairAddress || item?.pairAddress)
+    .filter(Boolean));
   const sourceMetrics = {
     boost_feed_seen: new Set((Array.isArray(boostEntries) ? boostEntries : []).map(item => item?.tokenAddress).filter(Boolean)).size,
     profile_feed_seen: new Set((Array.isArray(profileEntries) ? profileEntries : []).map(item => item?.tokenAddress).filter(Boolean)).size,
@@ -570,12 +595,14 @@ function normalizeDiscoveryUniverse({ boostEntries = [], profileEntries = [], pa
     latest_pair_feed_seen: new Set((Array.isArray(pairEntries) ? pairEntries : []).map(item => item?.tokenAddress).filter(Boolean)).size,
     indexed_feed_seen: new Set((Array.isArray(indexedEntries) ? indexedEntries : []).map(item => item?.tokenAddress).filter(Boolean)).size,
     watchlist_seen: new Set((Array.isArray(watchlistMints) ? watchlistMints : []).filter(Boolean)).size,
-    unique_mints_before_dedup: new Set(sourceLists.flatMap(([, values]) => values.map(item => item?.tokenAddress).filter(Boolean))).size,
-    unique_mints_after_dedup: entries.length,
+    unique_mints_before_dedup: new Set(sourceLists.flatMap(([, values]) => (Array.isArray(values) ? values : []).map(item => item?.tokenAddress).filter(Boolean))).size,
+    unique_pairs_before_dedup: pairAddresses(pairEntries).size,
+    unique_mints_after_dedup: allEntries.length,
+    selected_mints_after_limit: entries.length,
     source_overlap: {},
     source_only_candidates: { boost_feed: 0, new_pair_feed: 0, latest_pair_feed: 0, indexed_feed: 0, watchlist: 0 }
   };
-  for (const entry of entries) {
+  for (const entry of allEntries) {
     const sources = entry.sources;
     if (sources.length > 1) {
       for (let index = 0; index < sources.length; index += 1) {
