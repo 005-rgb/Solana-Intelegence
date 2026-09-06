@@ -26,27 +26,33 @@ const {
   disconnectDb
 } = require("./db");
 const {
-  BASELINE_DECISION_VERSION,
-  FILTER_CONFIG,
+  PHASE2_DECISION_VERSION,
+  PHASE2_FILTER_CONFIG,
   buildAccountTaxonomy,
   MAX_TOP_HOLDER_PERCENT,
   MIN_LIQUIDITY_USD,
   dedupePairs,
   dedupeMintEntries,
-  evaluateBaselineCandidate,
   evaluateMarketQuality,
   normalizeDiscoveryUniverse,
   normalizePoolEvidence,
   parseRpcEndpointConfig,
   selectBoardTokens,
   selectPrimaryPair,
+  evaluatePhase2Candidate,
   summarizeBaselineCandidates,
+  summarizePhase2Candidates,
   validateProviderFeed,
   validateProviderPair,
   validateProviderPairFeed,
   PROVIDER_SCHEMA_VERSION
 } = require("./radar-core");
 const { createSolanaRpcPool } = require("./solana-rpc-pool");
+
+const ACTIVE_DECISION_VERSION = PHASE2_DECISION_VERSION;
+const ACTIVE_FILTER_CONFIG = PHASE2_FILTER_CONFIG;
+const evaluateActiveCandidate = evaluatePhase2Candidate;
+const summarizeActiveCandidates = summarizePhase2Candidates;
 
 const PORT = Number(process.env.PORT || 5000);
 const ROOT = __dirname;
@@ -76,7 +82,7 @@ let lastFilterReport = {
   checked: 0, accepted: 0, rejected: 0, unresolved: 0, reasons: [],
   providerRecords: 0, pairRequests: 0, pairFailures: 0, providerAgeMs: null,
   rpcStatus: "NOT RUN", rpcFreshnessMs: null, rpcCommitment: "confirmed",
-  qualityStatus: "NOT RUN", filterConfig: FILTER_CONFIG, tokensPersisted: 0,
+  qualityStatus: "NOT RUN", filterConfig: ACTIVE_FILTER_CONFIG, tokensPersisted: 0,
   discoveryUniverseSize: 0, providerRecordsWithPair: 0,
   providerRecordsWithPrice: 0, providerRecordsWithLiquidity: 0,
   securityVerified: 0, securityUnknown: 0, securityRejected: 0,
@@ -884,7 +890,7 @@ function poolEvidenceFromItem(item) {
 function observationData(item, endpoint, sourceRequestId, observedAt, pairOverride = null, pairRole = "primary") {
   const pair = pairOverride || item.details?.pair || {};
   const providerMetadata = item.details?.providerMetadata || {};
-  const decision = evaluateBaselineCandidate(item);
+  const decision = evaluateActiveCandidate(item);
   const pairContext = pair.__sourceContext || item.details?.pairSourceContext || {};
   const discoveryLineage = Array.isArray(providerMetadata.discoveryLineage) ? providerMetadata.discoveryLineage : [];
   const fallbackLineage = discoveryLineage.find(lineage => lineage?.requestId || lineage?.responseHash || lineage?.endpoint) || discoveryLineage[0] || {};
@@ -924,7 +930,7 @@ function observationData(item, endpoint, sourceRequestId, observedAt, pairOverri
       : null,
     dataQuality: pair.address ? `${pairRole.toUpperCase()}_PAIR_SECURITY_SEPARATE` : "MISSING_PAIR",
     decisionOutcome: decision.outcome,
-    decisionVersion: BASELINE_DECISION_VERSION,
+    decisionVersion: ACTIVE_DECISION_VERSION,
     qualityReasons: decision.reasonCodes,
     accountTaxonomy: item.details?.security?.accountTaxonomy || null,
     // Pool evidence belongs to the observed pair. Never copy the primary
@@ -1205,10 +1211,11 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
         marketQuality: evaluateMarketQuality(item)
       }
     }));
-    // Phase 0 freezes the existing hard-filter behavior. Phase 2 market
-    // quality remains attached as evidence, but it must not silently change
-    // the baseline accepted set.
-    const decisions = secured.map(evaluateBaselineCandidate);
+    // Phase 2 is now the active fail-closed decision contract. Keep a
+    // baseline-v1 shadow summary beside it so acceptance changes remain
+    // explainable and reversible without rewriting observations.
+    const baselineShadow = summarizeBaselineCandidates(secured);
+    const decisions = secured.map(evaluateActiveCandidate);
     const safeTokens = secured.filter((item, index) => decisions[index].accepted).map(item => {
       const rationale = buildTokenReview(item, item.security);
       return {
@@ -1230,7 +1237,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
     const rpcStatus = rpcStatuses.length && rpcStatuses.every(status => status !== "UNVERIFIED")
       ? "LIVE"
       : rpcStatuses.some(status => status !== "UNVERIFIED") ? "PARTIAL" : "FAILED";
-    const report = summarizeBaselineCandidates(secured, {
+    const report = summarizeActiveCandidates(secured, {
       checked: secured.length,
         providerRecords: discovery.sourceMetrics.unique_mints_before_dedup,
        discoveryUniverseSize: discovery.entries.length,
@@ -1244,7 +1251,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
          : rpcStatus === "PARTIAL" || pairFailures > 0
            ? "PARTIAL"
            : "FAILED",
-       filterConfig: FILTER_CONFIG,
+        filterConfig: ACTIVE_FILTER_CONFIG,
       sourceMetrics: {
         ...discovery.sourceMetrics,
          unique_pairs_before_dedup: new Set(rawPairs.map(pair => pair.pairAddress).filter(Boolean)).size,
@@ -1264,6 +1271,13 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
          schema_errors: schemaErrors,
          invalid_feed_reason_counts: invalidFeedReasonCounts,
          rpc_failure_reasons: [...rpcFailureReasons],
+          baseline_shadow: {
+            decisionVersion: baselineShadow.decisionVersion,
+            recordsChecked: baselineShadow.recordsChecked,
+            accepted: baselineShadow.accepted,
+            rejected: baselineShadow.rejected,
+            unresolved: baselineShadow.unresolved
+          },
          provider_health: Object.fromEntries([...providerHealth.entries()].map(([endpoint, health]) => [
            providerEndpointLabel(endpoint),
            { failures: health.failures, circuitOpen: Boolean(health.openedAt), lastStatus: health.lastStatus }
@@ -1357,7 +1371,7 @@ async function runScan(manual = false, options = {}) {
     rejectedCount: lastFilterReport.rejected || 0,
     unresolvedCount: lastFilterReport.unresolved || 0,
     rejectionReasons: lastFilterReport.reasons || [],
-    filterConfig: lastFilterReport.filterConfig || FILTER_CONFIG,
+    filterConfig: lastFilterReport.filterConfig || ACTIVE_FILTER_CONFIG,
     providerAgeMs: lastFilterReport.providerAgeMs ?? null,
     providerRecords: lastFilterReport.providerRecords || 0,
     pairRequests: lastFilterReport.pairRequests || 0,
@@ -1380,7 +1394,7 @@ async function runScan(manual = false, options = {}) {
     rpcCommitment: lastFilterReport.rpcCommitment || "confirmed",
     timedOut: Boolean(lastFilterReport.timedOut),
     timeoutReason: lastFilterReport.timeoutReason || null,
-    decisionVersion: BASELINE_DECISION_VERSION,
+    decisionVersion: ACTIVE_DECISION_VERSION,
     correlationId,
     requestId,
     sourceMetrics: lastFilterReport.sourceMetrics || {}
@@ -1393,7 +1407,7 @@ async function runScan(manual = false, options = {}) {
           status: "RUNNING",
           startedAt: new Date(started),
           provider: state.provider,
-          decisionVersion: BASELINE_DECISION_VERSION,
+          decisionVersion: ACTIVE_DECISION_VERSION,
           correlationId,
           requestId,
           idempotencyKey,
@@ -1571,7 +1585,7 @@ async function handleApi(req, res, url) {
     const result = await runScan(true, {
       requestId: req.requestId,
       idempotencyKey: key,
-      idempotencyFingerprint: requestFingerprint("scan", { method: "LIVE", version: BASELINE_DECISION_VERSION })
+      idempotencyFingerprint: requestFingerprint("scan", { method: "LIVE", version: ACTIVE_DECISION_VERSION })
     });
     return send(res, result.conflict ? 409 : 200, result);
   }

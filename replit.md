@@ -39,7 +39,8 @@ npm run db:push
 
 - `server.js`: HTTP API, DexScreener provider boundary, automatic scan scheduler, and paper-trade logic.
 - `db.js`: Prisma repository layer, LIVE-only cleanup, watchlist events, paper trades, scan runs, and immutable provider observations.
-- `radar-core.js`: pure baseline-v1 reason-code and count-reconciliation helpers, plus deferred phase2-v1 pair-selection and market-quality helpers.
+- `radar-core.js`: versioned baseline-v1 comparison helpers and active phase2-v1 market-quality decision helpers with count reconciliation.
+- `solana-rpc-pool.js`: isolated Solana RPC pool with provider rotation, circuit cooldowns, failover telemetry, and safe health summaries.
 - `prisma/schema.prisma`: PostgreSQL schema for live tokens, signals, watchlists, paper trading, scan observability, and `TokenObservation` lineage rows.
 - `public/`: responsive research UI.
 
@@ -62,7 +63,7 @@ The current Radar board is a fail-closed research filter, not a validated predic
 - source-specific discovery denominators and `tokensPersisted`;
 - one immutable `TokenObservation` per examined provider token/pair with source endpoint, request ID, response hash, timestamps, market windows, and quality reasons.
 
-If a provider or security scan fails, the last known good Radar board remains visible. A filtered scan persists its observations and audit record without replacing the board. `baseline-v1` intentionally leaves Radar, opportunity, flow, risk, and confidence fields as `UNKNOWN` until later scoring and outcome phases.
+If a provider or security scan fails, the last known good Radar board remains visible. A filtered scan persists its observations and audit record without replacing the board. `phase2-v1` intentionally leaves Radar, opportunity, flow, risk, and confidence fields as `UNKNOWN` until later scoring and outcome phases.
 
 ## Phase 1 discovery and observations
 
@@ -92,13 +93,13 @@ If a provider or security scan fails, the last known good Radar board remains vi
 
 ## Phase 0 active baseline
 
-Live scans use the immutable `baseline-v1` decision contract. The accepted board preserves the current hard-filter behavior: renounced mint and freeze authorities, largest account at or below 80% of supply, available price, liquidity of at least $10,000, positive provider-reported 24-hour change, and no CTO flag. Every candidate is classified as accepted, rejected, or unresolved, and the three outcome counts reconcile exactly.
+Live scans use the immutable `phase2-v1` decision contract. The active board requires the baseline security and market gates plus liquidity-to-market-cap ratio, estimated $100 entry impact, volume-to-liquidity ratio, pool age, and market-data freshness. `baseline-v1` remains recorded as a shadow comparison so changes are explainable. Every candidate is classified as accepted, rejected, or unresolved, and the three outcome counts reconcile exactly.
 
 Phase 2 market-quality evidence may be captured in observations for later work, but it does not change the Phase 0 accepted board.
 
 ## Deferred Phase 2 security and market-quality evidence
 
-The code retains a versioned `phase2-v1` contract for later activation while preserving `baseline-v1` as the active decision. Security verification already records parsed supported SPL mint evidence, positive supply, complete largest-account data, RPC slot context, and internally valid numeric amounts. Missing, malformed, partial, or stale RPC evidence remains `UNVERIFIED` and fails closed; an unsupported account type is `REJECTED`.
+Security verification records parsed supported SPL mint evidence, positive supply, complete largest-account data, RPC slot context, and internally valid numeric amounts. Missing, malformed, partial, or stale RPC evidence remains `UNVERIFIED` and fails closed; an unsupported account type is `REJECTED`. Market-quality blockers and unknowns are included in the active rejection report and immutable scan observations.
 
 Security observations identify `SPL_TOKEN` versus `TOKEN_2022`, retain reviewed Token-2022 extensions, and expose warnings for transfer-fee, transfer-hook, permanent-delegate, default-state, non-transferable, confidential-transfer, and metadata-pointer extensions. RPC evidence includes commitment, observation time, response/request counts, and per-response slot contexts.
 
