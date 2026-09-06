@@ -46,6 +46,7 @@ const {
   validateProviderPairFeed,
   PROVIDER_SCHEMA_VERSION
 } = require("./radar-core");
+const { createSolanaRpcPool } = require("./solana-rpc-pool");
 
 const PORT = Number(process.env.PORT || 5000);
 const ROOT = __dirname;
@@ -351,256 +352,19 @@ const rpcConfiguration = {
   acceptedBeforeLimit: configuredRpc.accepted.length,
   rejected: configuredRpc.rejected
 };
-const RPC_FAILURE_THRESHOLD = 2;
-const RPC_COOLDOWN_MS = 30_000;
-const RPC_MAX_ATTEMPTS_PER_ENDPOINT = 2;
-const rpcHealth = new Map();
-let rpcRoundRobin = 0;
-let rpcInFlight = 0;
-const rpcWaiters = [];
-
-function rpcEndpointState(endpoint) {
-  const state = rpcHealth.get(endpoint) || {
-    failures: 0, openedAt: 0, lastStatus: null, lastFailureAt: null, lastSuccessAt: null
-  };
-  if (state.openedAt && Date.now() - state.openedAt >= RPC_COOLDOWN_MS) {
-    state.openedAt = 0;
-    state.failures = 0;
-  }
-  rpcHealth.set(endpoint, state);
-  return state;
-}
-
-function rpcEndpointCandidates() {
-  const healthy = SOLANA_RPC_URLS.filter(endpoint => !rpcEndpointState(endpoint).openedAt);
-  const pool = healthy.length
-    ? healthy
-    : [...SOLANA_RPC_URLS].sort((left, right) => rpcEndpointState(left).openedAt - rpcEndpointState(right).openedAt).slice(0, 1);
-  if (!pool.length) return [];
-  const offset = rpcRoundRobin++ % pool.length;
-  return [...pool.slice(offset), ...pool.slice(0, offset)];
-}
-
-function rpcEndpointLabel(endpoint) {
-  try {
-    return new URL(endpoint).hostname;
-  } catch {
-    return "invalid-endpoint";
-  }
-}
-
-function rpcProviderLabel(endpoint) {
-  return rpcProviderNames.get(endpoint) || rpcEndpointLabel(endpoint);
-}
-
-function isRetryableRpcError(error) {
-  const code = Number(error?.code);
-  const message = String(error?.message || error || "");
-  return [-32004, -32005, -32009].includes(code)
-    || /rate.?limit|too many requests|quota|temporar|overload|server busy|try again/i.test(message);
-}
-
-function recordRpcFailure(endpoint, status = null) {
-  const state = rpcEndpointState(endpoint);
-  state.failures += 1;
-  state.lastStatus = status;
-  state.lastFailureAt = new Date().toISOString();
-  if (state.failures >= RPC_FAILURE_THRESHOLD) state.openedAt = Date.now();
-}
-
-function recordRpcSuccess(endpoint) {
-  rpcHealth.set(endpoint, {
-    failures: 0,
-    openedAt: 0,
-    lastStatus: null,
-    lastFailureAt: rpcEndpointState(endpoint).lastFailureAt,
-    lastSuccessAt: new Date().toISOString()
-  });
-}
-
-function rpcRetryDelay(response, attempt) {
-  const retryAfter = Number(response?.headers?.get("retry-after"));
-  return Number.isFinite(retryAfter) && retryAfter >= 0
-    ? Math.min(2_000, retryAfter * 1_000)
-    : Math.min(2_000, 250 * (2 ** attempt));
-}
-
-function rpcHealthSummary() {
-  return {
-    source: rpcConfiguration.source,
-    fallbackUsed: rpcConfiguration.fallbackUsed,
-    acceptedBeforeLimit: rpcConfiguration.acceptedBeforeLimit,
-    rejectedConfigurationEntries: rpcConfiguration.rejected,
-    configuredEndpoints: SOLANA_RPC_URLS.length,
-    endpoints: SOLANA_RPC_URLS.map(endpoint => {
-      const state = rpcEndpointState(endpoint);
-      return {
-        provider: rpcProviderLabel(endpoint),
-        endpoint: rpcEndpointLabel(endpoint),
-        failures: state.failures,
-        circuitOpen: Boolean(state.openedAt),
-        lastStatus: state.lastStatus,
-        lastFailureAt: state.lastFailureAt,
-        lastSuccessAt: state.lastSuccessAt
-      };
-    })
-  };
-}
-
-async function acquireRpcSlot() {
-  if (rpcInFlight < 1) {
-    rpcInFlight += 1;
-    return;
-  }
-  await new Promise(resolve => rpcWaiters.push(resolve));
-  rpcInFlight += 1;
-}
-
-function releaseRpcSlot() {
-  rpcInFlight -= 1;
-  rpcWaiters.shift()?.();
-}
-
-async function solanaRpc(method, params) {
-  await acquireRpcSlot();
-  try {
-    let lastError;
-    const tried = [];
-    for (const endpoint of rpcEndpointCandidates()) {
-      tried.push(rpcEndpointLabel(endpoint));
-      for (let attempt = 0; attempt < RPC_MAX_ATTEMPTS_PER_ENDPOINT; attempt += 1) {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
-        try {
-          const response = await fetch(endpoint, {
-            method: "POST",
-            signal: controller.signal,
-            headers: { "Content-Type": "application/json", Accept: "application/json" },
-            body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params })
-          });
-          if (response.status === 429 || response.status >= 500) {
-            lastError = new Error(`Solana RPC HTTP ${response.status} at ${rpcEndpointLabel(endpoint)}`);
-            lastError.status = response.status;
-            recordRpcFailure(endpoint, response.status);
-            if (attempt + 1 < RPC_MAX_ATTEMPTS_PER_ENDPOINT) {
-              await new Promise(resolve => setTimeout(resolve, rpcRetryDelay(response, attempt)));
-            }
-            continue;
-          }
-          if (!response.ok) {
-            lastError = new Error(`Solana RPC HTTP ${response.status} at ${rpcEndpointLabel(endpoint)}`);
-            lastError.status = response.status;
-            recordRpcFailure(endpoint, response.status);
-            break;
-          }
-          const payload = await response.json();
-          if (payload.error) {
-            lastError = new Error(payload.error.message || "Solana RPC request failed");
-            lastError.status = payload.error.code || null;
-            recordRpcFailure(endpoint, lastError.status);
-            if (isRetryableRpcError(payload.error) && attempt + 1 < RPC_MAX_ATTEMPTS_PER_ENDPOINT) {
-              await new Promise(resolve => setTimeout(resolve, rpcRetryDelay(response, attempt)));
-              continue;
-            }
-            break;
-          }
-          recordRpcSuccess(endpoint);
-          return payload.result;
-        } catch (error) {
-          if (error.name === "AbortError") error.message = `Solana RPC timeout at ${rpcEndpointLabel(endpoint)}`;
-          lastError = error;
-          if (error.status == null) recordRpcFailure(endpoint, null);
-          if (attempt + 1 < RPC_MAX_ATTEMPTS_PER_ENDPOINT) {
-            await new Promise(resolve => setTimeout(resolve, 250 * (2 ** attempt)));
-          }
-        } finally {
-          clearTimeout(timeout);
-        }
-      }
-    }
-    throw lastError || new Error(`No Solana RPC endpoint responded. Tried: ${tried.join(", ")}`);
-  } finally {
-    releaseRpcSlot();
-  }
-}
-
-async function solanaRpcBatch(requests, signal) {
-  await acquireRpcSlot();
-  try {
-    let lastError;
-    const tried = [];
-    for (const endpoint of rpcEndpointCandidates()) {
-      tried.push(rpcEndpointLabel(endpoint));
-      for (let attempt = 0; attempt < RPC_MAX_ATTEMPTS_PER_ENDPOINT; attempt += 1) {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 5_000);
-        try {
-          const response = await fetch(endpoint, {
-            method: "POST",
-            signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
-            headers: { "Content-Type": "application/json", Accept: "application/json" },
-            body: JSON.stringify(requests)
-          });
-          if (response.status === 429 || response.status >= 500) {
-            lastError = new Error(`Solana RPC HTTP ${response.status} at ${rpcEndpointLabel(endpoint)}`);
-            lastError.status = response.status;
-            recordRpcFailure(endpoint, response.status);
-            if (attempt + 1 < RPC_MAX_ATTEMPTS_PER_ENDPOINT) {
-              await new Promise(resolve => setTimeout(resolve, rpcRetryDelay(response, attempt)));
-            }
-            continue;
-          }
-          if (!response.ok) {
-            lastError = new Error(`Solana RPC HTTP ${response.status} at ${rpcEndpointLabel(endpoint)}`);
-            lastError.status = response.status;
-            recordRpcFailure(endpoint, response.status);
-            break;
-          }
-          const payload = await response.json();
-          if (!Array.isArray(payload)) {
-            lastError = new Error(`Solana RPC batch response was invalid at ${rpcEndpointLabel(endpoint)}`);
-            recordRpcFailure(endpoint, null);
-            break;
-          }
-          const expectedIds = new Set(requests.map(request => String(request.id)));
-          const responseIds = new Set(payload.map(responseItem => String(responseItem?.id)));
-          const retryableError = payload
-            .map(responseItem => responseItem?.error)
-            .find(error => isRetryableRpcError(error));
-          if (responseIds.size < expectedIds.size || [...expectedIds].some(id => !responseIds.has(id))) {
-            lastError = new Error(`Solana RPC batch response was incomplete at ${rpcEndpointLabel(endpoint)}`);
-            recordRpcFailure(endpoint, null);
-            break;
-          }
-          if (retryableError) {
-            lastError = new Error(retryableError.message || "Solana RPC provider rate limit.");
-            lastError.status = retryableError.code || null;
-            recordRpcFailure(endpoint, lastError.status);
-            if (attempt + 1 < RPC_MAX_ATTEMPTS_PER_ENDPOINT) {
-              await new Promise(resolve => setTimeout(resolve, rpcRetryDelay(response, attempt)));
-            }
-            continue;
-          }
-          recordRpcSuccess(endpoint);
-          return payload;
-        } catch (error) {
-          if (signal?.aborted) throw new Error("Solana RPC request aborted by scan deadline.");
-          if (error.name === "AbortError") error.message = `Solana RPC timeout at ${rpcEndpointLabel(endpoint)}`;
-          lastError = error;
-          if (error.status == null) recordRpcFailure(endpoint, null);
-          if (attempt + 1 < RPC_MAX_ATTEMPTS_PER_ENDPOINT) {
-            await new Promise(resolve => setTimeout(resolve, 250 * (2 ** attempt)));
-          }
-        } finally {
-          clearTimeout(timeout);
-        }
-      }
-    }
-    throw lastError || new Error(`No Solana RPC endpoint responded. Tried: ${tried.join(", ")}`);
-  } finally {
-    releaseRpcSlot();
-  }
-}
+const rpcPool = createSolanaRpcPool({
+  endpoints: SOLANA_RPC_URLS.map(url => ({ url, provider: rpcProviderNames.get(url) })),
+  timeoutMs: 5_000
+});
+const rpcHealthSummary = () => ({
+  source: rpcConfiguration.source,
+  fallbackUsed: rpcConfiguration.fallbackUsed,
+  acceptedBeforeLimit: rpcConfiguration.acceptedBeforeLimit,
+  rejectedConfigurationEntries: rpcConfiguration.rejected,
+  ...rpcPool.summary()
+});
+const solanaRpc = (method, params) => rpcPool.request(method, params);
+const solanaRpcBatch = (requests, signal) => rpcPool.batch(requests, signal);
 
 function unverifiedSecurity(message, {
   poolEvidence = {},
@@ -1001,6 +765,14 @@ function timestampMs(value) {
     return Number.isFinite(numericValue) ? numericValue : NaN;
   }
   return Date.parse(String(value || ""));
+}
+
+function providerEndpointLabel(endpoint) {
+  try {
+    return new URL(endpoint).hostname;
+  } catch {
+    return "invalid-endpoint";
+  }
 }
 
 function providerHealthFor(endpoint) {
@@ -1493,7 +1265,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
          invalid_feed_reason_counts: invalidFeedReasonCounts,
          rpc_failure_reasons: [...rpcFailureReasons],
          provider_health: Object.fromEntries([...providerHealth.entries()].map(([endpoint, health]) => [
-           rpcEndpointLabel(endpoint),
+           providerEndpointLabel(endpoint),
            { failures: health.failures, circuitOpen: Boolean(health.openedAt), lastStatus: health.lastStatus }
          ]))
          ,
