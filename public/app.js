@@ -56,18 +56,49 @@ const nextScanLabel = () => {
 function toast(message, error = false) { const el = document.createElement("div"); el.className = `toast ${error ? "error" : ""}`; el.textContent = message; document.querySelector("#toast-region").appendChild(el); setTimeout(() => el.remove(), 3500); }
 async function api(path, options = {}) { const response = await fetch(path, { headers: { "Content-Type":"application/json" }, ...options }); const data = await response.json(); if (!response.ok) throw new Error(data.error || "Request failed"); return data; }
 
+function tickerStrip() {
+  const items = snapshot?.tokens?.slice(0, 12) || [];
+  const tickerItems = items.length
+    ? items.map(item => {
+      const change = String(item.priceChange || "UNKNOWN");
+      const positive = !change.startsWith("-");
+      return `<span class="ticker-item"><strong>${esc(item.symbol)}</strong><small>${esc(item.price || "UNKNOWN")}</small><b class="${positive ? "positive" : "negative"}">${esc(change)}</b></span>`;
+    })
+    : ["SOLANA", "DEXSCREENER", "SECURITY", "LIQUIDITY", "MOMENTUM", "RPC", "AUDIT", "NO SIGNAL"].map(symbol => `<span class="ticker-item ticker-muted"><strong>${symbol}</strong><small>UNKNOWN</small><b>—</b></span>`);
+  return `<div class="ticker-strip"><div class="ticker-track">${tickerItems.join("")}${tickerItems.join("")}</div></div>`;
+}
+
+function terminalNavItem([id, , label]) {
+  return `<button class="terminal-nav-item ${activePage === id ? "active" : ""}" onclick="go('${id}')">${label}</button>`;
+}
+
+function modeTab(id, label, meta) {
+  return `<button class="mode-tab ${activePage === id ? "active" : ""}" onclick="go('${id}')"><span>${label}</span><small>${meta}</small></button>`;
+}
+
 function layout(content) {
-  const rendered = `<div class="app-shell">
-    <aside class="sidebar">
-      <div class="brand"><div class="brand-mark">20</div><div><div class="brand-name">Solana Radar</div><div class="brand-sub">Intelligence OS</div></div></div>
-       ${NAV_GROUPS.map(([group, items]) => `<div class="nav-section">${group}</div>${items.map(navItem).join("")}`).join("")}
-       <div class="sidebar-bottom"><div class="mode-pill"><span class="mode-dot live"></span>LIVE PROVIDER</div><div class="disclaimer">Baseline evidence only. Predictive scores are not available yet; this is not financial advice.</div></div>
-    </aside>
-    <main class="content">
-       <header class="topbar"><div class="topbar-left"><span class="eyebrow">Solana 20× Radar</span><span class="scan-status"><span class="live-dot"></span>DexScreener LIVE · ${snapshot?.lastScan ? "updated just now" : "awaiting first scan"} · <span id="next-scan-label">${nextScanLabel()}</span></span></div><div class="top-actions"><input id="global-search" class="search" placeholder="Search token or mint…" /><button class="icon-button" title="Alerts" onclick="go('alerts')">◔</button><button class="icon-button" title="Settings" onclick="go('settings')">⋯</button></div></header>
-      <div class="mobile-nav">${NAV.map(navItem).join("")}</div>
-      <div class="main">${content}</div>
-    </main>
+  const report = snapshot?.system?.securityFilter || {};
+  const quality = report.qualityStatus || snapshot?.system?.lastScanQuality || "NOT RUN";
+  const qualityClass = quality === "FULL" ? "terminal-good" : quality === "PARTIAL" ? "terminal-warn" : "terminal-muted";
+  const precision = "UNKNOWN";
+  const model = report.decisionVersion || "baseline-v1";
+  const rendered = `<div class="app-shell terminal-shell">
+    ${tickerStrip()}
+    <header class="terminal-header">
+      <div class="terminal-brand"><div class="terminal-brand-mark">◉</div><div><strong>MARKET RADAR 4.0</strong><span>REAL-TIME · ASYMMETRIC INTELLIGENCE</span></div></div>
+      <div class="terminal-readouts">
+        <div><span>MARKET REGIME</span><strong class="terminal-good">UNKNOWN</strong></div>
+        <div><span>SYSTEM HEALTH</span><strong class="${qualityClass}">${esc(quality)}</strong></div>
+        <div><span>KILL SWITCH</span><strong class="terminal-good">NORMAL</strong></div>
+        <div class="precision-readout"><span>PRECISION@10</span><strong>${precision}</strong><small>uncalibrated · baseline only</small></div>
+        <div class="model-readout"><span>ACTIVE DECISION</span><strong>${esc(model)}</strong><small>predictive scores abstain</small></div>
+      </div>
+      <div class="terminal-actions"><input id="global-search" class="search" placeholder="SEARCH TOKEN / MINT…" /><button class="terminal-icon" title="Alerts" onclick="go('alerts')">!</button><button class="terminal-scan" onclick="scan()">◎ SCAN</button><button class="terminal-icon" title="Settings" onclick="go('settings')">⋯</button></div>
+    </header>
+    <div class="terminal-disclaimer">STRUCTURAL ANALYSIS ONLY — NOT FINANCIAL ADVICE. BASELINE-V1 IS A SAFETY FILTER, NEVER A PROFIT PROBABILITY. ENGINES ABSTAIN WHEN EVIDENCE IS INSUFFICIENT.</div>
+    <nav class="mode-tabs">${modeTab("dashboard", "REAL PROJECT", "baseline board")}${modeTab("health", "REACTIVATION", "system health")}${modeTab("radar", "SPECULATIVE MEME", "candidate radar")}</nav>
+    <nav class="terminal-nav-strip">${NAV.filter(([id]) => !["dashboard", "health", "radar"].includes(id)).map(terminalNavItem).join("")}</nav>
+    <main class="content"><div class="main">${content}</div></main>
   </div>`;
   app.innerHTML = rendered.replaceAll("30s", "15s").replaceAll("30 seconds", "15 seconds");
   document.querySelector("#global-search")?.addEventListener("keydown", e => { if (e.key === "Enter") { const query = e.target.value.trim().toLowerCase(); const found = snapshot.tokens.find(t => t.symbol.toLowerCase() === query || t.name.toLowerCase().includes(query) || t.mint.toLowerCase() === query); if (found) showToken(found.mint); else toast("No matching token in the current provider dataset.", true); } });
@@ -107,7 +138,12 @@ function tokenRow(item, index, actions = true) { return `<tr>
   <td class="rank">0${index + 1}</td><td><button class="token-link" onclick="showToken('${encodeURIComponent(item.mint)}')" aria-label="Open details for ${esc(item.symbol)}"><div class="token-cell">${tokenLogo(item)}<div class="token-meta"><strong>${esc(item.symbol)}</strong><span>${esc(item.name)}</span></div></div></button></td>
   <td>${esc(item.age)}</td><td>${compact(item.marketCap)}</td><td>${compact(item.liquidity)}</td><td class="score">${item.radar ?? "UNKNOWN"}</td><td>${item.opportunity ?? "UNKNOWN"}</td><td>${item.smartMoney ?? "UNKNOWN"}</td><td class="${String(item.priceChange).startsWith("-") ? "negative":"positive"}">${esc(item.priceChange)}</td><td>${statusBadge(item)}</td>
   ${actions ? `<td>${pnlMarkup(item)}</td><td>${tokenActions(item)}</td>` : ""}</tr>`; }
-function tokenTable(items, title = "Accepted baseline candidates", subtitle = "Current provider evidence · baseline-v1 hard-filter contract") { return `<section class="card page-panel"><div class="card-head"><div><div class="card-title">${title}</div><div class="card-kicker">${subtitle}</div></div><button class="btn btn-small" onclick="go('radar')">View Radar ↗</button></div><div class="table-wrap"><table><thead><tr><th>#</th><th>Token</th><th>Age</th><th>MC</th><th>Liquidity</th><th>Radar (not calculated)</th><th>Opportunity</th><th>Flow</th><th>24h</th><th>Status</th><th>P/L</th><th>Actions</th></tr></thead><tbody>${items.map(tokenRow).join("")}</tbody></table></div><div class="data-note">LIVE DATA · Values reflect the latest DexScreener response. Predictive scores remain UNKNOWN until a versioned scoring engine is introduced.</div></section>`; }
+function tokenTable(items, title = "Accepted baseline candidates", subtitle = "Current provider evidence · baseline-v1 hard-filter contract") {
+  const body = items.length
+    ? `<div class="table-wrap"><table><thead><tr><th>#</th><th>Token</th><th>Age</th><th>MC</th><th>Liquidity</th><th>Radar (not calculated)</th><th>Opportunity</th><th>Flow</th><th>24h</th><th>Status</th><th>P/L</th><th>Actions</th></tr></thead><tbody>${items.map(tokenRow).join("")}</tbody></table></div>`
+    : `<div class="terminal-empty"><div class="terminal-empty-icon">∅</div><strong>NO SIGNAL</strong><span>No candidate passed the active baseline gates.</span><small>RPC or security evidence is unresolved, so the board is preserved and no entry is available.</small><button class="btn btn-small btn-quiet" onclick="go('health')">Inspect system health ↗</button></div>`;
+  return `<section class="card page-panel terminal-table-panel"><div class="card-head"><div><div class="card-title">${title}</div><div class="card-kicker">${subtitle}</div></div><button class="btn btn-small" onclick="go('radar')">View Radar ↗</button></div>${body}<div class="data-note">LIVE DATA · Values reflect the latest DexScreener response. Predictive scores remain UNKNOWN until a versioned scoring engine is introduced.</div></section>`;
+}
 function auditValue(value) { return value == null || value === "" ? "UNKNOWN" : esc(value); }
 function auditAge(value) { return value == null ? "UNKNOWN" : `${Number(value).toLocaleString("en-US")}ms`; }
 function baselineAuditPanel(report = {}, run = {}, compactMode = false) {
@@ -219,10 +255,10 @@ function liveDashboard() {
   const feed = snapshot.alerts.length
     ? snapshot.alerts.map(alert => `<div class="alert"><span class="alert-mark mark-${alert.tone}"></span><div class="alert-copy"><div class="alert-title">${esc(alert.type)}<span class="alert-token">${esc(alert.token)}</span></div><div class="alert-text">${esc(alert.text)}</div></div><span class="alert-time">${esc(alert.time)}</span></div>`).join("")
     : `<div class="empty"><strong>No live alerts yet</strong><span>Alerts will appear after provider evidence is available.</span></div>`;
-  return head("Command center", "Research the evidence before the crowd.", "A baseline view of live DexScreener data, fail-closed Solana security checks, virtual execution, and scan auditability.", `<button class="btn btn-primary" onclick="scan()">↻ Scan now</button>`) +
+  return head("Command center / baseline board", "Research the evidence before the crowd.", "A live evidence cockpit for Solana discovery. Security failures remain unresolved, scores abstain, and the board never advances on missing proof.", `<button class="btn btn-primary" onclick="scan()">◎ Scan now</button>`) +
     `<div class="grid metrics">${stat("Accepted candidates", sorted.length, "baseline-v1 gates passed", "◈", sorted.length ? "metric-positive" : "")}${stat("Whale net flow", money(latestWhale?.netFlow), "provider evidence only", "↗", latestWhale ? "metric-positive" : "")}${stat("Virtual equity", money(portfolio.equity), `${portfolio.roi >= 0 ? "+" : ""}${portfolio.roi.toFixed(2)}% total ROI`, "◫", portfolio.roi >= 0 ? "metric-positive" : "metric-negative")}${stat("Risk alerts", riskAlerts, "requiring review", "!", riskAlerts ? "metric-negative" : "")}</div>` +
-     `${snapshot.alerts.some(alert => alert.type === "POTENTIAL TOKEN") ? `<section class="potential-banner"><div class="potential-icon">↗</div><div><strong>Potential token detected</strong><span>Baseline-filtered candidate found. Open Alerts for the full evidence-based review.</span></div><button class="btn btn-small btn-primary" onclick="go('alerts')">View alert</button></section>` : ""}<div class="grid main-grid">${tokenTable(sorted.slice(0, 5))}<div class="card activity-card"><div class="card-head"><div><div class="card-title">Signal feed</div><div class="card-kicker">Recent live observations</div></div><span class="badge badge-blue">LIVE</span></div>${feed}</div></div>` +
-      `${whaleChart()}${baselineAuditPanel(snapshot.system?.securityFilter || {}, snapshot.scanRuns?.[0] || {}, true)}<div class="grid section-grid"><div class="card insight-card"><div class="insight-label">Score engine</div><div class="insight-number">UNKNOWN</div><div class="progress"><span style="width:0%"></span></div><div class="insight-note">Radar, opportunity, flow, risk, and confidence are not calculated in Phase 0.</div></div><div class="card insight-card"><div class="insight-label">Scan health</div><div class="insight-number">${snapshot.lastScan ? "READY" : "IDLE"}</div><div class="progress"><span style="width:${snapshot.lastScan ? 100 : 35}%;background:var(--green)"></span></div><div class="insight-note">Server-side 15s scheduler · ${snapshot.lastScan ? `last completed ${new Date(snapshot.lastScan).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "run a scan to initialize"}</div></div></div>`;
+      `${snapshot.alerts.some(alert => alert.type === "POTENTIAL TOKEN") ? `<section class="potential-banner"><div class="potential-icon">↗</div><div><strong>Potential token detected</strong><span>Baseline-filtered candidate found. Open Alerts for the full evidence-based review.</span></div><button class="btn btn-small btn-primary" onclick="go('alerts')">View alert</button></section>` : ""}<div class="grid main-grid terminal-board-grid">${tokenTable(sorted.slice(0, 5))}${terminalInspector(selectedToken || sorted[0])}</div><div class="card activity-card"><div class="card-head"><div><div class="card-title">Signal feed</div><div class="card-kicker">Recent live observations</div></div><span class="badge badge-blue">LIVE</span></div>${feed}</div>` +
+       `${whaleChart()}${baselineAuditPanel(snapshot.system?.securityFilter || {}, snapshot.scanRuns?.[0] || {}, true)}<div class="grid section-grid"><div class="card insight-card"><div class="insight-label">Score engine</div><div class="insight-number">UNKNOWN</div><div class="progress"><span style="width:0%"></span></div><div class="insight-note">Radar, opportunity, flow, risk, and confidence are not calculated in Phase 0.</div></div><div class="card insight-card"><div class="insight-label">Scan health</div><div class="insight-number">${snapshot.lastScan ? "READY" : "IDLE"}</div><div class="progress"><span style="width:${snapshot.lastScan ? 100 : 35}%;background:var(--green)"></span></div><div class="insight-note">Server-side 15s scheduler · ${snapshot.lastScan ? `last completed ${new Date(snapshot.lastScan).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "run a scan to initialize"}</div></div></div>`;
 }
 function setRadarSort(value) { radarSort = value; render(); }
 function setRadarStatus(value) { radarStatus = value; render(); }
@@ -245,6 +281,14 @@ function radar() {
     filterNotice +
     baselineAuditPanel(report || {}, snapshot.scanRuns?.[0] || {}) +
      `<section class="card page-panel"><div class="toolbar"><label class="filter-control">Status <select onchange="setRadarStatus(this.value)"><option value="all" ${radarStatus === "all" ? "selected" : ""}>All statuses</option><option value="provider" ${radarStatus === "provider" ? "selected" : ""}>Provider</option><option value="cto flag" ${radarStatus === "cto flag" ? "selected" : ""}>CTO flag</option></select></label><label class="filter-control">Sort <select onchange="setRadarSort(this.value)"><option value="radar" ${radarSort === "radar" ? "selected" : ""}>Baseline order</option><option value="opportunity" ${radarSort === "opportunity" ? "selected" : ""}>Opportunity (UNKNOWN)</option><option value="risk" ${radarSort === "risk" ? "selected" : ""}>Risk (UNKNOWN)</option><option value="smart" ${radarSort === "smart" ? "selected" : ""}>Flow (UNKNOWN)</option><option value="newest" ${radarSort === "newest" ? "selected" : ""}>Newest first</option></select></label><span class="filter">${items.length} of ${snapshot.tokens.length} tokens</span></div><div class="table-wrap"><table><thead><tr><th>#</th><th>Token</th><th>Age</th><th>MC</th><th>Liquidity</th><th>Radar (not calculated)</th><th>Opportunity</th><th>Flow</th><th>Momentum</th><th>Hype</th><th>Risk</th><th>Confidence</th><th>Status</th><th>P/L</th><th>Actions</th></tr></thead><tbody>${items.map((item, i) => { return `<tr><td class="rank">${String(i+1).padStart(2,"0")}</td><td><button class="token-link" onclick="showToken('${encodeURIComponent(item.mint)}')" aria-label="Open details for ${esc(item.symbol)}"><div class="token-cell">${tokenLogo(item)}<div class="token-meta"><strong>${esc(item.symbol)}</strong><span>${esc(item.name)}</span></div></div></button></td><td>${esc(item.age)}</td><td>${compact(item.marketCap)}</td><td>${compact(item.liquidity)}</td><td class="score">${item.radar ?? "UNKNOWN"}</td><td>${item.opportunity ?? "UNKNOWN"}</td><td>${item.smartMoney ?? "UNKNOWN"}</td><td>${item.momentum ?? "UNKNOWN"}</td><td>${item.hype ?? "UNKNOWN"}</td><td class="${item.risk > 55 ? "negative":""}">${item.risk ?? "UNKNOWN"}</td><td>${item.confidence ?? "UNKNOWN"}${item.confidence != null ? "%" : ""}</td><td>${statusBadge(item)}</td><td>${pnlMarkup(item)}</td><td>${tokenActions(item)}</td></tr>`; }).join("")}</tbody></table></div><div class="data-note">Showing ${items.length} accepted baseline provider records. Score columns remain UNKNOWN until a versioned scoring engine exists.</div></section>`;
+}
+function terminalInspector(item) {
+  if (!item) {
+    return `<aside class="card terminal-inspector"><div class="inspector-kicker">SELECTED CANDIDATE</div><div class="inspector-empty"><div class="terminal-empty-icon">∅</div><strong>NO ACTIVE SELECTION</strong><span>There is no accepted candidate to inspect.</span><small>Security verification is unresolved. The system will not manufacture a score, opportunity, or entry signal.</small></div><div class="inspector-rule"><span>ENTRY STATUS</span><strong class="terminal-warn">ENTRY NOT AVAILABLE</strong></div></aside>`;
+  }
+  const security = item.details?.security || {};
+  const entryReady = priceNumber(item.price) != null;
+  return `<aside class="card terminal-inspector"><div class="inspector-kicker">SELECTED CANDIDATE <span class="terminal-good">LIVE</span></div><div class="inspector-token">${tokenLogo(item, true)}<div><strong>${esc(item.symbol)}</strong><span>${esc(item.name)}</span></div><span class="inspector-status">${statusBadge(item)}</span></div><div class="inspector-metrics"><div><span>PRICE</span><strong>${esc(item.price || "UNKNOWN")}</strong></div><div><span>LIQUIDITY</span><strong>${compact(item.liquidity)}</strong></div><div><span>SECURITY</span><strong>${esc(security.status || "UNKNOWN")}</strong></div><div><span>RADAR</span><strong>UNKNOWN</strong></div></div><div class="inspector-rule"><span>ENTRY STATUS</span><strong class="${entryReady ? "terminal-good" : "terminal-warn"}">${entryReady ? "PAPER ONLY" : "ENTRY NOT AVAILABLE"}</strong></div><p class="inspector-copy">${esc(item.rationale || "Provider-backed rationale is not available.")}</p><div class="inspector-evidence"><span>EVIDENCE</span><strong>${item.details?.evidence?.length || 0} recorded observations</strong></div><button class="btn btn-small btn-quiet" onclick="showToken('${encodeURIComponent(item.mint)}')">Open full evidence ↗</button></aside>`;
 }
 const flowNumber = value => {
   const match = String(value || "").replace(/[$,]/g, "").match(/([+-]?\d+(?:\.\d+)?)([KMB]?)/i);
