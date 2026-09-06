@@ -271,6 +271,7 @@ model TokenObservation {
   featureSnapshot    RadarFeatureSnapshot?
   manipulationSnapshot ManipulationSnapshot?
   projectTractionSnapshot ProjectTractionSnapshot?
+  decisionSnapshots  RadarDecisionSnapshot[]
 
   @@index([mint, observedAt])
   @@index([pairAddress, observedAt])
@@ -356,6 +357,43 @@ model RadarFeatureSnapshot {
 
   @@index([mint, observedAt])
   @@index([pairAddress, observedAt])
+}
+
+model RadarDecisionSnapshot {
+  id                         String            @id @default(cuid())
+  observationId              String
+  mint                       String
+  pairAddress                String?
+  observedAt                 DateTime
+  decisionVersion            String
+  featureVersion             String
+  scorerBuildIdentifier      String
+  configurationHash          String
+  phase4aVersion              String?
+  phase4aConfigurationHash   String?
+  governanceVersion          String?
+  governanceConfigurationHash String?
+  rolloutMode                String
+  decisionState               String
+  radarScore                 Int?
+  opportunityScore           Int?
+  momentumScore              Int?
+  riskScore                  Int?
+  confidenceScore            Int?
+  components                 Json
+  radars                     Json
+  thresholds                Json
+  coefficients              Json
+  sourceSet                  Json
+  scoreReasons               Json
+  scoreWarnings              Json
+  scorecard                  Json
+  createdAt                  DateTime          @default(now())
+  observation                TokenObservation  @relation(fields: [observationId], references: [id], onDelete: Cascade)
+
+  @@unique([observationId, decisionVersion])
+  @@index([mint, observedAt])
+  @@index([decisionVersion, createdAt])
 }
 
 model WhaleActivityPoint {

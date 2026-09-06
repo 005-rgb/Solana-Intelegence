@@ -124,8 +124,15 @@ npm run db:push
   score remains the champion, Phase 4A is a non-alerting/non-trading challenger
   in `SHADOW`, and promotion stays blocked until the temporal holdout,
   completeness, security, precision, adverse-excursion, latency, and
-  explainability checks pass. Feature missingness and score drift are exposed
-  with the governance snapshot.
+  explainability and model-guardian checks pass. Feature missingness and score
+  drift are exposed with the governance snapshot. A missing guardian dimension
+  returns `REJECT_MODEL`; it cannot be inferred from score quality.
+- Each displayed candidate score is persisted as an immutable
+  `RadarDecisionSnapshot` linked to the scan's primary `TokenObservation`.
+  Snapshots retain decision/feature/configuration/build lineage, threshold and
+  coefficient configuration, source set, component scores, reasons, warnings,
+  and rollout mode. Historical decisions are loaded from these snapshots on
+  restart instead of relying only on mutable token JSON.
 
 The authoritative product specification is
 [`docs/integrated-radar-core-market-brain-prd.md`](docs/integrated-radar-core-market-brain-prd.md).

@@ -13,6 +13,7 @@ const {
   recordAlertsAtomic,
   createScanRun,
   recordTokenObservations,
+  recordDecisionSnapshots,
   readTokenHistory,
   readReactivationHistory,
   acquireScanLease,
@@ -1618,7 +1619,10 @@ async function runScan(manual = false, options = {}) {
     ]);
     clearTimeout(scanDeadline);
     lastFilterReport = scanResult.report;
-    if (scanRun?.id) await recordTokenObservations(scanResult.observations, scanRun.id);
+    if (scanRun?.id) {
+      await recordTokenObservations(scanResult.observations, scanRun.id);
+      await recordDecisionSnapshots(scanResult.tokens, scanRun.id);
+    }
     const hasAcceptedTokens = scanResult.tokens.length > 0;
     const completeScan = scanResult.report.qualityStatus === "FULL";
     if (completeScan && hasAcceptedTokens) {

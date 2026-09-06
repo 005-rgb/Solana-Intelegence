@@ -212,7 +212,8 @@ function phase4aMarkup(scorecard) {
       <div><strong>Negative / contradiction</strong><ul>${evidence([...(thesis.negativeEvidence || []), ...(thesis.contradictions || [])]) || "<li>UNKNOWN</li>"}</ul></div>
     </div>
     <div class="health-row"><span>Strongest failure reason</span><strong class="health-value">${esc(thesis.strongestFailureReason || "UNKNOWN")}</strong></div>
-    <div class="health-row"><span>Calibration governance</span><strong class="health-value">${esc(governance.mode || "UNKNOWN")} · champion ${esc(governance.champion?.version || "UNKNOWN")} · challenger ${esc(governance.challenger?.version || "UNKNOWN")}</strong></div>
+     <div class="health-row"><span>Calibration governance</span><strong class="health-value">${esc(governance.mode || "UNKNOWN")} · champion ${esc(governance.champion?.version || "UNKNOWN")} · challenger ${esc(governance.challenger?.version || "UNKNOWN")}</strong></div>
+     <div class="health-row"><span>Model guardian</span><strong class="health-value">${esc(governance.modelGuardian?.status || governance.promotion?.modelGuardian?.status || "UNKNOWN")} · ${esc((governance.modelGuardian?.failedChecks || governance.promotion?.modelGuardian?.failedChecks || []).slice(0, 3).join(" / ") || "all checks passed")}</strong></div>
     <div class="health-row"><span>Promotion gate</span><strong class="health-value">${esc(governance.promotion?.status || "UNKNOWN")} · ${esc((governance.promotion?.failedChecks || []).slice(0, 3).join(" / ") || "none")}</strong></div>
     <div class="data-note">Phase 4A is source-backed research governance. Missing comparables, catalysts, or regime evidence remain UNKNOWN; this is not a price target or probability.</div>
   </div>`;

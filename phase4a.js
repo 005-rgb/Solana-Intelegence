@@ -56,7 +56,8 @@ const GOVERNANCE_CONFIG = Object.freeze({
     "ADVERSE_EXCURSION",
     "LATENCY_BUDGET",
     "EXPLAINABLE_REASONS",
-    "TEMPORAL_HOLDOUT"
+    "TEMPORAL_HOLDOUT",
+    "MODEL_GUARDIAN"
   ]
 });
 
@@ -118,11 +119,43 @@ function calculateDrift(current = {}, reference = {}) {
   };
 }
 
+const MODEL_GUARDIAN_CHECKS = Object.freeze([
+  ["LEAKAGE_REVIEW", "leakageChecked"],
+  ["OVERFITTING_REVIEW", "overfittingChecked"],
+  ["SAMPLE_SIZE_REVIEW", "sampleSizeSufficient"],
+  ["OUT_OF_SAMPLE_REVIEW", "outOfSampleValidated"],
+  ["REGIME_ROBUSTNESS_REVIEW", "regimeRobust"],
+  ["ADVERSARIAL_ROBUSTNESS_REVIEW", "adversarialRobust"],
+  ["CALIBRATION_REVIEW", "calibrationValidated"],
+  ["DEGRADATION_REVIEW", "degradationWithinGuardrail"]
+]);
+
+function evaluateModelGuardian(input = {}) {
+  const guardian = input.modelGuardian && typeof input.modelGuardian === "object"
+    ? input.modelGuardian
+    : {};
+  const checks = MODEL_GUARDIAN_CHECKS.map(([code, key]) => ({
+    code,
+    passed: guardian[key] === true || input[key] === true
+  }));
+  const failed = checks.filter(check => !check.passed).map(check => check.code);
+  return {
+    status: failed.length ? "REJECT_MODEL" : "PASS",
+    passed: failed.length === 0,
+    checks,
+    failedChecks: failed,
+    reason: failed.length
+      ? "Promotion is blocked until the model guardian validates leakage, robustness, and degradation controls."
+      : "All model guardian checks passed."
+  };
+}
+
 function evaluatePromotionGate(input = {}) {
   const sampleSize = number(input.holdoutSampleSize) ?? 0;
   const precisionLift = number(input.precisionLift);
   const maeChange = number(input.maximumAdverseExcursionChange);
   const latencyChange = number(input.latencyIncreasePercent);
+  const modelGuardian = evaluateModelGuardian(input);
   const checks = [
     { code: "SECURITY_NOT_WEAKER", passed: input.securityNotWeaker === true },
     { code: "COMPLETENESS_NOT_WORSE", passed: input.completenessNotWorse === true },
@@ -130,7 +163,8 @@ function evaluatePromotionGate(input = {}) {
     { code: "ADVERSE_EXCURSION", passed: maeChange != null && maeChange <= GOVERNANCE_CONFIG.maximumMaeWorsening },
     { code: "LATENCY_BUDGET", passed: latencyChange != null && latencyChange <= GOVERNANCE_CONFIG.maximumLatencyIncreasePercent },
     { code: "EXPLAINABLE_REASONS", passed: input.explainableReasons === true },
-    { code: "TEMPORAL_HOLDOUT", passed: input.temporalHoldoutValidated === true && sampleSize >= GOVERNANCE_CONFIG.minimumHoldoutSample }
+    { code: "TEMPORAL_HOLDOUT", passed: input.temporalHoldoutValidated === true && sampleSize >= GOVERNANCE_CONFIG.minimumHoldoutSample },
+    { code: "MODEL_GUARDIAN", passed: modelGuardian.passed }
   ];
   const failed = checks.filter(check => !check.passed).map(check => check.code);
   return {
@@ -139,6 +173,7 @@ function evaluatePromotionGate(input = {}) {
     holdoutSampleSize: sampleSize,
     checks,
     failedChecks: failed,
+    modelGuardian,
     reason: failed.length ? "Promotion is blocked until every governance check passes." : "All configured checks passed; explicit approval is still required."
   };
 }
@@ -162,6 +197,7 @@ function buildCalibrationGovernance({ mode = "SHADOW", championVersion = "phase4
     thresholds: GOVERNANCE_CONFIG,
     drift: calculateDrift(currentMetrics, referenceMetrics),
     promotion: evaluatePromotionGate(gate),
+    modelGuardian: evaluateModelGuardian(gate),
     rollback: {
       available: true,
       target: championVersion,
@@ -426,6 +462,7 @@ module.exports = {
   GOVERNANCE_CONFIGURATION_HASH,
   calculateDrift,
   evaluatePromotionGate,
+  evaluateModelGuardian,
   buildCalibrationGovernance,
   evaluatePhase4A
 };

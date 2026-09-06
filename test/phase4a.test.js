@@ -153,8 +153,44 @@ test("promotion requires a temporal holdout and every safety guardrail", () => {
     securityNotWeaker: true,
     completenessNotWorse: true,
     explainableReasons: true,
-    temporalHoldoutValidated: true
+    temporalHoldoutValidated: true,
+    modelGuardian: {
+      leakageChecked: true,
+      overfittingChecked: true,
+      sampleSizeSufficient: true,
+      outOfSampleValidated: true,
+      regimeRobust: true,
+      adversarialRobust: true,
+      calibrationValidated: true,
+      degradationWithinGuardrail: true
+    }
   });
   assert.equal(eligible.status, "ELIGIBLE_PENDING_APPROVAL");
   assert.equal(eligible.eligible, true);
+});
+
+test("model guardian is fail-closed when any validation dimension is missing", () => {
+  const blocked = evaluatePromotionGate({
+    holdoutSampleSize: 100,
+    precisionLift: 0.1,
+    maximumAdverseExcursionChange: 0,
+    latencyIncreasePercent: 5,
+    securityNotWeaker: true,
+    completenessNotWorse: true,
+    explainableReasons: true,
+    temporalHoldoutValidated: true,
+    modelGuardian: {
+      leakageChecked: true,
+      overfittingChecked: true,
+      sampleSizeSufficient: true,
+      outOfSampleValidated: true,
+      regimeRobust: true,
+      adversarialRobust: true,
+      calibrationValidated: true
+    }
+  });
+  assert.equal(blocked.eligible, false);
+  assert.equal(blocked.modelGuardian.status, "REJECT_MODEL");
+  assert.ok(blocked.failedChecks.includes("MODEL_GUARDIAN"));
+  assert.ok(blocked.modelGuardian.failedChecks.includes("DEGRADATION_REVIEW"));
 });

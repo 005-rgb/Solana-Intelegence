@@ -35,7 +35,7 @@ function tokenData(item) {
   };
 }
 
-function fromToken(row, featureSnapshot = null) {
+function fromToken(row, featureSnapshot = null, decisionSnapshot = null) {
   const details = row.details && typeof row.details === "object" ? row.details : {};
   return {
     mint: row.mint,
@@ -63,7 +63,9 @@ function fromToken(row, featureSnapshot = null) {
     providerUrl: row.providerUrl,
     details: {
       ...details,
-      featureSnapshot: featureSnapshot || details.featureSnapshot || null
+      featureSnapshot: featureSnapshot || details.featureSnapshot || null,
+      scorecard: decisionSnapshot?.scorecard || details.scorecard || null,
+      decisionSnapshot: decisionSnapshot || details.decisionSnapshot || null
     },
     updatedAt: row.updatedAt.toISOString()
   };
@@ -273,6 +275,12 @@ async function readState(fallback) {
       orderBy: { observedAt: "desc" }
     })
     : [];
+  const decisionRows = dbTokens.length
+    ? await prisma.radarDecisionSnapshot.findMany({
+      where: { mint: { in: dbTokens.map(token => token.mint) } },
+      orderBy: { observedAt: "desc" }
+    })
+    : [];
   const latestManipulation = new Map();
   for (const row of manipulationRows) {
     if (!latestManipulation.has(row.mint)) {
@@ -329,6 +337,28 @@ async function readState(fallback) {
       });
     }
   }
+  const latestDecisions = new Map();
+  for (const row of decisionRows) {
+    if (!latestDecisions.has(row.mint)) {
+      latestDecisions.set(row.mint, {
+        id: row.id,
+        observationId: row.observationId,
+        observedAt: row.observedAt.toISOString(),
+        decisionVersion: row.decisionVersion,
+        featureVersion: row.featureVersion,
+        scorerBuildIdentifier: row.scorerBuildIdentifier,
+        configurationHash: row.configurationHash,
+        phase4aVersion: row.phase4aVersion,
+        phase4aConfigurationHash: row.phase4aConfigurationHash,
+        governanceVersion: row.governanceVersion,
+        governanceConfigurationHash: row.governanceConfigurationHash,
+        rolloutMode: row.rolloutMode,
+        decisionState: row.decisionState,
+        createdAt: row.createdAt.toISOString(),
+        scorecard: row.scorecard
+      });
+    }
+  }
 
   const tokens = dbTokens.filter(token => token.details?.security?.verified === true);
   const safeMints = new Set(tokens.map(token => token.mint));
@@ -369,7 +399,7 @@ async function readState(fallback) {
     nextScanAt: radar.nextScanAt?.getTime() || Date.now() + 15000,
     scanRunning: false,
     tokens: tokens.map(token => {
-      const item = fromToken(token, latestFeatures.get(token.mint));
+      const item = fromToken(token, latestFeatures.get(token.mint), latestDecisions.get(token.mint) || null);
       item.details.manipulationEvidence = latestManipulation.get(token.mint) || null;
       item.details.projectTraction = latestProjectTraction.get(token.mint) || null;
       return item;
@@ -710,7 +740,7 @@ async function findTradeByIdempotencyKey(idempotencyKey) {
 }
 
 async function recordTokenObservations(observations, scanRunId) {
-  if (!Array.isArray(observations) || !observations.length) return;
+  if (!Array.isArray(observations) || !observations.length) return [];
   await prisma.$transaction(async tx => {
     const created = [];
     for (const observation of observations) {
@@ -806,6 +836,77 @@ async function recordTokenObservations(observations, scanRunId) {
         }
       });
     }
+    return created;
+  });
+}
+
+async function recordDecisionSnapshots(decisions, scanRunId) {
+  if (!Array.isArray(decisions) || !decisions.length || !scanRunId) return [];
+  const candidates = decisions
+    .map(item => ({
+      mint: item?.mint,
+      pairAddress: item?.details?.pair?.address || item?.details?.pairAddress || null,
+      scorecard: item?.details?.scorecard
+    }))
+    .filter(item => item.mint && item.scorecard);
+  if (!candidates.length) return [];
+
+  const observations = await prisma.tokenObservation.findMany({
+    where: {
+      scanRunId,
+      OR: candidates.map(item => ({ mint: item.mint, pairAddress: item.pairAddress }))
+    },
+    orderBy: { observedAt: "desc" }
+  });
+  const observationByKey = new Map();
+  for (const observation of observations) {
+    const key = `${observation.mint}:${observation.pairAddress || ""}`;
+    if (!observationByKey.has(key)) observationByKey.set(key, observation);
+  }
+
+  return prisma.$transaction(async tx => {
+    const created = [];
+    for (const candidate of candidates) {
+      const scorecard = candidate.scorecard;
+      const observation = observationByKey.get(`${candidate.mint}:${candidate.pairAddress || ""}`);
+      if (!observation) continue;
+      try {
+        created.push(await tx.radarDecisionSnapshot.create({
+          data: {
+            observationId: observation.id,
+            mint: observation.mint,
+            pairAddress: observation.pairAddress,
+            observedAt: observation.observedAt,
+            decisionVersion: scorecard.decisionVersion || scorecard.version || "UNKNOWN",
+            featureVersion: scorecard.featureVersion || "UNKNOWN",
+            scorerBuildIdentifier: scorecard.scorerBuildIdentifier || "UNKNOWN",
+            configurationHash: scorecard.configurationHash || "UNKNOWN",
+            phase4aVersion: scorecard.phase4aVersion || null,
+            phase4aConfigurationHash: scorecard.phase4aConfigurationHash || null,
+            governanceVersion: scorecard.phase4a?.governance?.version || null,
+            governanceConfigurationHash: scorecard.phase4a?.governance?.configurationHash || null,
+            rolloutMode: scorecard.phase4a?.governance?.mode || "SHADOW",
+            decisionState: scorecard.decisionState || "UNKNOWN",
+            radarScore: Number.isFinite(Number(scorecard.radars?.[scorecard.activeRadar])) ? Math.round(Number(scorecard.radars[scorecard.activeRadar])) : null,
+            opportunityScore: Number.isFinite(Number(scorecard.components?.opportunity)) ? Math.round(Number(scorecard.components.opportunity)) : null,
+            momentumScore: Number.isFinite(Number(scorecard.components?.momentumQuality)) ? Math.round(Number(scorecard.components.momentumQuality)) : null,
+            riskScore: Number.isFinite(Number(scorecard.components?.risk)) ? Math.round(Number(scorecard.components.risk)) : null,
+            confidenceScore: Number.isFinite(Number(scorecard.components?.confidence)) ? Math.round(Number(scorecard.components.confidence)) : null,
+            components: scorecard.components || {},
+            radars: scorecard.radars || {},
+            thresholds: scorecard.thresholdConfiguration || {},
+            coefficients: scorecard.coefficientConfiguration || {},
+            sourceSet: scorecard.sourceSet || [],
+            scoreReasons: scorecard.scoreReasons || [],
+            scoreWarnings: scorecard.scoreWarnings || [],
+            scorecard
+          }
+        }));
+      } catch (error) {
+        if (error.code !== "P2002") throw error;
+      }
+    }
+    return created;
   });
 }
 
@@ -947,6 +1048,7 @@ module.exports = {
   findScanByIdempotencyKey,
   findTradeByIdempotencyKey,
   recordTokenObservations,
+  recordDecisionSnapshots,
   readTokenHistory,
   readReactivationHistory,
   disconnectDb

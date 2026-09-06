@@ -9,6 +9,7 @@ const {
 
 const SCORE_VERSION = "phase4-v1";
 const FEATURE_VERSION = "phase3-v1";
+const SCORER_BUILD_IDENTIFIER = "radar-scoring-phase4-v1";
 const RADAR_TYPES = Object.freeze(["REAL_PROJECT", "REACTIVATION", "SPECULATIVE_MEME"]);
 const SCORE_CONFIG = Object.freeze({
   version: SCORE_VERSION,
@@ -357,12 +358,19 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
   ])];
   const scorecard = {
     version: SCORE_VERSION,
+    decisionVersion: SCORE_VERSION,
     featureVersion: candidate.details.featureSnapshot?.featureVersion || FEATURE_VERSION,
+    scorerBuildIdentifier: SCORER_BUILD_IDENTIFIER,
     projectTractionVersion: candidate.details.projectTraction?.version || null,
     configurationHash: CONFIGURATION_HASH,
     phase4aVersion: PHASE4A_VERSION,
     phase4aConfigurationHash: PHASE4A_CONFIGURATION_HASH,
     sourceSet: SCORE_CONFIG.sourceSet,
+    thresholdConfiguration: SCORE_CONFIG.thresholds,
+    coefficientConfiguration: {
+      ...SCORE_CONFIG.componentWeights,
+      phase4aOpportunity: PHASE4A_CONFIG.weights.phase4aOpportunity
+    },
     activeRadar,
     components: {
       projectQuality: project.value,
@@ -426,6 +434,7 @@ module.exports = {
   FEATURE_VERSION,
   RADAR_TYPES,
   SCORE_CONFIG,
+  SCORER_BUILD_IDENTIFIER,
   CONFIGURATION_HASH,
   scoreRadarCandidate
 };
