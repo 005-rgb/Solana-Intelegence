@@ -1032,8 +1032,7 @@ async function mapWithConcurrency(items, concurrency, worker) {
   return results;
 }
 
-function poolEvidenceFromItem(item) {
-  const pair = item?.details?.pair || {};
+function poolEvidenceFromPair(pair = {}) {
   const supplied = pair.poolEvidence || pair.pool || pair.info?.poolEvidence || {};
   return normalizePoolEvidence({
     ...supplied,
@@ -1043,6 +1042,10 @@ function poolEvidenceFromItem(item) {
     ammType: supplied.ammType || supplied.dexId || pair.dexId || null,
     source: supplied.source || "DexScreener pair identity"
   });
+}
+
+function poolEvidenceFromItem(item) {
+  return poolEvidenceFromPair(item?.details?.pair || {});
 }
 
 function observationData(item, endpoint, sourceRequestId, observedAt, pairOverride = null, pairRole = "primary") {
@@ -1091,7 +1094,9 @@ function observationData(item, endpoint, sourceRequestId, observedAt, pairOverri
     decisionVersion: BASELINE_DECISION_VERSION,
     qualityReasons: decision.reasonCodes,
     accountTaxonomy: item.details?.security?.accountTaxonomy || null,
-    poolEvidence: item.details?.security?.poolEvidence || poolEvidenceFromItem(item),
+    // Pool evidence belongs to the observed pair. Never copy the primary
+    // pair's taxonomy onto a secondary pair observation.
+    poolEvidence: poolEvidenceFromPair(pair),
     concentration: item.details?.security?.concentration || null,
     rawPayload
   };
@@ -1322,7 +1327,8 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
              priceUsd: pair.priceUsd ?? null, fdv: pair.fdv ?? null, marketCap: pair.marketCap ?? null,
              liquidityUsd: pair.liquidity?.usd ?? null, volume: pair.volume || null,
              priceChange: pair.priceChange || null, txns: pair.txns || null, makers: pair.makers || null,
-            info: pair.info || null, pairCountForMint: pairs.length
+             info: pair.info || null, poolEvidence: pair.poolEvidence || pair.pool || pair.info?.poolEvidence || null,
+             pairCountForMint: pairs.length
           } : null,
            pairSourceContext: pair?.__sourceContext || null,
            pairFetch: {
@@ -1337,7 +1343,8 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
              pairCreatedAt: candidate.pairCreatedAt || null, updatedAt: candidate.updatedAt || null,
             priceUsd: candidate.priceUsd ?? null, fdv: candidate.fdv ?? null, marketCap: candidate.marketCap ?? null,
              liquidityUsd: candidate.liquidity?.usd ?? null, volume: candidate.volume || null,
-             priceChange: candidate.priceChange || null, txns: candidate.txns || null, makers: candidate.makers || null
+             priceChange: candidate.priceChange || null, txns: candidate.txns || null, makers: candidate.makers || null,
+             poolEvidence: candidate.poolEvidence || candidate.pool || candidate.info?.poolEvidence || null
              , __sourceContext: candidate.__sourceContext || null
           })),
           primaryPairPolicy: "SOLANA_ONLY_WITH_PRICE_AND_LIQUIDITY_THEN_LIQUIDITY_UPDATED_CREATED_ADDRESS",

@@ -530,6 +530,12 @@ function taxonomyPercent(value) {
 function taxonomyAddress(value) {
   return value ? shortAddress(value) : "UNKNOWN";
 }
+function evidenceStatusClass(value) {
+  const status = String(value || "UNKNOWN").toUpperCase();
+  if (["VERIFIED", "PASSED", "LIVE"].includes(status)) return "verified";
+  if (["UNKNOWN", "PARTIAL", "STALE", "NOT RUN"].includes(status)) return "partial";
+  return "rejected";
+}
 function bubbleCoordinates(index) {
   if (index === 0) return { x: 50, y: 50 };
   const angle = ((index * 137.5) - 90) * Math.PI / 180;
@@ -657,7 +663,7 @@ async function showToken(id, reload = true) {
           <div class="health-row"><span>Pool accounts observed</span><strong class="health-value">${concentration.pool_accounts_observed ?? "UNKNOWN"}</strong></div>
           <div class="health-row"><span>Taxonomy confidence cap</span><strong class="health-value">${accountTaxonomy.confidenceCap == null ? "UNKNOWN" : `${accountTaxonomy.confidenceCap}/100`}</strong></div>
           <div class="side-divider"></div>
-          <div class="side-card-heading"><div><h3>Pool evidence</h3><span>Explicit evidence only · pair identity is not pool ownership</span></div><span class="security-status ${security.poolEvidence?.status === "VERIFIED" ? "verified" : "rejected"}">${esc(security.poolEvidence?.status || "UNKNOWN")}</span></div>
+          <div class="side-card-heading"><div><h3>Pool evidence</h3><span>Explicit evidence only · pair identity is not pool ownership</span></div><span class="security-status ${evidenceStatusClass(security.poolEvidence?.status)}">${esc(security.poolEvidence?.status || "UNKNOWN")}</span></div>
           <div class="health-row"><span>AMM / version</span><strong class="health-value">${esc([security.poolEvidence?.ammType, security.poolEvidence?.ammVersion].filter(Boolean).join(" · ") || "UNKNOWN")}</strong></div>
           <div class="health-row"><span>Pool program</span><strong class="health-value"><code>${esc(taxonomyAddress(security.poolEvidence?.poolProgramId))}</code></strong></div>
           <div class="health-row"><span>Base / quote vaults</span><strong class="health-value"><code>${esc(taxonomyAddress(security.poolEvidence?.baseVault))} / ${esc(taxonomyAddress(security.poolEvidence?.quoteVault))}</code></strong></div>
@@ -665,7 +671,7 @@ async function showToken(id, reload = true) {
           <div class="health-row"><span>LP burn / lock</span><strong class="health-value">${esc([security.poolEvidence?.lpBurnStatus, security.poolEvidence?.lpLockProvider].filter(Boolean).join(" · ") || "UNKNOWN")}</strong></div>
         <ul class="security-reasons">${securityReasons.map(reason => `<li>${esc(reason)}</li>`).join("")}</ul>
          <div class="side-divider"></div>
-         <div class="side-card-heading"><div><h3>Deferred market-quality evidence</h3><span>Recorded for later phases · $${marketMetrics.orderSizeUsd ?? 100} research-entry proxy</span></div><span class="security-status ${marketQuality.status === "PASSED" ? "verified" : "rejected"}">${esc(marketQuality.status || "UNKNOWN")}</span></div>
+          <div class="side-card-heading"><div><h3>Deferred market-quality evidence</h3><span>Recorded for later phases · $${marketMetrics.orderSizeUsd ?? 100} research-entry proxy</span></div><span class="security-status ${evidenceStatusClass(marketQuality.status)}">${esc(marketQuality.status || "UNKNOWN")}</span></div>
          <div class="health-row"><span>Liquidity / market cap</span><strong class="health-value">${marketMetrics.liquidityToMarketCap == null ? "UNKNOWN" : `${(Number(marketMetrics.liquidityToMarketCap) * 100).toFixed(2)}%`}</strong></div>
          <div class="health-row"><span>Estimated entry impact</span><strong class="health-value">${marketMetrics.estimatedEntryImpactPercent == null ? "UNKNOWN" : `${Number(marketMetrics.estimatedEntryImpactPercent).toFixed(2)}%`}</strong></div>
          <div class="health-row"><span>Volume / liquidity</span><strong class="health-value">${marketMetrics.volumeLiquidityRatio == null ? "UNKNOWN" : `${Number(marketMetrics.volumeLiquidityRatio).toFixed(2)}×`}</strong></div>

@@ -7,4 +7,4 @@ Token-account concentration must remain separate from wallet concentration. An `
 
 **Why:** Solana largest-account RPC results identify token accounts, not wallet ownership. Treating account type or an unresolved owner as a wallet creates false concentration and insider-analysis claims.
 
-**How to apply:** Keep pool/vault/program/ATA/account classes explicit, filter pool accounts before wallet ranking, and calculate wallet concentration only from resolved wallet-owner evidence. Unknown owners remain UNKNOWN and cap confidence.
+**How to apply:** Keep pool/vault/program/ATA/account classes explicit, filter pool accounts before wallet ranking, and calculate wallet concentration only from resolved wallet-owner evidence. Unknown owners remain UNKNOWN and cap confidence. Persist pool evidence per pair observation; never copy the primary pair's taxonomy onto secondary pairs.

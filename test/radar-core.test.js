@@ -247,6 +247,25 @@ test("phase 1 pair validation permits negative price changes but rejects negativ
   }).valid, false);
 });
 
+test("phase 1 pair validation preserves explicit pool evidence for downstream taxonomy", () => {
+  const validation = validateProviderPair({
+    chainId: "solana",
+    pairAddress: "pair-with-pool-evidence",
+    baseToken: { address: "mint-1" },
+    priceUsd: "1",
+    liquidity: { usd: 25_000 },
+    poolEvidence: {
+      poolProgramId: "amm-program",
+      baseVault: "base-vault",
+      lpMint: "lp-mint"
+    }
+  });
+  assert.equal(validation.valid, true);
+  assert.equal(validation.pair.poolEvidence.poolProgramId, "amm-program");
+  assert.equal(validation.pair.poolEvidence.baseVault, "base-vault");
+  assert.equal(validation.pair.poolEvidence.lpMint, "lp-mint");
+});
+
 test("partial candidate data remains unresolved and cannot reconcile as accepted", () => {
   const report = summarizeBaselineCandidates([
     verifiedItem({

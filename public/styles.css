@@ -473,3 +473,4 @@ tbody tr:hover { background: rgba(54,217,220,.045); }
 .token-history-event small, .token-history-event span { color: var(--muted); font-size: 9px; line-height: 1.45; }
 .token-history-price { color: var(--blue); font-size: 10px; text-align: right; }
 .token-history-price small { color: var(--muted); }
+.security-status.partial { background: var(--blue-soft); color: var(--blue); }
