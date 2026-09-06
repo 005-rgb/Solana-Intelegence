@@ -814,14 +814,33 @@ function evaluateBaselineCandidate(item) {
 function evaluatePhase2Candidate(item) {
   const baseline = evaluateBaselineCandidate(item);
   const marketQuality = item?.details?.marketQuality || evaluateMarketQuality(item);
-  const reasonCodes = [...new Set([...baseline.reasonCodes, ...(marketQuality.reasons || [])])];
-  const unknown = reasonCodes.some(code => code.endsWith("_UNKNOWN") || code === "SECURITY_DATA_INCOMPLETE");
-  const accepted = baseline.accepted && marketQuality.passed;
+  const executionSafety = item?.details?.executionSafety;
+  const hasExecutionSafety = executionSafety && typeof executionSafety === "object";
+  const executionReasons = hasExecutionSafety
+    ? (Array.isArray(executionSafety.reasons) && executionSafety.reasons.length
+      ? executionSafety.reasons
+      : [executionSafety.status === "REJECTED" ? "EXECUTION_SAFETY_REJECTED" : "EXECUTION_SAFETY_UNKNOWN"])
+    : [];
+  const reasonCodes = [...new Set([
+    ...baseline.reasonCodes,
+    ...(marketQuality.reasons || []),
+    ...executionReasons
+  ])];
+  const executionStatus = hasExecutionSafety ? executionSafety.status : null;
+  const executionUnknown = hasExecutionSafety && executionStatus !== "ACTIONABLE_RESEARCH" && executionStatus !== "REJECTED";
+  const unknown = reasonCodes.some(code => code.endsWith("_UNKNOWN") || code === "SECURITY_DATA_INCOMPLETE")
+    || executionUnknown;
+  const executionPassed = !hasExecutionSafety || executionStatus === "ACTIONABLE_RESEARCH";
+  const accepted = baseline.accepted && marketQuality.passed && executionPassed;
   return {
     accepted,
     outcome: accepted ? "ACCEPTED" : unknown ? "UNRESOLVED" : "REJECTED",
     reasonCodes,
-    marketQuality
+    marketQuality,
+    executionSafety: hasExecutionSafety ? {
+      status: executionStatus || "UNKNOWN",
+      actionable: executionStatus === "ACTIONABLE_RESEARCH"
+    } : null
   };
 }
 

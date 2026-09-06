@@ -321,6 +321,52 @@ test("partial candidate data remains unresolved and cannot reconcile as accepted
   assert.deepEqual(report.reasons.map(reason => reason.code), ["LIQUIDITY_UNKNOWN", "SECURITY_UNKNOWN"]);
 });
 
+test("phase 2A unknown execution evidence is unresolved and cannot reach the board", () => {
+  const item = phase2Item({
+    details: {
+      providerMetadata: { cto: false },
+      pair: {
+        liquidityUsd: 25_000,
+        marketCap: 1_000_000,
+        volume: { h24: 50_000 },
+        pairCreatedAt: Date.parse("2026-09-04T00:00:00.000Z"),
+        updatedAt: Date.parse("2026-09-05T00:00:00.000Z")
+      },
+      executionSafety: {
+        status: "UNKNOWN",
+        reasons: ["SELL_QUOTE_UNKNOWN"]
+      }
+    }
+  });
+  const decision = evaluatePhase2Candidate(item);
+  assert.equal(decision.accepted, false);
+  assert.equal(decision.outcome, "UNRESOLVED");
+  assert.ok(decision.reasonCodes.includes("SELL_QUOTE_UNKNOWN"));
+});
+
+test("phase 2A rejected execution evidence is a hard rejection", () => {
+  const item = phase2Item({
+    details: {
+      providerMetadata: { cto: false },
+      pair: {
+        liquidityUsd: 25_000,
+        marketCap: 1_000_000,
+        volume: { h24: 50_000 },
+        pairCreatedAt: Date.parse("2026-09-04T00:00:00.000Z"),
+        updatedAt: Date.parse("2026-09-05T00:00:00.000Z")
+      },
+      executionSafety: {
+        status: "REJECTED",
+        reasons: ["SELL_SIMULATION_FAILED"]
+      }
+    }
+  });
+  const decision = evaluatePhase2Candidate(item);
+  assert.equal(decision.accepted, false);
+  assert.equal(decision.outcome, "REJECTED");
+  assert.ok(decision.reasonCodes.includes("SELL_SIMULATION_FAILED"));
+});
+
 test("unresolved token account is never presented as wallet ownership", () => {
   const taxonomy = buildAccountTaxonomy([
     { rank: 1, address: "account-1", amount: "600", percent: 60 }

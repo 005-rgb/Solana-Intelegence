@@ -1040,6 +1040,7 @@ function observationData(item, endpoint, sourceRequestId, observedAt, pairOverri
   const rawPayload = {
     providerMetadata,
     pair,
+    security: item.details?.security || null,
     pairRole,
     discoverySources: item.details?.discoverySources || [],
     marketQuality: item.details?.marketQuality || decision.marketQuality || null,

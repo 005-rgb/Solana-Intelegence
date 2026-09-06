@@ -48,6 +48,19 @@ npm run db:push
 - `prisma/schema.prisma`: PostgreSQL schema for live tokens, signals, watchlists, paper trading, scan observability, and `TokenObservation` lineage rows.
 - `public/`: responsive research UI.
 
+## Phase 3 time-series features
+
+- Every persisted `TokenObservation` creates one immutable `RadarFeatureSnapshot` in
+  the same database transaction.
+- Features are calculated only from earlier observations for the same mint and
+  pair, as of the observation timestamp; future rows cannot affect the snapshot.
+- `phase3-v1` exposes price/volume acceleration, count-based buy/sell imbalance,
+  maker and liquidity growth, volume/liquidity ratio, volatility, drawdown,
+  concentration penalty, freshness, sample count, and completeness.
+- Missing history or provider fields remain `null` and produce `PARTIAL` status
+  with explicit quality reasons. These features are evidence only and are not a
+  predictive score.
+
 The authoritative product specification is
 [`docs/integrated-radar-core-market-brain-prd.md`](docs/integrated-radar-core-market-brain-prd.md).
 It integrates the existing Radar Core implementation plan with the project-first

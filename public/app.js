@@ -612,6 +612,8 @@ async function showToken(id, reload = true) {
   const marketMetrics = marketQuality.metrics || {};
   const executionSafety = details.executionSafety || {};
   const executionEvidence = executionSafety.evidence || {};
+  const featureSnapshot = details.featureSnapshot || {};
+  const features = featureSnapshot.features || {};
   const executionReasons = Array.isArray(executionSafety.reasons) && executionSafety.reasons.length
     ? executionSafety.reasons
     : ["Buy/sell quote, simulation, and token-program evidence must all pass before actionable research status."];
@@ -689,6 +691,18 @@ async function showToken(id, reload = true) {
           <div class="health-row"><span>Order sizes checked</span><strong class="health-value">${esc((executionSafety.config?.orderSizesUsd || [100, 500, 1000]).map(size => `$${size}`).join(" / "))}</strong></div>
           <div class="health-row"><span>Buy / sell checks</span><strong class="health-value">${executionSafety.checks ? `${executionSafety.checks.filter(check => check.side === "buy" && check.quoteStatus === "PASS").length} / ${executionSafety.checks.filter(check => check.side === "sell" && check.quoteStatus === "PASS").length} routed` : "UNKNOWN"}</strong></div>
           <ul class="security-reasons">${executionReasons.slice(0, 8).map(reason => `<li>${esc(reason)}</li>`).join("")}</ul>
+          <div class="side-divider"></div>
+           <div class="side-card-heading"><div><h3>Phase 3 time-series features</h3><span>Persisted observations · no predictive score</span></div><span class="security-status ${evidenceStatusClass(featureSnapshot.status)}">${esc(featureSnapshot.status || "UNKNOWN")}</span></div>
+           <div class="health-row"><span>Feature version / sample</span><strong class="health-value">${esc(featureSnapshot.featureVersion || "UNKNOWN")} / ${featureSnapshot.freshness?.historySamples ?? "UNKNOWN"}</strong></div>
+           <div class="health-row"><span>Snapshot completeness</span><strong class="health-value">${featureSnapshot.completeness == null ? "UNKNOWN" : `${featureSnapshot.completeness}%`}</strong></div>
+           <div class="health-row"><span>Price acceleration</span><strong class="health-value">${features.priceAcceleration == null ? "UNKNOWN" : `${Number(features.priceAcceleration).toFixed(2)}%`}</strong></div>
+           <div class="health-row"><span>Volume acceleration</span><strong class="health-value">${features.volumeAcceleration == null ? "UNKNOWN" : `${Number(features.volumeAcceleration).toFixed(2)}×`}</strong></div>
+           <div class="health-row"><span>Buy / sell imbalance</span><strong class="health-value">${features.buySellImbalance == null ? "UNKNOWN" : `${(Number(features.buySellImbalance) * 100).toFixed(2)}%`}</strong></div>
+           <div class="health-row"><span>Maker / liquidity growth</span><strong class="health-value">${features.makerGrowth == null ? "UNKNOWN" : `${Number(features.makerGrowth).toFixed(2)}%`} / ${features.liquidityGrowth == null ? "UNKNOWN" : `${Number(features.liquidityGrowth).toFixed(2)}%`}</strong></div>
+           <div class="health-row"><span>Volume / liquidity ratio</span><strong class="health-value">${features.volumeLiquidityRatio == null ? "UNKNOWN" : `${Number(features.volumeLiquidityRatio).toFixed(2)}×`}</strong></div>
+           <div class="health-row"><span>Volatility / drawdown</span><strong class="health-value">${features.volatility == null ? "UNKNOWN" : `${Number(features.volatility).toFixed(2)}%`} / ${features.drawdown == null ? "UNKNOWN" : `${Number(features.drawdown).toFixed(2)}%`}</strong></div>
+           <div class="health-row"><span>Market / security age</span><strong class="health-value">${featureSnapshot.freshness?.marketDataAgeMs == null ? "UNKNOWN" : formatAgeMs(featureSnapshot.freshness.marketDataAgeMs)} / ${featureSnapshot.freshness?.securityDataAgeMs == null ? "UNKNOWN" : formatAgeMs(featureSnapshot.freshness.securityDataAgeMs)}</strong></div>
+           <ul class="security-reasons">${(featureSnapshot.qualityReasons || []).slice(0, 8).map(reason => `<li>${esc(reason)}</li>`).join("") || "<li>Feature inputs complete for the current snapshot.</li>"}</ul>
          <div class="side-divider"></div>
         <div class="side-card-heading"><div><h3>Pair identity</h3><span>Selected by highest live liquidity</span></div></div>
         <div class="pair-identity"><span>Pair address</span><code>${esc(pair.address || "UNKNOWN")}</code></div>

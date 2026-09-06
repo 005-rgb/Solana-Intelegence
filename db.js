@@ -1,4 +1,5 @@
 const { PrismaClient } = require("@prisma/client");
+const { deriveFeatureSnapshot } = require("./radar-features");
 
 const prisma = new PrismaClient();
 const LIVE_ONLY_MIGRATION = "liveOnlyInitialized";
@@ -32,7 +33,8 @@ function tokenData(item) {
   };
 }
 
-function fromToken(row) {
+function fromToken(row, featureSnapshot = null) {
+  const details = row.details && typeof row.details === "object" ? row.details : {};
   return {
     mint: row.mint,
     symbol: row.symbol,
@@ -57,7 +59,10 @@ function fromToken(row) {
     dataQuality: row.dataQuality,
     potential: row.potential,
     providerUrl: row.providerUrl,
-    details: row.details,
+    details: {
+      ...details,
+      featureSnapshot: featureSnapshot || details.featureSnapshot || null
+    },
     updatedAt: row.updatedAt.toISOString()
   };
 }
@@ -248,6 +253,27 @@ async function readState(fallback) {
     prisma.scanRun.findMany({ orderBy: { startedAt: "desc" }, take: 100 })
   ]);
 
+  const featureRows = dbTokens.length
+    ? await prisma.radarFeatureSnapshot.findMany({
+      where: { mint: { in: dbTokens.map(token => token.mint) } },
+      orderBy: { observedAt: "desc" }
+    })
+    : [];
+  const latestFeatures = new Map();
+  for (const row of featureRows) {
+    if (!latestFeatures.has(row.mint)) {
+      latestFeatures.set(row.mint, {
+        featureVersion: row.featureVersion,
+        observedAt: row.observedAt.toISOString(),
+        status: row.status,
+        features: row.features,
+        freshness: row.freshness,
+        completeness: row.completeness,
+        qualityReasons: row.qualityReasons
+      });
+    }
+  }
+
   const tokens = dbTokens.filter(token => token.details?.security?.verified === true);
   const safeMints = new Set(tokens.map(token => token.mint));
   const activityRows = whalePoints;
@@ -286,7 +312,7 @@ async function readState(fallback) {
     lastScan: radar.lastScan?.toISOString() || null,
     nextScanAt: radar.nextScanAt?.getTime() || Date.now() + 15000,
     scanRunning: false,
-    tokens: tokens.map(fromToken),
+    tokens: tokens.map(token => fromToken(token, latestFeatures.get(token.mint))),
     watchlist: activeWatchlist.filter(item => safeMints.has(item.token.mint)).map(item => item.token.mint),
     watchlistHistory: events.filter(event => safeMints.has(event.token.mint)).map(event => ({ mint: event.token.mint, action: event.action, at: event.createdAt.toISOString() })),
     alerts: alerts.map(alert => ({ type: alert.type, token: alert.token, text: alert.text, tone: alert.tone, time: alert.timeLabel || alert.createdAt.toISOString() })),
@@ -624,17 +650,53 @@ async function findTradeByIdempotencyKey(idempotencyKey) {
 
 async function recordTokenObservations(observations, scanRunId) {
   if (!Array.isArray(observations) || !observations.length) return;
-  await prisma.tokenObservation.createMany({
-    data: observations.map(observation => ({
-      ...observation,
-      scanRunId: scanRunId || null,
-      observedAt: toDate(observation.observedAt),
-      providerUpdatedAt: observation.providerUpdatedAt ? toDate(observation.providerUpdatedAt) : null,
-      pairCreatedAt: observation.pairCreatedAt ? toDate(observation.pairCreatedAt) : null,
-      accountTaxonomy: observation.accountTaxonomy || null,
-      poolEvidence: observation.poolEvidence || null,
-      concentration: observation.concentration || null
-    }))
+  await prisma.$transaction(async tx => {
+    const created = [];
+    for (const observation of observations) {
+      created.push(await tx.tokenObservation.create({
+        data: {
+          ...observation,
+          scanRunId: scanRunId || null,
+          observedAt: toDate(observation.observedAt),
+          providerUpdatedAt: observation.providerUpdatedAt ? toDate(observation.providerUpdatedAt) : null,
+          pairCreatedAt: observation.pairCreatedAt ? toDate(observation.pairCreatedAt) : null,
+          accountTaxonomy: observation.accountTaxonomy || null,
+          poolEvidence: observation.poolEvidence || null,
+          concentration: observation.concentration || null
+        }
+      }));
+    }
+    for (const observation of created) {
+      const history = await tx.tokenObservation.findMany({
+        where: { mint: observation.mint, pairAddress: observation.pairAddress },
+        orderBy: { observedAt: "asc" },
+        take: 2_000
+      });
+      const snapshot = deriveFeatureSnapshot(history, { asOf: observation.observedAt });
+      await tx.radarFeatureSnapshot.create({
+        data: {
+          observationId: observation.id,
+          mint: observation.mint,
+          pairAddress: observation.pairAddress,
+          observedAt: observation.observedAt,
+          featureVersion: snapshot.featureVersion,
+          priceAcceleration: snapshot.features.priceAcceleration,
+          volumeAcceleration: snapshot.features.volumeAcceleration,
+          buySellImbalance: snapshot.features.buySellImbalance,
+          makerGrowth: snapshot.features.makerGrowth,
+          liquidityGrowth: snapshot.features.liquidityGrowth,
+          volumeLiquidityRatio: snapshot.features.volumeLiquidityRatio,
+          volatility: snapshot.features.volatility,
+          drawdown: snapshot.features.drawdown,
+          concentrationPenalty: snapshot.features.concentrationPenalty,
+          features: snapshot.features,
+          freshness: snapshot.freshness,
+          completeness: snapshot.completeness,
+          status: snapshot.status,
+          qualityReasons: snapshot.qualityReasons
+        }
+      });
+    }
   });
 }
 

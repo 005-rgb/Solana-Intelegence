@@ -268,10 +268,39 @@ model TokenObservation {
   rawPayload         Json
   createdAt          DateTime  @default(now())
   scanRun            ScanRun?  @relation(fields: [scanRunId], references: [id], onDelete: SetNull)
+  featureSnapshot    RadarFeatureSnapshot?
 
   @@index([mint, observedAt])
   @@index([pairAddress, observedAt])
   @@index([scanRunId])
+}
+
+model RadarFeatureSnapshot {
+  id                    String           @id @default(cuid())
+  observationId         String           @unique
+  mint                  String
+  pairAddress            String?
+  observedAt            DateTime
+  featureVersion        String
+  priceAcceleration     Float?
+  volumeAcceleration    Float?
+  buySellImbalance      Float?
+  makerGrowth            Float?
+  liquidityGrowth        Float?
+  volumeLiquidityRatio  Float?
+  volatility             Float?
+  drawdown               Float?
+  concentrationPenalty   Float?
+  features              Json
+  freshness              Json
+  completeness           Int
+  status                String
+  qualityReasons        Json
+  createdAt             DateTime         @default(now())
+  observation           TokenObservation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+
+  @@index([mint, observedAt])
+  @@index([pairAddress, observedAt])
 }
 
 model WhaleActivityPoint {
