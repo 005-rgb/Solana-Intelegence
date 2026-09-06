@@ -10,6 +10,8 @@ let refreshInFlight = false;
 let reactivationRecords = null;
 let reactivationLoading = false;
 let selectedTokenHistory = [];
+let evaluationReport = null;
+let evaluationLoading = false;
 
 const NAV_GROUPS = [
   ["Workspace", [
@@ -506,14 +508,36 @@ function alerts() {
     `<section class="card page-panel">${body || `<div class="empty"><strong>No candidate alert events yet</strong><span>Lifecycle events appear after a candidate crosses a governed state boundary.</span></div>`}</section>`;
 }
 function backtest() {
-  const runs = snapshot.scanRuns || [];
-  const successful = runs.filter(run => run.status === "SUCCESS");
-  const evaluated = successful.reduce((sum, run) => sum + (run.tokensScanned || 0), 0);
-  const avgDuration = successful.length ? Math.round(successful.reduce((sum, run) => sum + (run.durationMs || 0), 0) / successful.length) : null;
-  const avgPatternMatch = snapshot.patterns.length ? Math.round(snapshot.patterns.reduce((sum, pattern) => sum + pattern.match, 0) / snapshot.patterns.length) : null;
-  return head("Validation", "Backtest", "Replay captured scan runs and pattern outcomes without inventing historical market data. New history is created by the server-side scan.", `<button class="btn btn-primary" onclick="scan()">↻ Capture next observation</button>`) +
-    `<div class="grid metrics">${stat("Captured runs", runs.length, "Prisma ScanRun history", "◫")}${stat("Successful runs", successful.length, "eligible for replay", "✓", "metric-positive")}${stat("Tokens evaluated", evaluated, "across successful scans", "◈")}${stat("Avg duration", avgDuration == null ? "UNKNOWN" : `${avgDuration}ms`, "captured scan duration", "◷")}</div>` +
-     `<div class="grid main-grid"><section class="card page-panel"><div class="card-head"><div><div class="card-title">Signal replay summary</div><div class="card-kicker">Live provider history · average match ${avgPatternMatch == null ? "UNKNOWN" : `${avgPatternMatch}%`}</div></div><span class="badge badge-blue">LIVE HISTORY</span></div>${snapshot.patterns.map(pattern => `<div class="health-row"><span>${esc(pattern.id)} · ${esc(pattern.name)}</span><strong class="health-value ${pattern.tone === "red" ? "health-warn" : "health-ok"}">${pattern.match}% match</strong></div>`).join("")}<div class="data-note">No future returns are fabricated. A proper historical backtest becomes available as provider snapshots accumulate.</div></section><section class="card page-panel"><div class="card-head"><div><div class="card-title">Recent scan runs</div><div class="card-kicker">Execution evidence</div></div></div>${runs.slice(0, 8).map(run => `<div class="alert"><span class="alert-mark ${run.status === "SUCCESS" ? "mark-green" : "mark-red"}"></span><div class="alert-copy"><div class="alert-title">${run.manual ? "MANUAL" : "AUTO"} · ${esc(run.status)}</div><div class="alert-text">${run.tokensScanned} tokens · ${run.transactionsProcessed} transactions · ${run.provider}</div></div><span class="alert-time">${formatDate(run.startedAt)}</span></div>`).join("")}</section></div>`;
+  const report = evaluationReport;
+  if (!report) {
+    return head("Validation", "Outcome evaluation", "Phase 6 labels forward checkpoints from immutable observations. Phase 6A uses walk-forward evaluation and token-block uncertainty.", `<button class="btn btn-primary" onclick="loadEvaluation()">↻ Load evaluation</button>`) +
+      `<section class="card page-panel"><div class="empty"><strong>${evaluationLoading ? "Loading evaluation…" : "No evaluation loaded"}</strong><span>${evaluationLoading ? "Building the report from persisted outcome checkpoints." : "Load the report to inspect checkpoint coverage, labels, and statistical guardrails."}</span></div></section>`;
+  }
+  const metrics = report.metrics || {};
+  const holdout = report.walkForward?.temporalHoldout || {};
+  const ci = report.uncertainty?.precisionAt10 || {};
+  const formatPercent = value => value == null ? "UNKNOWN" : `${(Number(value) * 100).toFixed(1)}%`;
+  const statusTone = report.claimStatus === "INSUFFICIENT_SAMPLE_OR_TIME_WINDOW" ? "badge-yellow" : "badge-blue";
+  const discovery = report.discoveryBias || {};
+  return head("Phase 6 + 6A", "Outcome evaluation", "Forward labels are price- and execution-aware. Walk-forward, embargo, temporal holdout, and token-block bootstrap are shown without turning scores into probabilities.", `<button class="btn btn-primary" onclick="loadEvaluation()">↻ Refresh report</button><button class="btn btn-quiet" onclick="scan()">◎ Capture observation</button>`) +
+    `<section class="card page-panel"><div class="card-head"><div><div class="card-title">Governance gate</div><div class="card-kicker">Report ${esc(report.version)} · horizon ${esc(report.horizon)} · config ${esc(String(report.configurationHash || "").slice(0, 12))}</div></div><span class="badge ${statusTone}">${esc(report.claimStatus.replaceAll("_", " "))}</span></div><div class="data-note">${report.efficacyClaimAllowed ? "Descriptive metrics are available; production efficacy still requires governance approval." : "No efficacy claim is permitted. Scores are not probabilities and the minimum sample/time gate remains explicit."}</div><div class="health-row"><span>Completed labels / observed window</span><strong class="health-value">${metrics.sampleSize ?? 0} / ${report.minimumRequirements?.observedWindowDays ?? 0}d</strong></div><div class="health-row"><span>Minimum requirement</span><strong class="health-value">${report.minimumRequirements?.sampleSize} labels · ${report.minimumRequirements?.windowDays}d · ${report.minimumRequirements?.met ? "MET" : "NOT MET"}</strong></div><div class="health-row"><span>Labels censored / tradability unknown</span><strong class="health-value">${report.dataQuality?.censoredRows ?? 0} / ${report.dataQuality?.unknownTradabilityRows ?? 0}</strong></div></section>` +
+    `<div class="grid metrics">${stat("Precision @1", formatPercent(metrics.precisionAt1), "distinct-token ranked set", "1")}${stat("Precision @3", formatPercent(metrics.precisionAt3), "distinct-token ranked set", "3")}${stat("Precision @10", formatPercent(metrics.precisionAt10), "95% token-block CI below", "10")}${stat("Holdout sample", holdout.sampleSize ?? 0, "temporal holdout only", "↗")}</div>` +
+    `<div class="grid main-grid"><section class="card page-panel"><div class="card-head"><div><div class="card-title">Walk-forward results</div><div class="card-kicker">Training → validation → embargoed temporal holdout</div></div></div><div class="health-row"><span>Training sample</span><strong>${report.walkForward?.training?.sampleSize ?? 0}</strong></div><div class="health-row"><span>Validation sample</span><strong>${report.walkForward?.validation?.sampleSize ?? 0}</strong></div><div class="health-row"><span>Temporal holdout sample</span><strong>${holdout.sampleSize ?? 0}</strong></div><div class="health-row"><span>Holdout win rate / false-positive rate</span><strong>${formatPercent(holdout.winRate)} / ${formatPercent(holdout.falsePositiveRate)}</strong></div><div class="health-row"><span>Median forward return / MAE</span><strong>${metrics.medianForwardReturnPercent == null ? "UNKNOWN" : `${Number(metrics.medianForwardReturnPercent).toFixed(2)}%`} / ${metrics.medianMaximumAdverseExcursionPercent == null ? "UNKNOWN" : `${Number(metrics.medianMaximumAdverseExcursionPercent).toFixed(2)}%`}</strong></div><div class="health-row"><span>Precision@10 bootstrap 95%</span><strong>${ci.lower == null ? "UNKNOWN" : `${(ci.lower * 100).toFixed(1)}% – ${(ci.upper * 100).toFixed(1)}%`}</strong></div></section><section class="card page-panel"><div class="card-head"><div><div class="card-title">Discovery bias separation</div><div class="card-kicker">Boosted and non-boosted universes remain separate denominators</div></div></div>${["BOOSTED", "NON_BOOSTED", "COMBINED"].map(key => `<div class="health-row"><span>${key.replace("_", " ")} · n=${discovery[key]?.sampleSize ?? 0}</span><strong>${formatPercent(discovery[key]?.precisionAt10)}</strong></div>`).join("")}<div class="data-note">A boosted feed is an attention source, not proof of quality or scorer lift.</div></section></div>` +
+    `<section class="card page-panel"><div class="card-head"><div><div class="card-title">Label contract and failure visibility</div><div class="card-kicker">Every checkpoint retains tradability, slippage, fees, censoring, security, thesis, and catalyst state</div></div></div><div class="grid section-grid"><div><div class="health-row"><span>Checkpoint rows</span><strong>${Object.entries(report.checkpointCounts || {}).map(([key, value]) => `${key}: ${value}`).join(" · ") || "NONE"}</strong></div><div class="health-row"><span>Distinct tokens</span><strong>${report.dataQuality?.distinctTokens ?? 0}</strong></div></div><div><div class="health-row"><span>Look-ahead rows dropped</span><strong class="${report.noLookAhead?.droppedRows ? "health-warn" : "health-ok"}">${report.noLookAhead?.droppedRows ?? 0}</strong></div><div class="health-row"><span>Calibration</span><strong>${esc(report.calibration?.status || "UNKNOWN")}</strong></div></div></div><div class="data-note">Calibration metrics are intentionally not computed because the current deterministic score is not a probability. No provider-reported 24-hour field is used as a forward label.</div></section>`;
+}
+function loadEvaluation() {
+  if (evaluationLoading) return;
+  evaluationLoading = true;
+  if (activePage === "backtest") render();
+  api("/api/evaluation").then(result => {
+    evaluationReport = result.report;
+    evaluationLoading = false;
+    if (activePage === "backtest") render();
+  }).catch(error => {
+    evaluationLoading = false;
+    toast(error.message, true);
+    if (activePage === "backtest") render();
+  });
 }
 function modelIntelligence() {
   const patterns = snapshot.patterns || [];
@@ -623,6 +647,7 @@ function go(page) {
   window.location.hash = page;
   render();
   if (page === "health") loadReactivation();
+  if (page === "backtest") loadEvaluation();
 }
 async function loadReactivation() {
   if (reactivationLoading) return;
@@ -902,7 +927,7 @@ if (NAV.some(([id]) => id === hashPage)) activePage = hashPage;
   if (NAV.some(([id]) => id === page)) { activePage = page; render(); if (page === "health") loadReactivation(); }
 });
 window.go=go; window.scan=scan; window.showToken=showToken; window.toggleWatch=toggleWatch; window.removeWatch=removeWatch; window.trade=trade; window.setWhaleRange=setWhaleRange; window.setRadarSort=setRadarSort; window.setRadarStatus=setRadarStatus; window.analyzePatterns=analyzePatterns; window.setTokenSearch=setTokenSearch; window.setBubbleMapToken=setBubbleMapToken;
-refresh().then(() => { if (activePage === "health") loadReactivation(); }).catch(error => { app.innerHTML = `<div class="empty" style="margin:40px"><strong>Unable to load radar</strong>${esc(error.message)}</div>`; });
+refresh().then(() => { if (activePage === "health") loadReactivation(); if (activePage === "backtest") loadEvaluation(); }).catch(error => { app.innerHTML = `<div class="empty" style="margin:40px"><strong>Unable to load radar</strong>${esc(error.message)}</div>`; });
 setInterval(() => {
   const label = document.querySelector("#next-scan-label");
   if (label && snapshot) label.textContent = nextScanLabel();

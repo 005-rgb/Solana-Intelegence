@@ -2,6 +2,8 @@ const { PrismaClient } = require("@prisma/client");
 const { deriveFeatureSnapshot } = require("./radar-features");
 const { deriveManipulationEvidence } = require("./manipulation-evidence");
 const { deriveProjectTraction } = require("./project-traction");
+const { labelDecision, OUTCOME_VERSION } = require("./outcome-labeling");
+const { evaluateOutcomes, EVALUATION_VERSION, CONFIGURATION_HASH: EVALUATION_CONFIGURATION_HASH } = require("./evaluation");
 
 const prisma = new PrismaClient();
 const LIVE_ONLY_MIGRATION = "liveOnlyInitialized";
@@ -1149,6 +1151,189 @@ async function recordDecisionSnapshots(decisions, scanRunId) {
   });
 }
 
+function discoveryClassFor(snapshot) {
+  const sources = snapshot?.scorecard?.sourceSet || snapshot?.observation?.rawPayload?.discoverySources || [];
+  const values = Array.isArray(sources) ? sources.map(value => String(value?.source || value || "").toLowerCase()) : [];
+  if (values.some(value => value.includes("boost"))) return "BOOSTED";
+  if (values.length) return "NON_BOOSTED";
+  return "UNKNOWN";
+}
+
+async function recordOutcomeCheckpoints(asOf = new Date()) {
+  const decisions = await prisma.radarDecisionSnapshot.findMany({
+    orderBy: { observedAt: "asc" },
+    take: 5_000,
+    include: { observation: true }
+  });
+  if (!decisions.length) return { created: 0, completed: 0, censored: 0 };
+  const mints = [...new Set(decisions.map(decision => decision.mint))];
+  const observations = await prisma.tokenObservation.findMany({
+    where: { mint: { in: mints } },
+    orderBy: { observedAt: "asc" },
+    take: 50_000
+  });
+  const byKey = new Map();
+  for (const observation of observations) {
+    const key = `${observation.mint}:${observation.pairAddress || ""}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(observation);
+  }
+  let created = 0;
+  let completed = 0;
+  let censored = 0;
+  await prisma.$transaction(async tx => {
+    for (const decision of decisions) {
+      const key = `${decision.mint}:${decision.pairAddress || ""}`;
+      const labels = labelDecision({
+        id: decision.id,
+        mint: decision.mint,
+        pairAddress: decision.pairAddress,
+        observedAt: decision.observedAt,
+        decisionVersion: decision.decisionVersion,
+        featureVersion: decision.featureVersion,
+        scorecard: decision.scorecard
+      }, byKey.get(key) || [], asOf);
+      for (const label of labels) {
+        const metadata = {
+          ...(label.metadata || {}),
+          discoveryClass: discoveryClassFor({ scorecard: decision.scorecard, observation: decision.observation }),
+          source: decision.observation?.source || null,
+          decisionConfigurationHash: decision.configurationHash
+        };
+        await tx.outcomeCheckpoint.upsert({
+          where: { decisionSnapshotId_checkpoint: { decisionSnapshotId: decision.id, checkpoint: label.checkpoint } },
+          create: {
+            decisionSnapshotId: decision.id,
+            mint: decision.mint,
+            pairAddress: decision.pairAddress,
+            checkpoint: label.checkpoint,
+            outcomeVersion: label.outcomeVersion || OUTCOME_VERSION,
+            signalTime: new Date(label.signalTime),
+            labelStartTime: new Date(label.labelStartTime),
+            labelEndTime: new Date(label.labelEndTime),
+            observedAt: label.observedAt ? new Date(label.observedAt) : null,
+            entryPrice: label.entryPrice,
+            exitPrice: label.exitPrice,
+            forwardReturnPercent: label.forwardReturnPercent,
+            mfePercent: label.mfePercent,
+            maePercent: label.maePercent,
+            drawdownPercent: label.drawdownPercent,
+            executableReturnPercent: label.executableReturnPercent,
+            slippageBps: label.slippageBps,
+            feeBps: label.feeBps,
+            tradabilityState: label.tradabilityState,
+            tradabilityReason: label.tradabilityReason,
+            securityStateAtHorizon: label.securityStateAtHorizon,
+            thesisOutcome: label.thesisOutcome,
+            catalystOutcome: label.catalystOutcome,
+            completionState: label.completionState,
+            censoringReason: label.censoringReason,
+            entryPriceDefinition: label.entryPriceDefinition,
+            exitPriceDefinition: label.exitPriceDefinition,
+            targetConfigHash: label.targetConfigHash,
+            lossLimitConfigHash: label.lossLimitConfigHash,
+            sourceObservationId: label.sourceObservationId,
+            metadata
+          },
+          update: {}
+        });
+        created += 1;
+        if (label.completionState === "FOUND") completed += 1;
+        if (label.completionState === "CENSORED") censored += 1;
+      }
+    }
+  });
+  return { created, completed, censored };
+}
+
+function evaluationInput(row) {
+  return {
+    checkpoint: row.checkpoint,
+    signalTime: row.signalTime.toISOString(),
+    observedAt: row.observedAt?.toISOString() || null,
+    completionState: row.completionState,
+    forwardReturnPercent: row.forwardReturnPercent,
+    executableReturnPercent: row.executableReturnPercent,
+    maePercent: row.maePercent,
+    tradabilityState: row.tradabilityState,
+    mint: row.mint,
+    discoveryClass: row.metadata?.discoveryClass || "UNKNOWN",
+    decisionVersion: row.decisionSnapshot?.decisionVersion || "UNKNOWN"
+  };
+}
+
+async function readEvaluationReport({ persist = true, options = {} } = {}) {
+  const rows = await prisma.outcomeCheckpoint.findMany({
+    orderBy: { signalTime: "asc" },
+    take: 50_000,
+    include: { decisionSnapshot: { select: { decisionVersion: true } } }
+  });
+  const report = evaluateOutcomes(rows.map(evaluationInput), options);
+  if (persist) {
+    await prisma.evaluationRun.create({
+      data: {
+        evaluationVersion: EVALUATION_VERSION,
+        horizon: report.horizon,
+        configurationHash: EVALUATION_CONFIGURATION_HASH,
+        claimStatus: report.claimStatus,
+        sampleSize: report.metrics.sampleSize,
+        observedWindowDays: report.minimumRequirements.observedWindowDays,
+        generatedAt: new Date(report.generatedAt),
+        report
+      }
+    });
+  }
+  return {
+    ...report,
+    checkpointCounts: rows.reduce((counts, row) => {
+      counts[row.checkpoint] = (counts[row.checkpoint] || 0) + 1;
+      return counts;
+    }, {}),
+    latestLabelAt: rows.at(-1)?.observedAt?.toISOString() || null
+  };
+}
+
+async function readOutcomeCheckpoints({ checkpoint = null, limit = 200 } = {}) {
+  const rows = await prisma.outcomeCheckpoint.findMany({
+    where: checkpoint ? { checkpoint: String(checkpoint).slice(0, 20) } : undefined,
+    orderBy: [{ signalTime: "desc" }, { checkpoint: "asc" }],
+    take: Math.max(1, Math.min(1_000, Number(limit) || 200)),
+    include: { decisionSnapshot: { select: { decisionVersion: true, radarScore: true } } }
+  });
+  return rows.map(row => ({
+    id: row.id,
+    decisionSnapshotId: row.decisionSnapshotId,
+    mint: row.mint,
+    pairAddress: row.pairAddress,
+    checkpoint: row.checkpoint,
+    outcomeVersion: row.outcomeVersion,
+    signalTime: row.signalTime.toISOString(),
+    labelStartTime: row.labelStartTime.toISOString(),
+    labelEndTime: row.labelEndTime.toISOString(),
+    observedAt: row.observedAt?.toISOString() || null,
+    entryPrice: row.entryPrice,
+    exitPrice: row.exitPrice,
+    forwardReturnPercent: row.forwardReturnPercent,
+    mfePercent: row.mfePercent,
+    maePercent: row.maePercent,
+    drawdownPercent: row.drawdownPercent,
+    executableReturnPercent: row.executableReturnPercent,
+    slippageBps: row.slippageBps,
+    feeBps: row.feeBps,
+    tradabilityState: row.tradabilityState,
+    tradabilityReason: row.tradabilityReason,
+    securityStateAtHorizon: row.securityStateAtHorizon,
+    thesisOutcome: row.thesisOutcome,
+    catalystOutcome: row.catalystOutcome,
+    completionState: row.completionState,
+    censoringReason: row.censoringReason,
+    sourceObservationId: row.sourceObservationId,
+    metadata: row.metadata,
+    decisionVersion: row.decisionSnapshot?.decisionVersion || "UNKNOWN",
+    radarScore: row.decisionSnapshot?.radarScore ?? null
+  }));
+}
+
 function reactivationReason(observation) {
   const reasons = Array.isArray(observation?.qualityReasons) ? observation.qualityReasons : [];
   return reasons.slice(0, 4).join(" · ") || "No decision reason recorded";
@@ -1293,6 +1478,9 @@ module.exports = {
   findTradeByIdempotencyKey,
   recordTokenObservations,
   recordDecisionSnapshots,
+  recordOutcomeCheckpoints,
+  readOutcomeCheckpoints,
+  readEvaluationReport,
   readTokenHistory,
   readReactivationHistory,
   disconnectDb

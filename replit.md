@@ -158,6 +158,16 @@ npm run db:push
 - The Alerts page exposes lifecycle status and the appropriate acknowledge or
   resolve action; no wallet signing or real execution is enabled.
 
+## Phase 6 outcome labels and Phase 6A evaluation
+
+- `outcome-labeling.js` creates immutable checkpoint labels from `RadarDecisionSnapshot` lineage and later `TokenObservation` rows. Canonical checkpoints run from `T+1M` through `T+7D`; an observation before the decision timestamp can never enter a label.
+- Each checkpoint stores price return, maximum favorable excursion, maximum adverse excursion, peak-to-trough drawdown, completion/censoring state, security state, thesis outcome, catalyst outcome, and source observation lineage.
+- Price outcomes and executable outcomes are separate. Executable return is populated only when a later observation contains explicit sell-route evidence; missing sell evidence remains `UNKNOWN`, and slippage/fees are retained when supplied.
+- Missing future coverage is not treated as a loss or zero return. Checkpoints remain `CENSORED` with a reason, and not-yet-due checkpoints are not finalized early.
+- `evaluation.js` evaluates one canonical horizon with chronological walk-forward splits, an explicit embargo, a temporal holdout, token-block bootstrap intervals, top-k precision, return/win/false-positive/MAE/tradability metrics, and boosted/non-boosted/combined discovery separation.
+- Phase 6A never treats deterministic Radar scores as probabilities. Calibration is `NOT_APPLICABLE` until a probability-like output exists, and insufficient sample/time windows keep `efficacyClaimAllowed` false. The UI exposes these gates at the Backtest / Outcome evaluation page and the server provides `GET /api/evaluation`.
+- Scans advance due labels only after observations and immutable decision snapshots are persisted. Evaluation runs are retained in `EvaluationRun`; outcome rows are idempotent on decision snapshot plus checkpoint.
+
 The authoritative product specification is
 [`docs/integrated-radar-core-market-brain-prd.md`](docs/integrated-radar-core-market-brain-prd.md).
 It integrates the existing Radar Core implementation plan with the project-first

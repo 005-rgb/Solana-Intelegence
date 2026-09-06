@@ -504,10 +504,69 @@ model RadarDecisionSnapshot {
   scorecard                   Json
   createdAt                   DateTime         @default(now())
   observation                 TokenObservation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+  outcomeCheckpoints          OutcomeCheckpoint[]
 
   @@unique([observationId, decisionVersion])
   @@index([mint, observedAt])
   @@index([decisionVersion, createdAt])
+}
+
+model OutcomeCheckpoint {
+  id                         String               @id @default(cuid())
+  decisionSnapshotId         String
+  mint                       String
+  pairAddress                String?
+  checkpoint                 String
+  outcomeVersion             String
+  signalTime                 DateTime
+  labelStartTime             DateTime
+  labelEndTime               DateTime
+  observedAt                 DateTime?
+  entryPrice                 Float?
+  exitPrice                  Float?
+  forwardReturnPercent       Float?
+  mfePercent                 Float?
+  maePercent                 Float?
+  drawdownPercent            Float?
+  executableReturnPercent    Float?
+  slippageBps                Float?
+  feeBps                     Float?
+  tradabilityState           String
+  tradabilityReason          String?
+  securityStateAtHorizon     String
+  thesisOutcome              String
+  catalystOutcome            String
+  completionState            String
+  censoringReason            String?
+  entryPriceDefinition       String
+  exitPriceDefinition        String
+  targetConfigHash           String
+  lossLimitConfigHash        String
+  sourceObservationId        String?
+  metadata                   Json
+  createdAt                  DateTime             @default(now())
+  decisionSnapshot           RadarDecisionSnapshot @relation(fields: [decisionSnapshotId], references: [id], onDelete: Cascade)
+
+  @@unique([decisionSnapshotId, checkpoint])
+  @@index([mint, signalTime])
+  @@index([checkpoint, completionState])
+  @@index([observedAt])
+}
+
+model EvaluationRun {
+  id                String   @id @default(cuid())
+  evaluationVersion String
+  horizon           String
+  configurationHash  String
+  claimStatus       String
+  sampleSize        Int
+  observedWindowDays Float
+  generatedAt       DateTime
+  report            Json
+  createdAt         DateTime @default(now())
+
+  @@index([generatedAt])
+  @@index([horizon, generatedAt])
 }
 
 model WhaleActivityPoint {

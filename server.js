@@ -19,6 +19,9 @@ const {
   createScanRun,
   recordTokenObservations,
   recordDecisionSnapshots,
+  recordOutcomeCheckpoints,
+  readOutcomeCheckpoints,
+  readEvaluationReport,
   readTokenHistory,
   readReactivationHistory,
   acquireScanLease,
@@ -1649,6 +1652,7 @@ async function runScan(manual = false, options = {}) {
     if (scanRun?.id) {
       await recordTokenObservations(scanResult.observations, scanRun.id);
       await recordDecisionSnapshots(scanResult.tokens, scanRun.id);
+      await recordOutcomeCheckpoints(new Date());
     }
     const hasAcceptedTokens = scanResult.tokens.length > 0;
     const completeScan = scanResult.report.qualityStatus === "FULL";
@@ -1772,6 +1776,27 @@ async function handleApi(req, res, url) {
     return send(res, 403, { error: "Mutation is not authorized for this origin.", requestId: req.requestId });
   }
   if (req.method === "GET" && url.pathname === "/api/state") return send(res, 200, jsonState());
+  if (req.method === "GET" && url.pathname === "/api/evaluation") {
+    try {
+      const report = await readEvaluationReport({ persist: true });
+      return send(res, 200, { ok: true, report });
+    } catch (error) {
+      console.error(`[${req.requestId}] Evaluation report failed`, error.message);
+      return send(res, 500, { error: "Unable to build the evaluation report.", requestId: req.requestId });
+    }
+  }
+  if (req.method === "GET" && url.pathname === "/api/outcomes") {
+    try {
+      const outcomes = await readOutcomeCheckpoints({
+        checkpoint: url.searchParams.get("checkpoint"),
+        limit: url.searchParams.get("limit")
+      });
+      return send(res, 200, { ok: true, outcomes });
+    } catch (error) {
+      console.error(`[${req.requestId}] Outcome checkpoints failed`, error.message);
+      return send(res, 500, { error: "Unable to load outcome checkpoints.", requestId: req.requestId });
+    }
+  }
   if (req.method === "GET" && url.pathname === "/api/reactivation") {
     try {
       return send(res, 200, { ok: true, records: await readReactivationHistory() });
@@ -2014,6 +2039,7 @@ const server = http.createServer((req, res) => {
 async function start() {
   try {
     state = await readState(state);
+    await recordOutcomeCheckpoints(new Date());
     state.tokens = state.tokens.map(item => scoreRadarCandidate(item));
     state.system.database = "POSTGRESQL / PRISMA";
     state.system.scoreVersion = SCORE_VERSION;
