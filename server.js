@@ -48,6 +48,12 @@ const {
   PROVIDER_SCHEMA_VERSION
 } = require("./radar-core");
 const { createSolanaRpcPool } = require("./solana-rpc-pool");
+const {
+  EXECUTION_SAFETY_VERSION,
+  DEFAULT_ORDER_SIZES_USD,
+  evaluateExecutionSafety,
+  summarizeExecutionSafety
+} = require("./execution-safety");
 
 const ACTIVE_DECISION_VERSION = PHASE2_DECISION_VERSION;
 const ACTIVE_FILTER_CONFIG = PHASE2_FILTER_CONFIG;
@@ -65,6 +71,10 @@ const ANALYSIS_MS = 6 * 60 * 60 * 1000;
 const MAX_BODY_BYTES = 100_000;
 const BODY_TIMEOUT_MS = 5_000;
 const API_RESPONSE_TIMEOUT_MS = 30_000;
+const EXECUTION_QUOTE_TIMEOUT_MS = 5_000;
+const EXECUTION_QUOTE_ENDPOINT = process.env.RADAR_EXECUTION_QUOTE_URL || "https://lite-api.jup.ag/swap/v1/quote";
+const EXECUTION_QUOTES_ENABLED = process.env.RADAR_EXECUTION_QUOTES_ENABLED !== "false";
+const DEFAULT_RESEARCH_QUOTE_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const MUTATION_LEASE_TTL_MS = 60_000;
 const RATE_WINDOW_MS = 60_000;
 const API_RATE_LIMIT = 120;
@@ -871,6 +881,139 @@ async function mapWithConcurrency(items, concurrency, worker) {
   return results;
 }
 
+function unknownExecutionEvidence(source, reason) {
+  const records = Object.fromEntries(DEFAULT_ORDER_SIZES_USD.map(size => [
+    String(size),
+    { status: "UNKNOWN", error: reason, source }
+  ]));
+  return {
+    version: EXECUTION_SAFETY_VERSION,
+    source,
+    adapterStatus: "UNKNOWN",
+    adapterReason: reason,
+    buy: records,
+    sell: Object.fromEntries(Object.entries(records).map(([size, value]) => [size, { ...value }]))
+  };
+}
+
+function quoteMintForPair(pair = {}) {
+  const configured = String(process.env.RADAR_EXECUTION_QUOTE_MINT || "").trim();
+  if (configured) return configured;
+  const quoteToken = pair.quoteToken || {};
+  const symbol = String(quoteToken.symbol || quoteToken.name || "").toUpperCase();
+  if (symbol === "USDC" || quoteToken.address === DEFAULT_RESEARCH_QUOTE_MINT) return DEFAULT_RESEARCH_QUOTE_MINT;
+  return null;
+}
+
+function safeRouteEvidence(routePlan) {
+  return Array.isArray(routePlan)
+    ? routePlan.slice(0, 20).map(route => ({
+      percent: Number.isFinite(Number(route?.percent)) ? Number(route.percent) : null,
+      bps: Number.isFinite(Number(route?.bps)) ? Number(route.bps) : null,
+      label: typeof route?.swapInfo?.label === "string" ? route.swapInfo.label.slice(0, 100) : null,
+      ammKey: typeof route?.swapInfo?.ammKey === "string" ? route.swapInfo.ammKey : null
+    }))
+    : [];
+}
+
+async function requestExecutionQuote(url, signal) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), EXECUTION_QUOTE_TIMEOUT_MS);
+  const abort = () => controller.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    const response = await fetch(url, { signal: controller.signal, headers: { Accept: "application/json" } });
+    const text = await response.text();
+    let payload = null;
+    try {
+      payload = text ? JSON.parse(text) : null;
+    } catch {
+      throw new Error("Execution quote provider returned invalid JSON.");
+    }
+    if (!response.ok) throw new Error(`Execution quote provider HTTP ${response.status}.`);
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
+  }
+}
+
+function executionQuoteRecord(payload, source, quoteAt) {
+  const outAmount = Number(payload?.outAmount);
+  const routePlan = safeRouteEvidence(payload?.routePlan);
+  const routeAvailable = routePlan.length > 0 && Number.isFinite(outAmount) && outAmount > 0;
+  return {
+    status: routeAvailable ? "PASS" : "FAILED",
+    routeAvailable,
+    minimumReceived: Number.isFinite(Number(payload?.otherAmountThreshold)) ? Number(payload.otherAmountThreshold) : routeAvailable ? outAmount : null,
+    priceImpactPercent: Number.isFinite(Number(payload?.priceImpactPct)) ? Number(payload.priceImpactPct) : null,
+    estimatedSlippageBps: null,
+    transferFee: null,
+    transferHook: null,
+    accountCreationRequired: null,
+    simulationStatus: "NOT_ATTEMPTED",
+    quoteAt,
+    source,
+    route: {
+      inputMint: typeof payload?.inputMint === "string" ? payload.inputMint : null,
+      outputMint: typeof payload?.outputMint === "string" ? payload.outputMint : null,
+      inAmount: typeof payload?.inAmount === "string" ? payload.inAmount : null,
+      outAmount: typeof payload?.outAmount === "string" ? payload.outAmount : null,
+      routePlan
+    }
+  };
+}
+
+async function collectExecutionEvidence(item, signal) {
+  const source = "JUPITER_QUOTE";
+  if (!EXECUTION_QUOTES_ENABLED) return unknownExecutionEvidence("DISABLED", "Research quote adapter is disabled.");
+  const pair = item?.details?.pair || {};
+  const quoteMint = quoteMintForPair(pair);
+  if (!quoteMint) return unknownExecutionEvidence(source, "No supported stable quote mint was identified for this pair.");
+  const outputMint = String(item?.mint || "").trim();
+  if (!outputMint) return unknownExecutionEvidence(source, "Token mint is unavailable.");
+
+  const buy = {};
+  const sell = {};
+  for (const size of DEFAULT_ORDER_SIZES_USD) {
+    const quoteAt = new Date().toISOString();
+    const buyUrl = new URL(EXECUTION_QUOTE_ENDPOINT);
+    buyUrl.searchParams.set("inputMint", quoteMint);
+    buyUrl.searchParams.set("outputMint", outputMint);
+    buyUrl.searchParams.set("amount", String(Math.round(size * 1_000_000)));
+    buyUrl.searchParams.set("slippageBps", "100");
+    buyUrl.searchParams.set("restrictIntermediateTokens", "true");
+    try {
+      const buyPayload = await requestExecutionQuote(buyUrl, signal);
+      buy[String(size)] = executionQuoteRecord(buyPayload, source, quoteAt);
+      const buyAmount = typeof buyPayload?.outAmount === "string" ? buyPayload.outAmount : null;
+      if (!buyAmount || !buy[String(size)].routeAvailable) {
+        sell[String(size)] = { status: "UNKNOWN", error: "Sell quote requires a successful buy output amount.", source };
+        continue;
+      }
+      const sellUrl = new URL(EXECUTION_QUOTE_ENDPOINT);
+      sellUrl.searchParams.set("inputMint", outputMint);
+      sellUrl.searchParams.set("outputMint", quoteMint);
+      sellUrl.searchParams.set("amount", buyAmount);
+      sellUrl.searchParams.set("slippageBps", "100");
+      sellUrl.searchParams.set("restrictIntermediateTokens", "true");
+      const sellPayload = await requestExecutionQuote(sellUrl, signal);
+      sell[String(size)] = executionQuoteRecord(sellPayload, source, new Date().toISOString());
+    } catch (error) {
+      buy[String(size)] = { status: "FAILED", error: String(error.message).slice(0, 240), source };
+      sell[String(size)] = { status: "UNKNOWN", error: "Sell quote was not attempted after buy quote failure.", source };
+    }
+  }
+  return {
+    version: EXECUTION_SAFETY_VERSION,
+    source,
+    adapterStatus: "QUOTES_ONLY",
+    adapterReason: "Research quotes captured; walletless simulation and token-program execution evidence remain separate gates.",
+    buy,
+    sell
+  };
+}
+
 function poolEvidenceFromPair(pair = {}) {
   const supplied = pair.poolEvidence || pair.pool || pair.info?.poolEvidence || {};
   return normalizePoolEvidence({
@@ -899,7 +1042,9 @@ function observationData(item, endpoint, sourceRequestId, observedAt, pairOverri
     pair,
     pairRole,
     discoverySources: item.details?.discoverySources || [],
-    marketQuality: item.details?.marketQuality || decision.marketQuality || null
+    marketQuality: item.details?.marketQuality || decision.marketQuality || null,
+    executionSafety: item.details?.executionSafety || null,
+    executionEvidence: item.details?.executionEvidence || null
   };
   return {
     mint: item.mint,
@@ -1215,8 +1360,26 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
     // baseline-v1 shadow summary beside it so acceptance changes remain
     // explainable and reversible without rewriting observations.
     const baselineShadow = summarizeBaselineCandidates(secured);
-    const decisions = secured.map(evaluateActiveCandidate);
-    const safeTokens = secured.filter((item, index) => decisions[index].accepted).map(item => {
+    const phase2Decisions = secured.map(evaluateActiveCandidate);
+    const executionTargets = secured.filter((item, index) => phase2Decisions[index].accepted);
+    const executionEvidenceByMint = new Map(await mapWithConcurrency(executionTargets, 2, async item => [
+      item.mint,
+      await collectExecutionEvidence(item, signal)
+    ]));
+    const executionSecured = secured.map(item => {
+      const executionEvidence = executionEvidenceByMint.get(item.mint)
+        || unknownExecutionEvidence("NOT_ATTEMPTED", "Candidate did not pass the active Phase 2 gates.");
+      return {
+        ...item,
+        details: {
+          ...item.details,
+          executionEvidence,
+          executionSafety: evaluateExecutionSafety(executionEvidence)
+        }
+      };
+    });
+    const decisions = executionSecured.map(evaluateActiveCandidate);
+    const safeTokens = executionSecured.filter((item, index) => decisions[index].accepted).map(item => {
       const rationale = buildTokenReview(item, item.security);
       return {
         ...item, rationale, potential: "UPWARD BIAS",
@@ -1237,8 +1400,8 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
     const rpcStatus = rpcStatuses.length && rpcStatuses.every(status => status !== "UNVERIFIED")
       ? "LIVE"
       : rpcStatuses.some(status => status !== "UNVERIFIED") ? "PARTIAL" : "FAILED";
-    const report = summarizeActiveCandidates(secured, {
-      checked: secured.length,
+    const report = summarizeActiveCandidates(executionSecured, {
+      checked: executionSecured.length,
         providerRecords: discovery.sourceMetrics.unique_mints_before_dedup,
        discoveryUniverseSize: discovery.entries.length,
        providerRecordsWithPair: fresh.filter(item => (item.details?.pairs || []).length > 0).length,
@@ -1278,6 +1441,11 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
             rejected: baselineShadow.rejected,
             unresolved: baselineShadow.unresolved
           },
+          execution_safety: summarizeExecutionSafety(executionSecured.map(item => ({
+            details: {
+              executionEvidence: item.details?.executionEvidence
+            }
+          }))),
          provider_health: Object.fromEntries([...providerHealth.entries()].map(([endpoint, health]) => [
            providerEndpointLabel(endpoint),
            { failures: health.failures, circuitOpen: Boolean(health.openedAt), lastStatus: health.lastStatus }
@@ -1297,7 +1465,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
     };
     return {
       tokens: safeTokens,
-      observations: secured.flatMap(item => {
+      observations: executionSecured.flatMap(item => {
         const pairs = item.details?.pairs?.length ? item.details.pairs : [item.details?.pair || null];
         return pairs.map(candidate => observationData(
           item,

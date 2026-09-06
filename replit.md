@@ -16,6 +16,9 @@ Required environment variables:
 - `SOLANA_RPC_URLS` also accepts a JSON array/object or labeled lines such as `HELIUS=https://...`. Direct RPC URLs from multiple providers are accepted; dashboard/API-key management URLs are rejected and reported without exposing their values. Restart the workflow after changing the secret because the pool is loaded at process startup.
 - `DEXSCREENER_NEW_PAIRS_API_URL` (optional): a provider endpoint returning a validated `{ "pairs": [...] }` payload for latest/new Solana pair discovery. Pair base-token addresses are normalized into the Phase 1 universe; the source stays optional and never weakens baseline gates.
 - `RADAR_INDEXED_DISCOVERY_URL` (optional): an indexed discovery adapter endpoint returning a validated array of `{ tokenAddress, chainId, updatedAt, ... }` records. It is an additive source boundary, not a trust signal or score.
+- `RADAR_EXECUTION_QUOTES_ENABLED` (optional): set to `false` to disable research-only quote collection; it defaults to enabled for Phase 2A candidates.
+- `RADAR_EXECUTION_QUOTE_URL` (optional): quote-compatible Jupiter endpoint; defaults to `https://lite-api.jup.ag/swap/v1/quote`. This adapter requests quotes only and never builds, signs, or submits a transaction.
+- `RADAR_EXECUTION_QUOTE_MINT` (optional): stable quote mint override for research sizing; defaults to the Solana USDC mint.
 - Copy-ready secret configuration is documented in `docs/solana-rpc-pool-template.md`.
 
 After importing or changing the schema, initialize the local database client with:
@@ -40,6 +43,7 @@ npm run db:push
 - `server.js`: HTTP API, DexScreener provider boundary, automatic scan scheduler, and paper-trade logic.
 - `db.js`: Prisma repository layer, LIVE-only cleanup, watchlist events, paper trades, scan runs, and immutable provider observations.
 - `radar-core.js`: versioned baseline-v1 comparison helpers and active phase2-v1 market-quality decision helpers with count reconciliation.
+- `execution-safety.js`: phase2a-v1 buy/sell quote, route, simulation, slippage, transfer-evidence, account-creation, and freshness evaluator.
 - `solana-rpc-pool.js`: isolated Solana RPC pool with provider rotation, circuit cooldowns, failover telemetry, and safe health summaries.
 - `prisma/schema.prisma`: PostgreSQL schema for live tokens, signals, watchlists, paper trading, scan observability, and `TokenObservation` lineage rows.
 - `public/`: responsive research UI.
@@ -95,7 +99,7 @@ If a provider or security scan fails, the last known good Radar board remains vi
 
 Live scans use the immutable `phase2-v1` decision contract. The active board requires the baseline security and market gates plus liquidity-to-market-cap ratio, estimated $100 entry impact, volume-to-liquidity ratio, pool age, and market-data freshness. `baseline-v1` remains recorded as a shadow comparison so changes are explainable. Every candidate is classified as accepted, rejected, or unresolved, and the three outcome counts reconcile exactly.
 
-Phase 2 market-quality evidence may be captured in observations for later work, but it does not change the Phase 0 accepted board.
+Phase 2 market-quality evidence is active in the accepted board. Phase 2A adds a separate research-only execution-safety layer; it does not change the Phase 2 accepted board or enable wallet execution.
 
 ## Deferred Phase 2 security and market-quality evidence
 
@@ -103,7 +107,7 @@ Security verification records parsed supported SPL mint evidence, positive suppl
 
 Security observations identify `SPL_TOKEN` versus `TOKEN_2022`, retain reviewed Token-2022 extensions, and expose warnings for transfer-fee, transfer-hook, permanent-delegate, default-state, non-transferable, confidential-transfer, and metadata-pointer extensions. RPC evidence includes commitment, observation time, response/request counts, and per-response slot contexts.
 
-Market eligibility combines the existing $10,000 liquidity floor with liquidity/market-cap ratio, a transparent estimated impact proxy for a configured $100 research entry, 24-hour volume/liquidity ratio, pair age, and provider freshness. Missing inputs are `UNKNOWN`, never zero, and cannot qualify a candidate. Gate metrics and stable reason codes are persisted in token observations and scan audit data. These are research safety gates, not executable sell simulations or predictive scores.
+Market eligibility combines the existing $10,000 liquidity floor with liquidity/market-cap ratio, a transparent estimated impact proxy for a configured $100 research entry, 24-hour volume/liquidity ratio, pair age, and provider freshness. Missing inputs are `UNKNOWN`, never zero, and cannot qualify a candidate. Gate metrics and stable reason codes are persisted in token observations and scan audit data. Phase 2A requests buy and sell research quotes for `$100`, `$500`, and `$1,000` when a candidate passes Phase 2; route and impact evidence is retained, while missing walletless simulation, transfer-hook/fee, account-creation, or stale quote evidence remains `UNKNOWN` and blocks `ACTIONABLE_RESEARCH`. No wallet signing or real execution is supported.
 
 ## Phase 0A platform safety
 
