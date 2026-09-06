@@ -1,0 +1,335 @@
+WIFHAT
+0.002410
+▲18.4%
+|
+PNUT2
+0.000880
+▲42.1%
+|
+SLOPE
+0.000170
+▲9.3%
+|
+MOONKI
+0.000040
+▼2.1%
+|
+RAYGUN
+0.000310
+▼61.0%
+|
+BONKAI
+0.006120
+▲27.8%
+|
+FOMO3
+0.000740
+▲5.6%
+|
+SLERP
+0.001930
+▲14.2%
+|
+DERP
+0.000090
+▼33.4%
+|
+ZKDOG
+0.000030
+▲1.2%
+|
+GIGA2
+0.004470
+▼8.9%
+|
+SOL
+184.21
+▲2.1%
+|
+WIFHAT
+0.002410
+▲18.4%
+|
+PNUT2
+0.000880
+▲42.1%
+|
+SLOPE
+0.000170
+▲9.3%
+|
+MOONKI
+0.000040
+▼2.1%
+|
+RAYGUN
+0.000310
+▼61.0%
+|
+BONKAI
+0.006120
+▲27.8%
+|
+FOMO3
+0.000740
+▲5.6%
+|
+SLERP
+0.001930
+▲14.2%
+|
+DERP
+0.000090
+▼33.4%
+|
+ZKDOG
+0.000030
+▲1.2%
+|
+GIGA2
+0.004470
+▼8.9%
+|
+SOL
+184.21
+▲2.1%
+|
+MARKET BRAIN 4.0
+Real Project · Asymmetric Intelligence
+Market Regime
+EXPANSION
+System Health
+NORMAL
+Kill Switch
+NORMAL
+Precision@10
+71.4%
+uncalibrated · shadow-validated
+Active Model
+market-brain-v4.0.1
+market-brain-v4.1.0-rc1 (shadow)
+Structural analysis only — not financial advice. 20× feasibility is a structural score, never a profit probability. Engines abstain (NO SIGNAL) when evidence is insufficient.
+
+Real Project
+Reactivation
+Speculative Meme
+REAL PROJECT Radar · 6 candidates evaluated
+SIM $99100
+LIVE · DEXSCREENER
+· 1788678414066
+SCAN
+1
+Rule-based · deterministic
+Signal	Project	PQS	Traction	20× Feas.	Catalyst	Capital	Manip.	Chase	Entry	Opp
+STRONG	
+GRIDNODE
+DePIN · $2.80M
+84 HIGH QUALITY	INFLECTION	EXCEPTIONAL 91	3d	ACCUMULATION	9%	100	NO ENTRY	96
+STRONG	
+ORCAX
+DePIN · $3.20M
+78 QUALITY	INFLECTION	STRONG 90	9d	ACCUMULATION	12%	45	ENTRY VALID	90
+NO SIGNAL	
+NEURO
+AI · $6.00M
+61 WATCH	INFLECTION	POSSIBLE 57	14d	INFLOW	18%	67	NO SIGNAL	62
+NO SIGNAL	
+VAULTX
+DeFi · $14.00M
+75 QUALITY	GROWING	LOW 43	—	INFLOW	8%	15	NO SIGNAL	61
+WATCH	
+LUMEN
+DeFi · $18.00M
+72 QUALITY	GROWING	LOW 41	—	INFLOW	8%	20	ENTRY VALID	51
+NO SIGNAL	
+CHAINPLAY
+Gaming · $1.10M
+27 REJECT	INFLECTION	LOW 39	—	NEUTRAL	92%	30	NO SIGNAL	12
+Market Memory · Permanent Regression Cases
+PUMPANY
+FALSE POSITIVE
+Volume +200% but 70% of volume concentrated in 12 economic entities — coordination, not adoption.
+
+Invalidated · -94%
+COIN
+FALSE NEGATIVE
+Rejected on stale flow data — the inflection was real but evidence latency was too high.
+
+Missed repricing · +6.2× vs rejection
+TROLLONFONE
+MANIPULATION ESCAPE
+Sniper wallets funded from fresh wallets — evaded cluster detection v1.
+
+Rug · liquidity removed
+Maggie
+FALSE POSITIVE
+Traction inflection was real — but the token had NO value capture. Project grew, token didn't.
+
+Flat vs sector +140%
+Mobi
+FALSE NEGATIVE
+Economic-entity merge overestimated coordination (shared infra ≠ same actor).
+
+Missed · +3.1×
+Juror
+IDENTITY AMBIGUITY
+Multiple contracts under one ticker — signal attributed to the wrong pool.
+
+Wrong-pool entry · -38%
+STONKLESS
+CALIBRATION
+Entry-quality model under-weighted chase risk at extension > 80%.
+
+Chase loss · -52%
+SAAR
+REACTIVATION CASE
+Dormant → dev activity + whale accumulation preceded a 4-week repricing.
+
+Validated · +2.8×
+ORCAX
+STRONG
+ENTRY VALID
+OrcAxiom Compute Network
+MB4-ORCAX · REAL PROJECT · horizon 3–7d
+Solana · CA orc…7Kq2 · ORCAX/USDC @ Orca / USDC
+-1.5% (-$1.50)
+
+90
+Opportunity
+79
+Confidence
+68
+Entry Q
+Chase risk
+45
+Risk
+LOW
+Follow
+STRENGTHENING
+Regime
+EXPANSION
+Primary Thesis
+DePIN project · inflection traction (Active nodes (K)) · MC $3.20M vs peer median $44.00M · strong value capture · strong 20× feasibility
+
+Project Quality — PQS 78 · QUALITY
+Product reality
+13 / 15
+Product maturity
+8 / 10
+User adoption
+7 / 10
+User growth
+9 / 10
+Revenue / fees
+6 / 10
+TVL / econ activity
+7 / 10
+Developer activity
+9 / 10
+Token utility
+8 / 10
+Tokenomics
+7 / 10
+Ecosystem
+4 / 5
+Traction & Economic Activity
+Active nodes (K)
+INFLECTION · slope ×10.2
+Revenue · K$ / mo
+EXPLODING
+Token — Value Capture & Supply
+Value capture
+STRONG VALUE CAPTURE
+18% of compute fees → staking yield + buyback
+
+Supply pressure 31/100
+Unlock risk: LOW
+MC / FDV
+$3.20M / $9.60M
+Circulating
+33% of 1B
+Next unlock
+team vesting tranche
+Valuation & 20× Feasibility — STRONG
+20× target MC
+$64.00M
+Peer median MC
+$44.00M
+Valuation gap
+93% below peers
+Aethernode
+$44.00M · fundamentals 76
+RenderNet-Sol
+$81.00M · fundamentals 82
+IONET
+$26.00M · fundamentals 72
+Structural feasibility 90/100
+target ≠ probability
+Catalyst
+Verified
+Mainnet v2 + enterprise compute contracts
+Proximity
+9d away · NEAR
+Priced-in
+~25%
+Catalyst score
+79
+Capital Flow & Independence
+State
+ACCUMULATION
+Clean inflow (24h)
+$545.0K
+Wash-adjusted volume
+$1.97M · 18% wash est.
+Independent entities
+880/1240 wallets (71%)
+Smart money quality
+71/100 — 3 high-reputation DePIN-specialist wallets entered in last 6h
+Manipulation — control 12% (LOW)
+LOW economic control probability — coordination patterns (bundled buys, circular volume, common funding, sniper concentration), not raw wallet count, drive this score.
+
+Evidence — Supporting
+Project reality: REAL_PROJECT — live compute marketplace (beta)
+Traction INFLECTION in Active nodes (K) (slope ×10.2)
+Economic activity EXPLODING
+Value capture: STRONG VALUE CAPTURE
+MC $3.20M vs peer median $44.00M (gap 93%)
+20× feasibility 90 (STRONG)
+Capital: ACCUMULATION — clean inflow $545.0K (wash-adjusted)
+Economic entities: 880/1240 independent
+Catalyst (verified): Mainnet v2 + enterprise compute contracts — 9d away, ~25% priced-in
+Evidence — Contradicting (Negative Evidence)
+Enterprise contracts signed but revenue not yet flowing (next quarter)
+Single-sector exposure (compute demand)
+Invalidation Conditions
+Node growth stalls 2 consecutive months
+Enterprise counterparties delay activation
+Fee-capture mechanism altered by governance
+Hard Gates
+G1 ✓
+Project reality
+REAL_PROJECT — live compute marketplace (beta)
+G2 ✓
+Contract risk
+contract risk: NONE
+G3 ✓
+Tokenomics risk
+unlock risk: LOW
+G4 ✓
+Economic control
+economic control probability 12% (LOW)
+G5 ✓
+Liquidity survival
+liquidity $480.0K · depth 72
+G6 ✓
+Identity ambiguity
+Solana · orc…7Kq2 · ORCAX/USDC @ Orca / USDC
+G7 ✓
+Data freshness
+all evidence streams fresh
+G8 ✓
+Dead token
+protocol activity verifiable
+G9 ✓
+Identifiable thesis
+primary thesis: DePIN project · inflection traction (Active nodes (K)) · MC $3.20M vs peer median $44.00M · strong value capture · strong 20× feasibility
