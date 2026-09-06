@@ -13,6 +13,9 @@ const {
   recordAlertsAtomic,
   readCandidateStates,
   recordCandidateLifecycle,
+  readAlertEvents,
+  acknowledgeAlertEvent,
+  resolveAlertEvent,
   createScanRun,
   recordTokenObservations,
   recordDecisionSnapshots,
@@ -134,6 +137,7 @@ function freshState() {
     watchlist: [],
     watchlistHistory: [],
     alerts: [],
+    alertEvents: [],
     patterns: [],
     portfolio: {
       starting: 100000, cash: 100000, realized: 0, fees: 0, trades: 0, positions: [], history: []
@@ -256,7 +260,7 @@ function idempotencyReplay(previousRun, fingerprint, requestId) {
 }
 
 function mutationRoute(url, method) {
-  return method === "POST" && (url.pathname === "/api/scan" || url.pathname === "/api/analysis" || url.pathname === "/api/trades" || url.pathname.startsWith("/api/watchlist/"))
+  return method === "POST" && (url.pathname === "/api/scan" || url.pathname === "/api/analysis" || url.pathname === "/api/trades" || url.pathname.startsWith("/api/watchlist/") || /^\/api\/alerts\/[^/]+\/(acknowledge|resolve)$/.test(url.pathname))
     || method === "DELETE" && url.pathname.startsWith("/api/watchlist/");
 }
 
@@ -1775,6 +1779,13 @@ async function handleApi(req, res, url) {
       return send(res, 500, { error: "Unable to load persisted Radar history.", detail: error.message });
     }
   }
+  if (req.method === "GET" && url.pathname === "/api/alerts") {
+    try {
+      return send(res, 200, { ok: true, events: await readAlertEvents() });
+    } catch (error) {
+      return send(res, 500, { error: "Unable to load persisted alert events.", requestId: req.requestId });
+    }
+  }
   if (req.method === "GET" && url.pathname.startsWith("/api/tokens/")) {
     const item = tokenById(decodeURIComponent(url.pathname.split("/").pop()));
     return item
@@ -1794,6 +1805,39 @@ async function handleApi(req, res, url) {
       idempotencyFingerprint: requestFingerprint("scan", { method: "LIVE", version: ACTIVE_DECISION_VERSION })
     });
     return send(res, result.conflict ? 409 : 200, result);
+  }
+  if (req.method === "POST" && /^\/api\/alerts\/[^/]+\/(acknowledge|resolve)$/.test(url.pathname)) {
+    const [, , , rawEventId, action] = url.pathname.split("/");
+    let body;
+    try {
+      body = await readBody(req);
+    } catch (error) {
+      if (/Payload too large|Request body timed out|Invalid JSON|Request body must be/.test(error.message)) {
+        return send(res, error.message === "Payload too large." ? 413 : 400, { error: error.message, requestId: req.requestId });
+      }
+      return send(res, 400, { error: "Alert action body could not be read.", requestId: req.requestId });
+    }
+    const eventId = decodeURIComponent(rawEventId);
+    const field = action === "acknowledge" ? "note" : "reason";
+    const text = body?.[field] == null ? null : String(body[field]).trim();
+    if (text != null && text.length > 500) {
+      return send(res, 422, { error: `${field} must be 500 characters or fewer.`, requestId: req.requestId });
+    }
+    const mutationOwner = await lockMutation(req);
+    if (!mutationOwner) return send(res, 409, { error: "Another state mutation is in progress.", requestId: req.requestId });
+    try {
+      const result = action === "acknowledge"
+        ? await acknowledgeAlertEvent(eventId, text)
+        : await resolveAlertEvent(eventId, text);
+      if (!result) return send(res, 404, { error: "Alert event not found.", requestId: req.requestId });
+      state = await readState(state);
+      return send(res, 200, { ok: true, duplicate: result.duplicate, event: result.event, state: jsonState(), requestId: req.requestId });
+    } catch (error) {
+      console.error(`[${req.requestId}] Alert ${action} failed`, error.message);
+      return send(res, 500, { error: `Alert could not be ${action}d.`, requestId: req.requestId });
+    } finally {
+      await unlockMutation(mutationOwner, req.requestId);
+    }
   }
   if (req.method === "POST" && url.pathname === "/api/analysis") {
     const mutationOwner = await lockMutation(req);

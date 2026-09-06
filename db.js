@@ -246,11 +246,12 @@ async function readState(fallback) {
   radar = await prisma.radarState.findUnique({ where: { id: 1 } });
 
   const tokenFilter = { providerUrl: { not: null } };
-  const [dbTokens, activeWatchlist, events, alerts, patterns, account, whalePoints, scanRuns, candidateStates] = await Promise.all([
+  const [dbTokens, activeWatchlist, events, alerts, alertEvents, patterns, account, whalePoints, scanRuns, candidateStates] = await Promise.all([
     prisma.token.findMany({ where: tokenFilter, orderBy: [{ radar: "desc" }, { updatedAt: "desc" }] }),
     prisma.watchlistEntry.findMany({ where: { active: true, token: tokenFilter }, include: { token: true } }),
     prisma.watchlistEvent.findMany({ include: { token: true }, orderBy: { createdAt: "asc" } }),
     prisma.alert.findMany({ orderBy: { createdAt: "desc" }, take: 20 }),
+    prisma.alertEvent.findMany({ orderBy: { createdAt: "desc" }, take: 50, include: { acknowledgement: true, resolution: true } }),
     prisma.pattern.findMany({ orderBy: { match: "desc" } }),
     prisma.paperAccount.findUnique({ where: { id: 1 }, include: { positions: { include: { token: true } }, history: { orderBy: { time: "desc" }, take: 100 } } }),
     prisma.whaleActivityPoint.findMany({ where: { source: "live" }, orderBy: { recordedAt: "asc" }, take: 96 }),
@@ -408,6 +409,7 @@ async function readState(fallback) {
     watchlist: activeWatchlist.filter(item => safeMints.has(item.token.mint)).map(item => item.token.mint),
     watchlistHistory: events.filter(event => safeMints.has(event.token.mint)).map(event => ({ mint: event.token.mint, action: event.action, at: event.createdAt.toISOString() })),
     alerts: alerts.map(alert => ({ type: alert.type, token: alert.token, text: alert.text, tone: alert.tone, time: alert.timeLabel || alert.createdAt.toISOString() })),
+    alertEvents: alertEvents.map(alertEventView),
     candidateStates: candidateStates.map(candidate => ({
       mint: candidate.mint,
       currentState: candidate.currentState,
@@ -627,6 +629,98 @@ async function readCandidateStates(mints = null) {
   return prisma.candidateState.findMany({
     where: Array.isArray(mints) && mints.length ? { mint: { in: mints } } : undefined,
     orderBy: { updatedAt: "desc" }
+  });
+}
+
+function alertEventView(event) {
+  if (!event) return null;
+  return {
+    id: event.id,
+    eventType: event.eventType,
+    status: event.status,
+    mint: event.mint,
+    token: event.token,
+    text: event.text,
+    tone: event.tone,
+    payload: event.payload,
+    createdAt: event.createdAt.toISOString(),
+    acknowledgedAt: event.acknowledgedAt?.toISOString() || event.acknowledgement?.acknowledgedAt?.toISOString() || null,
+    resolvedAt: event.resolvedAt?.toISOString() || event.resolution?.resolvedAt?.toISOString() || null,
+    invalidatedAt: event.invalidatedAt?.toISOString() || null,
+    staleAt: event.staleAt?.toISOString() || null,
+    acknowledgement: event.acknowledgement ? {
+      actor: event.acknowledgement.actor,
+      note: event.acknowledgement.note,
+      acknowledgedAt: event.acknowledgement.acknowledgedAt.toISOString()
+    } : null,
+    resolution: event.resolution ? {
+      status: event.resolution.status,
+      reason: event.resolution.reason,
+      actor: event.resolution.actor,
+      resolvedAt: event.resolution.resolvedAt.toISOString()
+    } : null
+  };
+}
+
+async function readAlertEvents(limit = 50) {
+  const events = await prisma.alertEvent.findMany({
+    orderBy: { createdAt: "desc" },
+    take: Math.max(1, Math.min(200, Number(limit) || 50)),
+    include: { acknowledgement: true, resolution: true }
+  });
+  return events.map(alertEventView);
+}
+
+async function acknowledgeAlertEvent(id, note = null) {
+  return prisma.$transaction(async tx => {
+    const event = await tx.alertEvent.findUnique({
+      where: { id },
+      include: { acknowledgement: true, resolution: true }
+    });
+    if (!event) return null;
+    const acknowledgement = await tx.alertAcknowledgement.upsert({
+      where: { alertEventId: id },
+      create: { alertEventId: id, actor: "local_operator", note },
+      update: {}
+    });
+    const shouldChangeStatus = event.status === "OPEN";
+    if (shouldChangeStatus) {
+      await tx.alertEvent.update({
+        where: { id },
+        data: { status: "ACKNOWLEDGED", acknowledgedAt: acknowledgement.acknowledgedAt }
+      });
+    }
+    const updated = await tx.alertEvent.findUnique({
+      where: { id },
+      include: { acknowledgement: true, resolution: true }
+    });
+    return { duplicate: !shouldChangeStatus, event: alertEventView(updated) };
+  });
+}
+
+async function resolveAlertEvent(id, reason = null) {
+  return prisma.$transaction(async tx => {
+    const event = await tx.alertEvent.findUnique({
+      where: { id },
+      include: { acknowledgement: true, resolution: true }
+    });
+    if (!event) return null;
+    const canResolve = event.status === "OPEN" || event.status === "ACKNOWLEDGED";
+    let resolution = event.resolution;
+    if (canResolve && !resolution) {
+      resolution = await tx.alertResolution.create({
+        data: { alertEventId: id, status: "RESOLVED", reason, actor: "local_operator" }
+      });
+      await tx.alertEvent.update({
+        where: { id },
+        data: { status: "RESOLVED", resolvedAt: resolution.resolvedAt }
+      });
+    }
+    const updated = await tx.alertEvent.findUnique({
+      where: { id },
+      include: { acknowledgement: true, resolution: true }
+    });
+    return { duplicate: !canResolve || Boolean(event.resolution), event: alertEventView(updated) };
   });
 }
 
@@ -1182,6 +1276,9 @@ module.exports = {
   recordAlertsAtomic,
   readCandidateStates,
   recordCandidateLifecycle,
+  readAlertEvents,
+  acknowledgeAlertEvent,
+  resolveAlertEvent,
   createScanRun,
   finishScanRun,
   ensureScanLease,

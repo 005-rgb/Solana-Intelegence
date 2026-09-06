@@ -344,6 +344,59 @@ function alertMarkup(alert, large = false) {
     : `<span class="alert-token">${esc(alert.token)}</span>`;
   return `<div class="alert ${large ? "alert-large" : ""}"><span class="alert-mark mark-${alert.tone}"></span><div class="alert-copy"><div class="alert-title">${esc(alert.type)}${tokenLabel}</div><div class="alert-text">${esc(alert.text)}</div></div><span class="alert-time">${esc(alert.time)}</span></div>`;
 }
+function alertStatusLabel(status) {
+  return String(status || "UNKNOWN").replaceAll("_", " ");
+}
+function alertEventMarkup(event, large = false) {
+  const token = snapshot.tokens.find(item => item.symbol === event.token);
+  const tokenLabel = token
+    ? `<button class="alert-token-link" onclick="showToken('${encodeURIComponent(token.mint)}')">${esc(event.token)}</button>`
+    : `<span class="alert-token">${esc(event.token)}</span>`;
+  const status = String(event.status || "UNKNOWN").toUpperCase();
+  const badgeTone = status === "OPEN" ? "yellow" : status === "ACKNOWLEDGED" ? "blue" : status === "RESOLVED" ? "green" : "red";
+  const actions = status === "OPEN"
+    ? `<button class="btn btn-small btn-quiet" onclick="acknowledgeAlert('${encodeURIComponent(event.id)}')">Acknowledge</button><button class="btn btn-small btn-primary" onclick="resolveAlert('${encodeURIComponent(event.id)}')">Resolve</button>`
+    : status === "ACKNOWLEDGED"
+      ? `<button class="btn btn-small btn-primary" onclick="resolveAlert('${encodeURIComponent(event.id)}')">Resolve</button>`
+      : "";
+  const audit = event.acknowledgement?.acknowledgedAt
+    ? `Acknowledged ${formatDate(event.acknowledgement.acknowledgedAt)}`
+    : event.resolution?.resolvedAt
+      ? `Resolved ${formatDate(event.resolution.resolvedAt)}`
+      : "Awaiting operator review";
+  return `<div class="alert ${large ? "alert-large" : ""}"><span class="alert-mark mark-${event.tone}"></span><div class="alert-copy"><div class="alert-title">${esc(event.eventType)}${tokenLabel}<span class="badge badge-${badgeTone}">${esc(alertStatusLabel(status))}</span></div><div class="alert-text">${esc(event.text)}</div><div class="alert-time">${esc(audit)} · ${esc(formatDate(event.createdAt))}</div></div><div class="alert-actions">${actions}</div></div>`;
+}
+async function acknowledgeAlert(id) {
+  try {
+    const result = await api(`/api/alerts/${encodeURIComponent(decodeURIComponent(id))}/acknowledge`, {
+      method: "POST",
+      headers: { "Idempotency-Key": `alert:${decodeURIComponent(id)}:acknowledge` },
+      body: JSON.stringify({})
+    });
+    snapshot = result.state;
+    render();
+    toast(result.duplicate ? "Alert already acknowledged." : "Alert acknowledged.");
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+async function resolveAlert(id) {
+  const reason = window.prompt("Resolution note (optional):", "") ?? null;
+  if (reason === null) return;
+  try {
+    const decodedId = decodeURIComponent(id);
+    const result = await api(`/api/alerts/${encodeURIComponent(decodedId)}/resolve`, {
+      method: "POST",
+      headers: { "Idempotency-Key": `alert:${decodedId}:resolve` },
+      body: JSON.stringify({ reason })
+    });
+    snapshot = result.state;
+    render();
+    toast(result.duplicate ? "Alert already resolved or closed." : "Alert resolved.");
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
 function dashboard() {
   const sorted = [...snapshot.tokens].sort((a,b) => (b.radar ?? -1) - (a.radar ?? -1));
   const portfolio = snapshot.portfolio;
@@ -441,9 +494,16 @@ function trades() {
     `<section class="card page-panel"><div class="card-head"><div><div class="card-title">Trade journal</div><div class="card-kicker">Newest execution first · PostgreSQL-backed</div></div></div>${history.length ? `<div class="table-wrap"><table><thead><tr><th>Time</th><th>Side</th><th>Token</th><th>Amount</th><th>Price</th><th>Fee</th><th>Radar score</th></tr></thead><tbody>${history.map(trade => `<tr><td>${formatDate(trade.time)}</td><td><span class="badge ${trade.side === "BUY" ? "badge-green" : "badge-red"}">${esc(trade.side)}</span></td><td><strong>${esc(trade.symbol)}</strong></td><td>${money(trade.amount)}</td><td>$${Number(trade.price).toFixed(5)}</td><td>${money(trade.fee)}</td><td class="score">${trade.score ?? "UNKNOWN"}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty"><strong>No paper trades yet</strong>Paper buys are always exactly $100.</div>`}</section>`;
 }
 function alerts() {
+  const events = snapshot.alertEvents || [];
+  const openEvents = events.filter(event => event.status === "OPEN" || event.status === "ACKNOWLEDGED");
+  const redEvents = events.filter(event => event.tone === "red" && !["RESOLVED", "STALE"].includes(event.status));
+  const watchEvents = events.filter(event => event.tone === "yellow" && !["RESOLVED", "STALE"].includes(event.status));
+  const body = events.length
+    ? events.map(event => alertEventMarkup(event, true)).join("")
+    : snapshot.alerts.map(alert => alertMarkup(alert, true)).join("");
   return head("Risk operations", "Alerts", "Review current observations and risk flags produced by the signal feed. Alerts are informational and never financial advice.", `<button class="btn btn-primary" onclick="scan()">↻ Run alert scan</button>`) +
-    `<div class="grid metrics">${stat("Open observations", snapshot.alerts.length, "latest persisted feed", "!")}${stat("High risk", snapshot.alerts.filter(alert => alert.tone === "red").length, "red alerts", "!", "metric-negative")}${stat("Watch items", snapshot.alerts.filter(alert => alert.tone === "yellow").length, "yellow alerts", "◌")}${stat("Last scan", snapshot.lastScan ? formatDate(snapshot.lastScan) : "—", "provider freshness", "◷")}</div>` +
-    `<section class="card page-panel">${snapshot.alerts.length ? snapshot.alerts.map(alert => alertMarkup(alert, true)).join("") : `<div class="empty"><strong>No potential-token notifications yet</strong><span>Notifications appear only after a LIVE token passes every active safety filter.</span></div>`}</section>`;
+    `<div class="grid metrics">${stat("Open observations", events.length ? openEvents.length : snapshot.alerts.length, "requires operator review", "!")}${stat("High risk", events.length ? redEvents.length : snapshot.alerts.filter(alert => alert.tone === "red").length, "red alerts", "!", "metric-negative")}${stat("Watch items", events.length ? watchEvents.length : snapshot.alerts.filter(alert => alert.tone === "yellow").length, "yellow alerts", "◌")}${stat("Last scan", snapshot.lastScan ? formatDate(snapshot.lastScan) : "—", "provider freshness", "◷")}</div>` +
+    `<section class="card page-panel">${body || `<div class="empty"><strong>No candidate alert events yet</strong><span>Lifecycle events appear after a candidate crosses a governed state boundary.</span></div>`}</section>`;
 }
 function backtest() {
   const runs = snapshot.scanRuns || [];

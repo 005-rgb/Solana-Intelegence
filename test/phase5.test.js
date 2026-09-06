@@ -8,6 +8,8 @@ const {
   prisma,
   readCandidateStates,
   recordCandidateLifecycle,
+  acknowledgeAlertEvent,
+  resolveAlertEvent,
   disconnectDb
 } = require("../db");
 
@@ -113,8 +115,29 @@ test("Phase 5 persists state, transition, delivery, and supersession atomically"
   assert.equal(events[0].status, "INVALIDATED");
   assert.equal(events[1].status, "INVALIDATED");
 
-  await prisma.alertEvent.deleteMany({ where: { mint } });
-  await prisma.candidateState.deleteMany({ where: { mint } });
-  await prisma.alert.deleteMany({ where: { token: "P5DB" } });
+  const actionMint = `phase5-action-${suffix}`;
+  const actionCandidate = candidate({ mint: actionMint, symbol: "P5ACT" });
+  const actionInitial = deriveCandidateLifecycle(actionCandidate, null, now + 45_000);
+  await recordCandidateLifecycle([actionInitial]);
+  const actionEvent = await prisma.alertEvent.findFirst({ where: { mint: actionMint } });
+  const acknowledged = await acknowledgeAlertEvent(actionEvent.id, "Reviewed evidence.");
+  assert.equal(acknowledged.event.status, "ACKNOWLEDGED");
+  assert.equal(acknowledged.event.payload.mint, actionMint);
+  const acknowledgedAgain = await acknowledgeAlertEvent(actionEvent.id, "A different note must not overwrite history.");
+  assert.equal(acknowledgedAgain.duplicate, true);
+  assert.equal(acknowledgedAgain.event.acknowledgement.note, "Reviewed evidence.");
+  const resolved = await resolveAlertEvent(actionEvent.id, "No longer actionable.");
+  assert.equal(resolved.event.status, "RESOLVED");
+  assert.equal(resolved.event.resolution.reason, "No longer actionable.");
+  const resolvedAgain = await resolveAlertEvent(actionEvent.id, "A different reason must not overwrite history.");
+  assert.equal(resolvedAgain.duplicate, true);
+  assert.equal(resolvedAgain.event.resolution.reason, "No longer actionable.");
+
+  const protectedAction = await acknowledgeAlertEvent(events[1].id, "Historical invalidation reviewed.");
+  assert.equal(protectedAction.event.status, "INVALIDATED");
+
+  await prisma.alertEvent.deleteMany({ where: { mint: { in: [mint, actionMint] } } });
+  await prisma.candidateState.deleteMany({ where: { mint: { in: [mint, actionMint] } } });
+  await prisma.alert.deleteMany({ where: { token: { in: ["P5DB", "P5ACT"] } } });
   await disconnectDb();
 });

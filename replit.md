@@ -150,8 +150,13 @@ npm run db:push
   liquidity deterioration, thesis changes, stale transitions, invalidations, and
   requalification are visible without repeated scan spam.
 - Security invalidation and stale evidence supersede open opportunity events.
-  Alert acknowledgement and resolution entities are present for the next UI/API
-  lifecycle surface; no wallet signing or real execution is enabled.
+- Alert operators can acknowledge or resolve open events through
+  `POST /api/alerts/:id/acknowledge` and `POST /api/alerts/:id/resolve`.
+  Actions are origin-protected, transaction-backed, idempotent, and preserve
+  immutable acknowledgement/resolution records. Stale and invalidated events
+  remain historical and cannot be reopened or silently resolved.
+- The Alerts page exposes lifecycle status and the appropriate acknowledge or
+  resolve action; no wallet signing or real execution is enabled.
 
 The authoritative product specification is
 [`docs/integrated-radar-core-market-brain-prd.md`](docs/integrated-radar-core-market-brain-prd.md).
