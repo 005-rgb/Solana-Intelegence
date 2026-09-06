@@ -288,6 +288,18 @@ test("RPC endpoint configuration supports labeled lines, deduplication, and safe
   assert.ok(config.rejected.every(entry => !Object.prototype.hasOwnProperty.call(entry, "value")));
 });
 
+test("RPC endpoint configuration preserves safe provider labels for health reporting", () => {
+  const config = parseRpcEndpointConfig([JSON.stringify({
+    HELIUS: "https://mainnet.helius-rpc.com/?api-key=hidden",
+    ZAN: "https://api.zan.top/node/v1/solana/mainnet/hidden"
+  })]);
+  assert.deepEqual(config.acceptedDetails.map(item => item.provider), ["HELIUS", "ZAN"]);
+  assert.deepEqual(config.acceptedDetails.map(item => new URL(item.url).hostname), [
+    "mainnet.helius-rpc.com",
+    "api.zan.top"
+  ]);
+});
+
 test("partial candidate data remains unresolved and cannot reconcile as accepted", () => {
   const report = summarizeBaselineCandidates([
     verifiedItem({

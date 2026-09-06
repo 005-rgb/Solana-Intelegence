@@ -339,6 +339,12 @@ const configuredRpc = parseRpcEndpointConfig([process.env.SOLANA_RPC_URLS, proce
 const configuredRpcUrls = configuredRpc.accepted.slice(0, 8);
 const fallbackRpcUrls = ["https://solana-rpc.publicnode.com", "https://api.mainnet-beta.solana.com"];
 const SOLANA_RPC_URLS = configuredRpcUrls.length ? configuredRpcUrls : fallbackRpcUrls;
+const rpcProviderNames = new Map(
+  (configuredRpc.acceptedDetails || [])
+    .slice(0, 8)
+    .filter(entry => entry?.url)
+    .map(entry => [entry.url, entry.provider || null])
+);
 const rpcConfiguration = {
   source: process.env.SOLANA_RPC_URLS ? "SOLANA_RPC_URLS" : process.env.SOLANA_RPC_URL ? "SOLANA_RPC_URL" : "DEFAULT",
   fallbackUsed: configuredRpcUrls.length === 0,
@@ -383,6 +389,17 @@ function rpcEndpointLabel(endpoint) {
   }
 }
 
+function rpcProviderLabel(endpoint) {
+  return rpcProviderNames.get(endpoint) || rpcEndpointLabel(endpoint);
+}
+
+function isRetryableRpcError(error) {
+  const code = Number(error?.code);
+  const message = String(error?.message || error || "");
+  return [-32004, -32005, -32009].includes(code)
+    || /rate.?limit|too many requests|quota|temporar|overload|server busy|try again/i.test(message);
+}
+
 function recordRpcFailure(endpoint, status = null) {
   const state = rpcEndpointState(endpoint);
   state.failures += 1;
@@ -418,6 +435,7 @@ function rpcHealthSummary() {
     endpoints: SOLANA_RPC_URLS.map(endpoint => {
       const state = rpcEndpointState(endpoint);
       return {
+        provider: rpcProviderLabel(endpoint),
         endpoint: rpcEndpointLabel(endpoint),
         failures: state.failures,
         circuitOpen: Boolean(state.openedAt),
@@ -480,6 +498,10 @@ async function solanaRpc(method, params) {
             lastError = new Error(payload.error.message || "Solana RPC request failed");
             lastError.status = payload.error.code || null;
             recordRpcFailure(endpoint, lastError.status);
+            if (isRetryableRpcError(payload.error) && attempt + 1 < RPC_MAX_ATTEMPTS_PER_ENDPOINT) {
+              await new Promise(resolve => setTimeout(resolve, rpcRetryDelay(response, attempt)));
+              continue;
+            }
             break;
           }
           recordRpcSuccess(endpoint);
@@ -539,6 +561,25 @@ async function solanaRpcBatch(requests, signal) {
             lastError = new Error(`Solana RPC batch response was invalid at ${rpcEndpointLabel(endpoint)}`);
             recordRpcFailure(endpoint, null);
             break;
+          }
+          const expectedIds = new Set(requests.map(request => String(request.id)));
+          const responseIds = new Set(payload.map(responseItem => String(responseItem?.id)));
+          const retryableError = payload
+            .map(responseItem => responseItem?.error)
+            .find(error => isRetryableRpcError(error));
+          if (responseIds.size < expectedIds.size || [...expectedIds].some(id => !responseIds.has(id))) {
+            lastError = new Error(`Solana RPC batch response was incomplete at ${rpcEndpointLabel(endpoint)}`);
+            recordRpcFailure(endpoint, null);
+            break;
+          }
+          if (retryableError) {
+            lastError = new Error(retryableError.message || "Solana RPC provider rate limit.");
+            lastError.status = retryableError.code || null;
+            recordRpcFailure(endpoint, lastError.status);
+            if (attempt + 1 < RPC_MAX_ATTEMPTS_PER_ENDPOINT) {
+              await new Promise(resolve => setTimeout(resolve, rpcRetryDelay(response, attempt)));
+            }
+            continue;
           }
           recordRpcSuccess(endpoint);
           return payload;
@@ -1452,7 +1493,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
          invalid_feed_reason_counts: invalidFeedReasonCounts,
          rpc_failure_reasons: [...rpcFailureReasons],
          provider_health: Object.fromEntries([...providerHealth.entries()].map(([endpoint, health]) => [
-           endpoint,
+           rpcEndpointLabel(endpoint),
            { failures: health.failures, circuitOpen: Boolean(health.openedAt), lastStatus: health.lastStatus }
          ]))
          ,

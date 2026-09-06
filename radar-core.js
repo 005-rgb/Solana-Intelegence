@@ -885,9 +885,17 @@ function selectBoardTokens(previousTokens, acceptedTokens) {
 
 function parseRpcEndpointConfig(values = []) {
   const accepted = [];
+  const acceptedDetails = [];
   const rejected = [];
   const seen = new Set();
   const queue = [];
+
+  const enqueueEntry = (value, label = null) => {
+    if (typeof value !== "string") return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    queue.push({ raw: trimmed, label: typeof label === "string" && label.trim() ? label.trim() : null });
+  };
 
   const enqueue = value => {
     if (typeof value === "string") {
@@ -895,23 +903,36 @@ function parseRpcEndpointConfig(values = []) {
       if (!trimmed) return;
       try {
         const parsed = JSON.parse(trimmed);
-        if (Array.isArray(parsed)) return parsed.forEach(enqueue);
-        if (parsed && typeof parsed === "object") return Object.values(parsed).forEach(enqueue);
+        if (Array.isArray(parsed)) return parsed.forEach(item => {
+          if (item && typeof item === "object" && !Array.isArray(item)) {
+            return enqueueEntry(item.url || item.endpoint, item.provider || item.name);
+          }
+          enqueue(item);
+        });
+        if (parsed && typeof parsed === "object") return Object.entries(parsed).forEach(([label, endpoint]) => enqueueEntry(endpoint, label));
       } catch {
         // Plain comma/newline/semicolon-separated secret follows.
       }
       trimmed.split(/[,\n;]+/).forEach(entry => {
         const normalized = entry.trim().replace(/^["']|["']$/g, "");
-        if (normalized) queue.push(normalized);
+        if (!normalized) return;
+        const labeled = normalized.match(/^([A-Za-z][A-Za-z0-9 _.-]{0,63})\s*=\s*(https?:\/\/\S+)$/i);
+        if (labeled) return enqueueEntry(labeled[2], labeled[1]);
+        enqueueEntry(normalized);
       });
       return;
     }
-    if (Array.isArray(value)) return value.forEach(enqueue);
-    if (value && typeof value === "object") Object.values(value).forEach(enqueue);
+    if (Array.isArray(value)) return value.forEach(item => {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        return enqueueEntry(item.url || item.endpoint, item.provider || item.name);
+      }
+      enqueue(item);
+    });
+    if (value && typeof value === "object") return Object.entries(value).forEach(([label, endpoint]) => enqueueEntry(endpoint, label));
   };
 
   values.forEach(enqueue);
-  for (const raw of queue) {
+  for (const { raw, label } of queue) {
     const urlMatch = raw.match(/https?:\/\/\S+/i);
     const candidate = (urlMatch ? urlMatch[0] : raw).replace(/[)"',]+$/, "");
     let parsed;
@@ -947,8 +968,9 @@ function parseRpcEndpointConfig(values = []) {
     }
     seen.add(normalized);
     accepted.push(normalized);
+    acceptedDetails.push({ url: normalized, provider: label });
   }
-  return { accepted, rejected };
+  return { accepted, acceptedDetails, rejected };
 }
 
 module.exports = {

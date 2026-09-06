@@ -52,4 +52,27 @@ Radar akan:
 4. Mencoba maksimal dua kali per endpoint agar tidak memperburuk rate limit.
 5. Tetap menolak kandidat secara fail-closed jika semua endpoint tidak tersedia.
 
+## Format provider berlabel
+
+Provider dapat diberi label agar status health mudah dibaca. Label hanya metadata
+lokal; URL tetap disimpan sebagai secret:
+
+```text
+HELIUS=https://mainnet.helius-rpc.com/?api-key=YOUR_HELIUS_KEY
+ZAN=https://api.zan.top/node/v1/solana/mainnet/YOUR_ZAN_KEY
+QUICKNODE=https://your-quicknode-endpoint.example
+```
+
+Format JSON juga didukung:
+
+```json
+{
+  "HELIUS": "https://mainnet.helius-rpc.com/?api-key=YOUR_HELIUS_KEY",
+  "ZAN": "https://api.zan.top/node/v1/solana/mainnet/YOUR_ZAN_KEY"
+}
+```
+
+URL dashboard atau halaman pengelolaan API key akan ditolak; gunakan endpoint
+JSON-RPC langsung dari dokumentasi provider.
+
 Setelah secret disimpan, restart workflow **Start application**. Status audit akan menampilkan jumlah endpoint yang terdeteksi tanpa menampilkan URL rahasianya.
