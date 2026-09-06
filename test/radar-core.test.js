@@ -17,6 +17,7 @@ const {
   , validateProviderPair
   , validateProviderPairFeed
   , summarizePhase2Candidates
+  , normalizePoolEvidence
 } = require("../radar-core");
 
 function verifiedItem(overrides = {}) {
@@ -312,6 +313,81 @@ test("pool as largest account is classified and excluded from wallet concentrati
   assert.equal(taxonomy.concentration.top_1_wallet_percent, null);
   assert.equal(taxonomy.concentration.pool_adjusted_top_1_wallet_percent, null);
   assert.equal(taxonomy.concentration.pool_accounts_observed, 1);
+});
+
+test("wallet concentration filters before ranking instead of stopping at a pool account", () => {
+  const taxonomy = buildAccountTaxonomy([
+    { rank: 1, address: "pool-vault", amount: "600", percent: 60 },
+    { rank: 2, address: "wallet-account", amount: "200", percent: 20 }
+  ], {
+    poolEvidence: {
+      baseVault: "pool-vault",
+      walletAddresses: ["wallet-owner"]
+    },
+    accountInfoByAddress: {
+      "wallet-account": {
+        result: { value: { data: { parsed: { info: { owner: "wallet-owner" } } } } }
+      }
+    }
+  });
+  assert.equal(taxonomy.accounts[1].accountClass, ACCOUNT_CLASSES.EOA_OR_WALLET);
+  assert.equal(taxonomy.concentration.top_1_wallet_percent, 20);
+  assert.equal(taxonomy.concentration.pool_adjusted_top_1_wallet_percent, 20);
+  assert.equal(taxonomy.walletEvidence.resolvedWalletAccounts, 1);
+});
+
+test("pool-program-controlled token accounts are classified as pool vaults", () => {
+  const taxonomy = buildAccountTaxonomy([
+    { rank: 1, address: "pool-authority", percent: 35 }
+  ], {
+    poolEvidence: {
+      poolProgramId: "amm-program"
+    },
+    accountInfoByAddress: {
+      "pool-authority": {
+        result: { value: { data: { parsed: { info: { owner: "pool-authority" } } } } }
+      }
+    },
+    ownerInfoByAddress: {
+      "pool-authority": {
+        result: { value: { owner: "amm-program", executable: false } }
+      }
+    }
+  });
+  assert.equal(taxonomy.accounts[0].accountClass, ACCOUNT_CLASSES.POOL_VAULT);
+  assert.equal(taxonomy.concentration.top_1_wallet_percent, null);
+});
+
+test("associated token accounts are not wallets without explicit owner evidence", () => {
+  const taxonomy = buildAccountTaxonomy([
+    { rank: 1, address: "ata-account", percent: 35 }
+  ], {
+    accountInfoByAddress: {
+      "ata-account": {
+        isAssociatedTokenAccount: true,
+        result: { value: { data: { parsed: { info: { owner: "owner-address" } } } } }
+      }
+    }
+  });
+  assert.equal(taxonomy.accounts[0].accountClass, ACCOUNT_CLASSES.ASSOCIATED_TOKEN_ACCOUNT);
+  assert.equal(taxonomy.concentration.top_1_wallet_percent, null);
+  assert.equal(taxonomy.walletEvidence.status, "UNKNOWN");
+});
+
+test("pool evidence normalization keeps unknown fields fail-closed", () => {
+  const evidence = normalizePoolEvidence({
+    dexId: "raydium",
+    lpSupply: "not-a-number",
+    poolCreationSlot: "-1",
+    poolLastUpdateSlot: "42",
+    lpLockExpiry: "not-a-date"
+  });
+  assert.equal(evidence.ammType, "raydium");
+  assert.equal(evidence.lpSupply, null);
+  assert.equal(evidence.poolCreationSlot, null);
+  assert.equal(evidence.poolLastUpdateSlot, 42);
+  assert.equal(evidence.lpLockExpiry, null);
+  assert.equal(evidence.status, "PARTIAL");
 });
 
 test("executable resolved owners remain program-owned, not wallets", () => {

@@ -85,6 +85,9 @@ If a provider or security scan fails, the last known good Radar board remains vi
 - A bounded top-holder RPC enrichment resolves account and owner evidence without weakening the existing security gates. Unresolved owners remain unknown.
 - Immutable `TokenObservation` rows persist account taxonomy, pool evidence, and separated account/wallet concentration metrics.
 - The UI calls the data token-account concentration and shows the taxonomy status; it does not present unresolved token accounts as wallet holders.
+- Wallet concentration is calculated only from explicit wallet-owner evidence. An associated token account remains an ATA unless its owner is independently identified.
+- Pool evidence is normalized with AMM, program, vault, LP, lock/burn, authority, slot, and source fields; malformed numeric, slot, or timestamp values remain `null`.
+- Pool-adjusted wallet concentration excludes `AMM_POOL` and `POOL_VAULT` accounts before ranking, and taxonomy confidence is capped while accounts remain unresolved.
 
 ## Phase 0 active baseline
 

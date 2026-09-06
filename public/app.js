@@ -524,6 +524,12 @@ function shortAddress(address) {
 function accountClassLabel(value) {
   return String(value || "UNKNOWN_ACCOUNT").replaceAll("_", " ");
 }
+function taxonomyPercent(value) {
+  return value == null || !Number.isFinite(Number(value)) ? "UNKNOWN" : `${Number(value).toFixed(2)}%`;
+}
+function taxonomyAddress(value) {
+  return value ? shortAddress(value) : "UNKNOWN";
+}
 function bubbleCoordinates(index) {
   if (index === 0) return { x: 50, y: 50 };
   const angle = ((index * 137.5) - 90) * Math.PI / 180;
@@ -644,7 +650,19 @@ async function showToken(id, reload = true) {
         <div class="health-row"><span>Holder accounts checked</span><strong class="health-value">${security.holders ?? "UNKNOWN"}</strong></div>
          <div class="health-row"><span>Token program</span><strong class="health-value">${esc(security.tokenProgram || "UNKNOWN")}</strong></div>
          <div class="health-row"><span>Concentration basis</span><strong class="health-value health-warn">${esc(accountTaxonomy.status || "ACCOUNT_CONCENTRATION_ONLY")}</strong></div>
-         <div class="health-row"><span>Top wallet concentration</span><strong class="health-value">${concentration.top_1_wallet_percent == null ? "UNKNOWN" : `${Number(concentration.top_1_wallet_percent).toFixed(2)}%`}</strong></div>
+          <div class="health-row"><span>Top account concentration</span><strong class="health-value">${taxonomyPercent(concentration.top_1_account_percent)}</strong></div>
+          <div class="health-row"><span>Top 10 account concentration</span><strong class="health-value">${taxonomyPercent(concentration.top_10_account_percent)}</strong></div>
+          <div class="health-row"><span>Top wallet concentration</span><strong class="health-value">${taxonomyPercent(concentration.top_1_wallet_percent)}</strong></div>
+          <div class="health-row"><span>Pool-adjusted top wallet</span><strong class="health-value">${taxonomyPercent(concentration.pool_adjusted_top_1_wallet_percent)}</strong></div>
+          <div class="health-row"><span>Pool accounts observed</span><strong class="health-value">${concentration.pool_accounts_observed ?? "UNKNOWN"}</strong></div>
+          <div class="health-row"><span>Taxonomy confidence cap</span><strong class="health-value">${accountTaxonomy.confidenceCap == null ? "UNKNOWN" : `${accountTaxonomy.confidenceCap}/100`}</strong></div>
+          <div class="side-divider"></div>
+          <div class="side-card-heading"><div><h3>Pool evidence</h3><span>Explicit evidence only · pair identity is not pool ownership</span></div><span class="security-status ${security.poolEvidence?.status === "VERIFIED" ? "verified" : "rejected"}">${esc(security.poolEvidence?.status || "UNKNOWN")}</span></div>
+          <div class="health-row"><span>AMM / version</span><strong class="health-value">${esc([security.poolEvidence?.ammType, security.poolEvidence?.ammVersion].filter(Boolean).join(" · ") || "UNKNOWN")}</strong></div>
+          <div class="health-row"><span>Pool program</span><strong class="health-value"><code>${esc(taxonomyAddress(security.poolEvidence?.poolProgramId))}</code></strong></div>
+          <div class="health-row"><span>Base / quote vaults</span><strong class="health-value"><code>${esc(taxonomyAddress(security.poolEvidence?.baseVault))} / ${esc(taxonomyAddress(security.poolEvidence?.quoteVault))}</code></strong></div>
+          <div class="health-row"><span>LP mint / supply</span><strong class="health-value"><code>${esc(taxonomyAddress(security.poolEvidence?.lpMint))}</code> / ${security.poolEvidence?.lpSupply == null ? "UNKNOWN" : esc(String(security.poolEvidence.lpSupply))}</strong></div>
+          <div class="health-row"><span>LP burn / lock</span><strong class="health-value">${esc([security.poolEvidence?.lpBurnStatus, security.poolEvidence?.lpLockProvider].filter(Boolean).join(" · ") || "UNKNOWN")}</strong></div>
         <ul class="security-reasons">${securityReasons.map(reason => `<li>${esc(reason)}</li>`).join("")}</ul>
          <div class="side-divider"></div>
          <div class="side-card-heading"><div><h3>Deferred market-quality evidence</h3><span>Recorded for later phases · $${marketMetrics.orderSizeUsd ?? 100} research-entry proxy</span></div><span class="security-status ${marketQuality.status === "PASSED" ? "verified" : "rejected"}">${esc(marketQuality.status || "UNKNOWN")}</span></div>

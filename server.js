@@ -603,7 +603,7 @@ function securityFromRpcResults(accountResponse, supplyResponse, largestResponse
     const owner = accountValue?.owner;
     const tokenProgram = program === "spl-token" || owner === "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
       ? "SPL_TOKEN"
-      : program === "spl-token-2022" || owner === "TokenzQdBNbLqP5VEhdkY6Y1W3qL6u3x9a6J6wGv5"
+      : program === "spl-token-2022" || owner === "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         ? "TOKEN_2022"
         : "UNKNOWN";
     if (parsedType !== "mint" || tokenProgram === "UNKNOWN") {

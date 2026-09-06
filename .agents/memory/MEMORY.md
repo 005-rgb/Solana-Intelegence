@@ -5,3 +5,4 @@
 - [Phase 0A safety boundaries](phase0a-safety-boundaries.md) — mutation idempotency needs payload fingerprints, and scan audit/state finalization must commit atomically.
 - [Provider lineage fallback](provider-lineage-fallback.md) — missing pair responses retain discovery lineage; synthesized snapshots must not masquerade as provider response hashes.
 - [Live lease test isolation](live-lease-test-isolation.md) — database lease integration tests need the running scheduler lease released or they race the live scan worker.
+- [Wallet concentration taxonomy](wallet-concentration-taxonomy.md) — ATA and token-account percentages are not wallet ownership without explicit owner evidence.
