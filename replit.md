@@ -134,6 +134,25 @@ npm run db:push
   and rollout mode. Historical decisions are loaded from these snapshots on
   restart instead of relying only on mutable token JSON.
 
+## Phase 5 candidate lifecycle and alerts
+
+- Candidate lifecycle is persisted separately from the mutable token board through
+  `CandidateState` and immutable `CandidateTransition` rows. Research states are
+  `OBSERVED`, `WATCH`, `QUALIFYING`, `ACTIONABLE_RESEARCH`, `STALE`,
+  `REJECTED`, and `INVALIDATED`; signal, project, and entry states remain
+  separate dimensions.
+- `candidate-lifecycle.js` derives transitions deterministically from the current
+  governed scorecard, security state, market freshness, thesis state, and entry
+  quality. Missing evidence does not create an opportunity alert.
+- Meaningful changes create `AlertEvent`, `AlertDelivery`, and an atomic
+  `AlertOutbox` record. Durable dedupe uses mint, event type, decision version,
+  and an hourly cooldown bucket. Material score changes, security changes,
+  liquidity deterioration, thesis changes, stale transitions, invalidations, and
+  requalification are visible without repeated scan spam.
+- Security invalidation and stale evidence supersede open opportunity events.
+  Alert acknowledgement and resolution entities are present for the next UI/API
+  lifecycle surface; no wallet signing or real execution is enabled.
+
 The authoritative product specification is
 [`docs/integrated-radar-core-market-brain-prd.md`](docs/integrated-radar-core-market-brain-prd.md).
 It integrates the existing Radar Core implementation plan with the project-first

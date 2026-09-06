@@ -246,7 +246,7 @@ async function readState(fallback) {
   radar = await prisma.radarState.findUnique({ where: { id: 1 } });
 
   const tokenFilter = { providerUrl: { not: null } };
-  const [dbTokens, activeWatchlist, events, alerts, patterns, account, whalePoints, scanRuns] = await Promise.all([
+  const [dbTokens, activeWatchlist, events, alerts, patterns, account, whalePoints, scanRuns, candidateStates] = await Promise.all([
     prisma.token.findMany({ where: tokenFilter, orderBy: [{ radar: "desc" }, { updatedAt: "desc" }] }),
     prisma.watchlistEntry.findMany({ where: { active: true, token: tokenFilter }, include: { token: true } }),
     prisma.watchlistEvent.findMany({ include: { token: true }, orderBy: { createdAt: "asc" } }),
@@ -254,7 +254,8 @@ async function readState(fallback) {
     prisma.pattern.findMany({ orderBy: { match: "desc" } }),
     prisma.paperAccount.findUnique({ where: { id: 1 }, include: { positions: { include: { token: true } }, history: { orderBy: { time: "desc" }, take: 100 } } }),
     prisma.whaleActivityPoint.findMany({ where: { source: "live" }, orderBy: { recordedAt: "asc" }, take: 96 }),
-    prisma.scanRun.findMany({ orderBy: { startedAt: "desc" }, take: 100 })
+    prisma.scanRun.findMany({ orderBy: { startedAt: "desc" }, take: 100 }),
+    prisma.candidateState.findMany({ orderBy: { updatedAt: "desc" }, take: 500 })
   ]);
 
   const featureRows = dbTokens.length
@@ -407,6 +408,24 @@ async function readState(fallback) {
     watchlist: activeWatchlist.filter(item => safeMints.has(item.token.mint)).map(item => item.token.mint),
     watchlistHistory: events.filter(event => safeMints.has(event.token.mint)).map(event => ({ mint: event.token.mint, action: event.action, at: event.createdAt.toISOString() })),
     alerts: alerts.map(alert => ({ type: alert.type, token: alert.token, text: alert.text, tone: alert.tone, time: alert.timeLabel || alert.createdAt.toISOString() })),
+    candidateStates: candidateStates.map(candidate => ({
+      mint: candidate.mint,
+      currentState: candidate.currentState,
+      signalState: candidate.signalState,
+      projectState: candidate.projectState,
+      entryState: candidate.entryState,
+      decisionSnapshotId: candidate.decisionSnapshotId,
+      featureSnapshotId: candidate.featureSnapshotId,
+      decisionVersion: candidate.decisionVersion,
+      lastScore: candidate.lastScore,
+      riskScore: candidate.riskScore,
+      securityState: candidate.securityState,
+      marketQualityState: candidate.marketQualityState,
+      thesisState: candidate.thesisState,
+      observedAt: candidate.observedAt?.toISOString() || null,
+      lastTransitionAt: candidate.lastTransitionAt?.toISOString() || null,
+      updatedAt: candidate.updatedAt.toISOString()
+    })),
     patterns: patterns.map(pattern => ({ id: pattern.patternId, name: pattern.name, desc: pattern.detail, match: pattern.match, sample: pattern.sample, outcome: pattern.outcome, tone: pattern.tone })),
     whaleActivity: activityRows.map(fromWhalePoint),
     scanRuns: scanRuns.map(run => ({
@@ -603,6 +622,132 @@ async function recordAlertsAtomic(alerts) {
     return created;
   });
 }
+
+async function readCandidateStates(mints = null) {
+  return prisma.candidateState.findMany({
+    where: Array.isArray(mints) && mints.length ? { mint: { in: mints } } : undefined,
+    orderBy: { updatedAt: "desc" }
+  });
+}
+
+function candidateStateData(change) {
+  return {
+    mint: change.mint,
+    currentState: change.currentState,
+    signalState: change.signalState,
+    projectState: change.projectState,
+    entryState: change.entryState,
+    decisionSnapshotId: change.decisionSnapshotId,
+    featureSnapshotId: change.featureSnapshotId,
+    decisionVersion: change.decisionVersion,
+    lastScore: change.lastScore,
+    riskScore: change.riskScore,
+    securityState: change.securityState,
+    marketQualityState: change.marketQualityState,
+    thesisState: change.thesisState,
+    observedAt: change.observedAt ? new Date(change.observedAt) : null,
+    ...(change.transition ? { lastTransitionAt: new Date(change.transition.occurredAt) } : {}),
+    metadata: change.payload || {}
+  };
+}
+
+async function recordCandidateLifecycle(changes) {
+  if (!Array.isArray(changes) || !changes.length) return { transitions: [], alerts: [] };
+  return prisma.$transaction(async tx => {
+    const transitions = [];
+    const alerts = [];
+    for (const change of changes) {
+      const stateRow = await tx.candidateState.upsert({
+        where: { mint: change.mint },
+        create: candidateStateData(change),
+        update: candidateStateData(change)
+      });
+      let transitionRow = null;
+      if (change.transition) {
+        const dedupeKey = `${change.mint}:${change.transition.fromState}->${change.transition.toState}:${change.decisionVersion}:${change.cooldownBucket}`;
+        transitionRow = await tx.candidateTransition.upsert({
+          where: { dedupeKey },
+          create: {
+            candidateStateId: stateRow.id,
+            mint: change.mint,
+            fromState: change.transition.fromState,
+            toState: change.transition.toState,
+            transitionReason: change.transitionReason,
+            featureSnapshotId: change.featureSnapshotId,
+            decisionId: change.decisionId,
+            decisionVersion: change.decisionVersion,
+            occurredAt: new Date(change.transition.occurredAt),
+            dedupeKey,
+            cooldownBucket: change.cooldownBucket,
+            metadata: change.payload || {}
+          },
+          update: {}
+        });
+        transitions.push(transitionRow);
+      }
+      if (!change.alert) continue;
+      const existingEvent = await tx.alertEvent.findUnique({ where: { dedupeKey: change.alert.dedupeKey } });
+      if (existingEvent) continue;
+      if (["INVALIDATED", "STALE"].includes(change.alert.status)) {
+        await tx.alertEvent.updateMany({
+          where: {
+            mint: change.mint,
+            status: "OPEN"
+          },
+          data: {
+            status: change.alert.status,
+            ...(change.alert.status === "INVALIDATED"
+              ? { invalidatedAt: new Date(change.alert.time) }
+              : { staleAt: new Date(change.alert.time) })
+          }
+        });
+      }
+      const event = await tx.alertEvent.create({
+        data: {
+          candidateStateId: stateRow.id,
+          transitionId: transitionRow?.id || null,
+          eventType: change.alert.eventType,
+          status: change.alert.status,
+          mint: change.mint,
+          token: change.alert.token,
+          text: change.alert.text,
+          tone: change.alert.tone,
+          dedupeKey: change.alert.dedupeKey,
+          payload: change.alert.payload,
+          ...(change.alert.status === "INVALIDATED" ? { invalidatedAt: new Date(change.alert.time) } : {}),
+          ...(change.alert.status === "STALE" ? { staleAt: new Date(change.alert.time) } : {})
+        }
+      });
+      const legacyAlert = await tx.alert.create({
+        data: {
+          type: change.alert.type,
+          token: change.alert.token,
+          text: change.alert.text,
+          tone: change.alert.tone,
+          timeLabel: change.alert.time
+        }
+      });
+      await tx.alertOutbox.create({
+        data: {
+          alertId: legacyAlert.id,
+          alertEventId: event.id,
+          eventType: "ALERT_EVENT_CREATED",
+          payload: change.alert.payload
+        }
+      });
+      await tx.alertDelivery.create({
+        data: {
+          alertEventId: event.id,
+          channel: "IN_APP",
+          status: "PENDING"
+        }
+      });
+      alerts.push(legacyAlert);
+    }
+    return { transitions, alerts };
+  });
+}
+
 async function createScanRun(data) {
   return prisma.scanRun.create({ data });
 }
@@ -1035,6 +1180,8 @@ module.exports = {
   recordWhaleActivity,
   recordAlert,
   recordAlertsAtomic,
+  readCandidateStates,
+  recordCandidateLifecycle,
   createScanRun,
   finishScanRun,
   ensureScanLease,

@@ -11,6 +11,8 @@ const {
   recordWhaleActivity,
   recordAlert,
   recordAlertsAtomic,
+  readCandidateStates,
+  recordCandidateLifecycle,
   createScanRun,
   recordTokenObservations,
   recordDecisionSnapshots,
@@ -49,6 +51,7 @@ const {
   PROVIDER_SCHEMA_VERSION
 } = require("./radar-core");
 const { SCORE_VERSION, scoreRadarCandidate } = require("./radar-scoring");
+const { deriveCandidateLifecycle } = require("./candidate-lifecycle");
 const { createSolanaRpcPool } = require("./solana-rpc-pool");
 const {
   EXECUTION_SAFETY_VERSION,
@@ -730,6 +733,26 @@ async function publishPotentialAlerts(previousTokens, currentTokens) {
   if (!alerts.length) return;
   await recordAlertsAtomic(alerts);
   state.alerts = [...alerts, ...(state.alerts || [])].slice(0, 20);
+}
+
+async function publishCandidateLifecycle(currentTokens) {
+  if (!Array.isArray(currentTokens) || !currentTokens.length) return { transitions: [], alerts: [] };
+  const mints = currentTokens.map(candidate => candidate.mint).filter(Boolean);
+  const existing = await readCandidateStates(mints);
+  const byMint = new Map(existing.map(candidate => [candidate.mint, candidate]));
+  const changes = currentTokens.map(candidate => deriveCandidateLifecycle(candidate, byMint.get(candidate.mint)));
+  const result = await recordCandidateLifecycle(changes);
+  if (result.alerts.length) {
+    const alerts = result.alerts.map(alert => ({
+      type: alert.type,
+      token: alert.token,
+      text: alert.text,
+      tone: alert.tone,
+      time: alert.timeLabel || alert.createdAt.toISOString()
+    }));
+    state.alerts = [...alerts, ...(state.alerts || [])].slice(0, 20);
+  }
+  return result;
 }
 
 function derivePatterns(tokens, scanRuns = []) {
@@ -1633,7 +1656,7 @@ async function runScan(manual = false, options = {}) {
       if (!completeScan) throw new Error(`LIVE scan completed with ${scanResult.report.qualityStatus.toLowerCase()} coverage.`);
       throw new Error("No token passed the LIVE security and upward-evidence filters.");
     }
-    await publishPotentialAlerts(previousTokens, state.tokens);
+    await publishCandidateLifecycle(state.tokens);
     state.system.rpc = "LIVE PROVIDER";
     state.system.market = "LIVE PROVIDER";
     state.whaleActivity = [];

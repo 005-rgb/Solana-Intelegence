@@ -79,28 +79,142 @@ model WatchlistEvent {
 }
 
 model Alert {
-  id        Int      @id @default(autoincrement())
+  id        Int           @id @default(autoincrement())
   type      String
   token     String
   text      String
   tone      String
   timeLabel String?
-  createdAt DateTime @default(now())
+  createdAt DateTime      @default(now())
   outbox    AlertOutbox[]
 
   @@index([createdAt])
 }
 
 model AlertOutbox {
-  id          String    @id @default(cuid())
-  alertId     Int
-  eventType   String
-  payload     Json
-  createdAt   DateTime  @default(now())
-  publishedAt DateTime?
-  alert       Alert     @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  id           String      @id @default(cuid())
+  alertId      Int
+  alertEventId String?
+  eventType    String
+  payload      Json
+  createdAt    DateTime    @default(now())
+  publishedAt  DateTime?
+  alert        Alert       @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  alertEvent   AlertEvent? @relation(fields: [alertEventId], references: [id], onDelete: SetNull)
 
   @@index([publishedAt, createdAt])
+  @@index([alertEventId])
+}
+
+model CandidateState {
+  id                 String                @id @default(cuid())
+  mint               String                @unique
+  currentState       String
+  signalState        String
+  projectState       String
+  entryState         String
+  decisionSnapshotId String?
+  featureSnapshotId  String?
+  decisionVersion    String
+  lastScore          Int?
+  riskScore          Int?
+  securityState      String
+  marketQualityState String
+  thesisState        String?
+  observedAt         DateTime?
+  lastTransitionAt   DateTime?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  metadata           Json
+  transitions        CandidateTransition[]
+  alertEvents        AlertEvent[]
+
+  @@index([currentState, updatedAt])
+  @@index([decisionVersion, updatedAt])
+}
+
+model CandidateTransition {
+  id                String         @id @default(cuid())
+  candidateStateId  String
+  mint              String
+  fromState         String
+  toState           String
+  transitionReason  String
+  featureSnapshotId String?
+  decisionId        String?
+  decisionVersion   String
+  occurredAt        DateTime
+  dedupeKey         String         @unique
+  cooldownBucket    Int
+  metadata          Json
+  createdAt         DateTime       @default(now())
+  candidateState    CandidateState @relation(fields: [candidateStateId], references: [id], onDelete: Cascade)
+  alertEvents       AlertEvent[]
+
+  @@index([mint, occurredAt])
+  @@index([toState, occurredAt])
+}
+
+model AlertEvent {
+  id               String                @id @default(cuid())
+  candidateStateId String?
+  transitionId     String?
+  eventType        String
+  status           String
+  mint             String
+  token            String
+  text             String
+  tone             String
+  dedupeKey        String                @unique
+  payload          Json
+  createdAt        DateTime              @default(now())
+  acknowledgedAt   DateTime?
+  resolvedAt       DateTime?
+  invalidatedAt    DateTime?
+  staleAt          DateTime?
+  candidateState   CandidateState?       @relation(fields: [candidateStateId], references: [id], onDelete: SetNull)
+  transition       CandidateTransition?  @relation(fields: [transitionId], references: [id], onDelete: SetNull)
+  outbox           AlertOutbox[]
+  deliveries       AlertDelivery[]
+  acknowledgement  AlertAcknowledgement?
+  resolution       AlertResolution?
+
+  @@index([mint, createdAt])
+  @@index([status, createdAt])
+}
+
+model AlertDelivery {
+  id           String     @id @default(cuid())
+  alertEventId String
+  channel      String
+  status       String
+  attemptCount Int        @default(0)
+  lastError    String?
+  deliveredAt  DateTime?
+  createdAt    DateTime   @default(now())
+  alertEvent   AlertEvent @relation(fields: [alertEventId], references: [id], onDelete: Cascade)
+
+  @@unique([alertEventId, channel])
+  @@index([status, createdAt])
+}
+
+model AlertAcknowledgement {
+  id             String     @id @default(cuid())
+  alertEventId   String     @unique
+  actor          String?
+  note           String?
+  acknowledgedAt DateTime   @default(now())
+  alertEvent     AlertEvent @relation(fields: [alertEventId], references: [id], onDelete: Cascade)
+}
+
+model AlertResolution {
+  id           String     @id @default(cuid())
+  alertEventId String     @unique
+  status       String
+  reason       String?
+  actor        String?
+  resolvedAt   DateTime   @default(now())
+  alertEvent   AlertEvent @relation(fields: [alertEventId], references: [id], onDelete: Cascade)
 }
 
 model Pattern {
@@ -146,20 +260,20 @@ model PaperPosition {
 }
 
 model PaperTrade {
-  id        Int          @id @default(autoincrement())
-  accountId Int
-  tokenId   Int?
-  symbol    String
-  side      String
-  amount    Float
-  price     Float
-  fee       Float        @default(0)
-  score     Int?
-  idempotencyKey        String? @unique
+  id                     Int          @id @default(autoincrement())
+  accountId              Int
+  tokenId                Int?
+  symbol                 String
+  side                   String
+  amount                 Float
+  price                  Float
+  fee                    Float        @default(0)
+  score                  Int?
+  idempotencyKey         String?      @unique
   idempotencyFingerprint String?
-  time      DateTime     @default(now())
-  account   PaperAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  token     Token?       @relation(fields: [tokenId], references: [id], onDelete: SetNull)
+  time                   DateTime     @default(now())
+  account                PaperAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  token                  Token?       @relation(fields: [tokenId], references: [id], onDelete: SetNull)
 
   @@index([accountId, time])
 }
@@ -216,62 +330,62 @@ model ScanRun {
 }
 
 model ScanLease {
-  id         Int      @id @default(1)
+  id         Int       @id @default(1)
   owner      String
   acquiredAt DateTime?
   expiresAt  DateTime
-  updatedAt  DateTime @updatedAt
+  updatedAt  DateTime  @updatedAt
 }
 
 model MutationLease {
-  id         Int      @id @default(1)
+  id         Int       @id @default(1)
   owner      String
   acquiredAt DateTime?
   expiresAt  DateTime
-  updatedAt  DateTime @updatedAt
+  updatedAt  DateTime  @updatedAt
 }
 
 model TokenObservation {
-  id                 String    @id @default(cuid())
-  scanRunId          String?
-  mint               String
-  pairAddress        String?
-  chainId            String
-  dexId              String?
-  baseToken          Json?
-  quoteToken         Json?
-  observedAt         DateTime
-  providerUpdatedAt  DateTime?
-  pairCreatedAt      DateTime?
-  priceUsd           Float?
-  marketCap          Float?
-  fdv                Float?
-  liquidityUsd       Float?
-  volume             Json
-  transactions       Json
-  makers             Json
-  priceChange        Json
-  boostAmount        Float?
-  ctoFlag            Boolean?
-  source             String
-  sourceEndpoint     String?
-  sourceRequestId    String?
-  sourceResponseHash String?
-  freshnessMs        Int?
-  dataQuality        String
-  decisionOutcome    String?
-  decisionVersion    String?
-  qualityReasons     Json
-  accountTaxonomy    Json?
-  poolEvidence       Json?
-  concentration      Json?
-  rawPayload         Json
-  createdAt          DateTime  @default(now())
-  scanRun            ScanRun?  @relation(fields: [scanRunId], references: [id], onDelete: SetNull)
-  featureSnapshot    RadarFeatureSnapshot?
-  manipulationSnapshot ManipulationSnapshot?
+  id                      String                   @id @default(cuid())
+  scanRunId               String?
+  mint                    String
+  pairAddress             String?
+  chainId                 String
+  dexId                   String?
+  baseToken               Json?
+  quoteToken              Json?
+  observedAt              DateTime
+  providerUpdatedAt       DateTime?
+  pairCreatedAt           DateTime?
+  priceUsd                Float?
+  marketCap               Float?
+  fdv                     Float?
+  liquidityUsd            Float?
+  volume                  Json
+  transactions            Json
+  makers                  Json
+  priceChange             Json
+  boostAmount             Float?
+  ctoFlag                 Boolean?
+  source                  String
+  sourceEndpoint          String?
+  sourceRequestId         String?
+  sourceResponseHash      String?
+  freshnessMs             Int?
+  dataQuality             String
+  decisionOutcome         String?
+  decisionVersion         String?
+  qualityReasons          Json
+  accountTaxonomy         Json?
+  poolEvidence            Json?
+  concentration           Json?
+  rawPayload              Json
+  createdAt               DateTime                 @default(now())
+  scanRun                 ScanRun?                 @relation(fields: [scanRunId], references: [id], onDelete: SetNull)
+  featureSnapshot         RadarFeatureSnapshot?
+  manipulationSnapshot    ManipulationSnapshot?
   projectTractionSnapshot ProjectTractionSnapshot?
-  decisionSnapshots  RadarDecisionSnapshot[]
+  decisionSnapshots       RadarDecisionSnapshot[]
 
   @@index([mint, observedAt])
   @@index([pairAddress, observedAt])
@@ -279,52 +393,52 @@ model TokenObservation {
 }
 
 model ManipulationSnapshot {
-  id              String           @id @default(cuid())
-  observationId   String           @unique
-  mint            String
-  pairAddress     String?
-  observedAt      DateTime
-  version         String
-  status          String
-  sampleStatus    String
-  sampleSize      Int              @default(0)
-  flags           Json
-  entities        Json
-  metrics         Json
-  qualityReasons  Json
+  id               String           @id @default(cuid())
+  observationId    String           @unique
+  mint             String
+  pairAddress      String?
+  observedAt       DateTime
+  version          String
+  status           String
+  sampleStatus     String
+  sampleSize       Int              @default(0)
+  flags            Json
+  entities         Json
+  metrics          Json
+  qualityReasons   Json
   smartMoneyStatus String
-  poolDrainStatus String
-  createdAt       DateTime         @default(now())
-  observation     TokenObservation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+  poolDrainStatus  String
+  createdAt        DateTime         @default(now())
+  observation      TokenObservation @relation(fields: [observationId], references: [id], onDelete: Cascade)
 
   @@index([mint, observedAt])
   @@index([status])
 }
 
 model ProjectTractionSnapshot {
-  id                 String           @id @default(cuid())
-  observationId      String           @unique
-  mint               String
-  pairAddress        String?
-  observedAt         DateTime
-  version            String
-  status             String
-  classification     String
-  projectQualityScore Float?
-  qualityCap         Int
-  capLifted          Boolean
-  evidenceCoverage   Int
-  confidence         Float?
-  evidenceCount      Int              @default(0)
-  invalidEvidenceCount Int             @default(0)
-  unknownDimensions  Json
-  dimensions         Json
-  identityEvidence   Json
-  sourceSet          Json
-  traction           Json
-  qualityReasons     Json
-  createdAt          DateTime         @default(now())
-  observation        TokenObservation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+  id                   String           @id @default(cuid())
+  observationId        String           @unique
+  mint                 String
+  pairAddress          String?
+  observedAt           DateTime
+  version              String
+  status               String
+  classification       String
+  projectQualityScore  Float?
+  qualityCap           Int
+  capLifted            Boolean
+  evidenceCoverage     Int
+  confidence           Float?
+  evidenceCount        Int              @default(0)
+  invalidEvidenceCount Int              @default(0)
+  unknownDimensions    Json
+  dimensions           Json
+  identityEvidence     Json
+  sourceSet            Json
+  traction             Json
+  qualityReasons       Json
+  createdAt            DateTime         @default(now())
+  observation          TokenObservation @relation(fields: [observationId], references: [id], onDelete: Cascade)
 
   @@index([mint, observedAt])
   @@index([status])
@@ -332,64 +446,64 @@ model ProjectTractionSnapshot {
 }
 
 model RadarFeatureSnapshot {
-  id                    String           @id @default(cuid())
-  observationId         String           @unique
-  mint                  String
-  pairAddress            String?
-  observedAt            DateTime
-  featureVersion        String
-  priceAcceleration     Float?
-  volumeAcceleration    Float?
-  buySellImbalance      Float?
-  makerGrowth            Float?
-  liquidityGrowth        Float?
-  volumeLiquidityRatio  Float?
-  volatility             Float?
-  drawdown               Float?
-  concentrationPenalty   Float?
-  features              Json
-  freshness              Json
-  completeness           Int
-  status                String
-  qualityReasons        Json
-  createdAt             DateTime         @default(now())
-  observation           TokenObservation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+  id                   String           @id @default(cuid())
+  observationId        String           @unique
+  mint                 String
+  pairAddress          String?
+  observedAt           DateTime
+  featureVersion       String
+  priceAcceleration    Float?
+  volumeAcceleration   Float?
+  buySellImbalance     Float?
+  makerGrowth          Float?
+  liquidityGrowth      Float?
+  volumeLiquidityRatio Float?
+  volatility           Float?
+  drawdown             Float?
+  concentrationPenalty Float?
+  features             Json
+  freshness            Json
+  completeness         Int
+  status               String
+  qualityReasons       Json
+  createdAt            DateTime         @default(now())
+  observation          TokenObservation @relation(fields: [observationId], references: [id], onDelete: Cascade)
 
   @@index([mint, observedAt])
   @@index([pairAddress, observedAt])
 }
 
 model RadarDecisionSnapshot {
-  id                         String            @id @default(cuid())
-  observationId              String
-  mint                       String
-  pairAddress                String?
-  observedAt                 DateTime
-  decisionVersion            String
-  featureVersion             String
-  scorerBuildIdentifier      String
-  configurationHash          String
+  id                          String           @id @default(cuid())
+  observationId               String
+  mint                        String
+  pairAddress                 String?
+  observedAt                  DateTime
+  decisionVersion             String
+  featureVersion              String
+  scorerBuildIdentifier       String
+  configurationHash           String
   phase4aVersion              String?
-  phase4aConfigurationHash   String?
-  governanceVersion          String?
+  phase4aConfigurationHash    String?
+  governanceVersion           String?
   governanceConfigurationHash String?
-  rolloutMode                String
+  rolloutMode                 String
   decisionState               String
-  radarScore                 Int?
-  opportunityScore           Int?
-  momentumScore              Int?
-  riskScore                  Int?
-  confidenceScore            Int?
-  components                 Json
-  radars                     Json
-  thresholds                Json
-  coefficients              Json
-  sourceSet                  Json
-  scoreReasons               Json
-  scoreWarnings              Json
-  scorecard                  Json
-  createdAt                  DateTime          @default(now())
-  observation                TokenObservation  @relation(fields: [observationId], references: [id], onDelete: Cascade)
+  radarScore                  Int?
+  opportunityScore            Int?
+  momentumScore               Int?
+  riskScore                   Int?
+  confidenceScore             Int?
+  components                  Json
+  radars                      Json
+  thresholds                  Json
+  coefficients                Json
+  sourceSet                   Json
+  scoreReasons                Json
+  scoreWarnings               Json
+  scorecard                   Json
+  createdAt                   DateTime         @default(now())
+  observation                 TokenObservation @relation(fields: [observationId], references: [id], onDelete: Cascade)
 
   @@unique([observationId, decisionVersion])
   @@index([mint, observedAt])
