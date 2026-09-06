@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const {
   EXECUTION_SAFETY_VERSION,
   evaluateExecutionSafety,
+  extractSellExecutionEvidence,
   summarizeExecutionSafety
 } = require("../execution-safety");
 
@@ -79,4 +80,36 @@ test("execution safety summary reconciles classifications and multi-label reason
   assert.equal(summary.actionableResearch, 1);
   assert.equal(summary.unknown, 1);
   assert.ok(summary.reasons.some(reason => reason.code === "SELL_QUOTE_UNKNOWN"));
+});
+
+test("sell-route extraction preserves explicit slippage, fees, and invalidation evidence", () => {
+  const result = extractSellExecutionEvidence({
+    source: "JUPITER_QUOTE",
+    evidence: {
+      sell: {
+        "100": {
+          status: "PASS",
+          routeAvailable: true,
+          estimatedSlippageBps: 42,
+          feeBps: 31,
+          feeAmount: 1200,
+          feeMint: "USDC",
+          quoteAt: new Date(now - 1_000).toISOString(),
+          invalidationCodes: []
+        }
+      }
+    }
+  });
+  assert.equal(result.state, "TRADABLE");
+  assert.equal(result.slippageBps, 42);
+  assert.equal(result.feeBps, 31);
+  assert.equal(result.feeAmount, 1200);
+  assert.equal(result.feeMint, "USDC");
+  assert.deepEqual(result.invalidationCodes, []);
+
+  const failed = extractSellExecutionEvidence({
+    evidence: { sell: { "100": { status: "FAILED", routeAvailable: false } } }
+  });
+  assert.equal(failed.state, "UNTRADABLE");
+  assert.ok(failed.invalidationCodes.includes("SELL_ROUTE_UNAVAILABLE"));
 });

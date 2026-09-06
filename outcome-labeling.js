@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const { extractSellExecutionEvidence } = require("./execution-safety");
 
 const OUTCOME_VERSION = "phase6-v1";
 const CHECKPOINTS = Object.freeze([
@@ -44,6 +45,7 @@ const LOSS_LIMIT_CONFIG_HASH = crypto.createHash("sha256").update(stable({
 })).digest("hex");
 
 function finite(value) {
+  if (value == null || value === "") return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -88,25 +90,17 @@ function checkpointFor(observations, signalTime, checkpoint, asOfMs, maxLagMs) {
 function executionEvidence(observation) {
   const payload = observation?.rawPayload || observation?.raw_payload || {};
   const safety = payload.executionSafety || payload.executionEvidence || {};
-  const checks = Array.isArray(safety.checks) ? safety.checks : [];
-  const sellChecks = checks.filter(check => String(check.side || "").toLowerCase() === "sell");
-  const sellPass = sellChecks.find(check => String(check.quoteStatus || check.status || "").toUpperCase() === "PASS");
-  const sellFailure = sellChecks.find(check => ["FAILED", "REJECTED"].includes(String(check.quoteStatus || check.status || "").toUpperCase()));
   const explicit = payload.tradability || {};
-  const slippage = finite(sellPass?.slippageBps ?? sellPass?.estimatedSlippageBps ?? explicit.slippageBps);
-  const priceImpact = finite(sellPass?.priceImpactPercent ?? sellPass?.priceImpactPct ?? explicit.priceImpactPercent);
-  if (explicit.state === "TRADABLE" || sellPass) {
-    return {
-      state: "TRADABLE",
-      reason: "SELL_ROUTE_EVIDENCE_PASS",
-      slippageBps: slippage ?? (priceImpact == null ? null : priceImpact * 100),
-      feeBps: finite(explicit.feeBps) ?? LABEL_CONFIG.feeBps
-    };
-  }
-  if (explicit.state === "UNTRADABLE" || sellFailure || String(safety.status || "").toUpperCase() === "REJECTED") {
-    return { state: "UNTRADABLE", reason: "SELL_ROUTE_EVIDENCE_FAILED", slippageBps: slippage, feeBps: null };
-  }
-  return { state: "UNKNOWN", reason: "SELL_ROUTE_EVIDENCE_UNAVAILABLE", slippageBps: slippage, feeBps: null };
+  const extracted = extractSellExecutionEvidence(safety, explicit.orderSizeUsd || 100);
+  const slippage = finite(extracted.slippageBps);
+  const feeBps = finite(extracted.feeBps ?? explicit.feeBps);
+  return {
+    ...extracted,
+    state: explicit.state || extracted.state,
+    reason: explicit.reason || extracted.reason,
+    slippageBps: slippage,
+    feeBps
+  };
 }
 
 function securityState(observation) {
@@ -114,6 +108,14 @@ function securityState(observation) {
   if (security?.status) return String(security.status).toUpperCase();
   if (security?.verified === true) return "VERIFIED";
   return "UNKNOWN";
+}
+
+function invalidationCodes(observation, execution) {
+  const codes = Array.isArray(execution?.invalidationCodes) ? [...execution.invalidationCodes] : [];
+  const status = securityState(observation);
+  if (["REJECTED", "INVALID", "UNVERIFIED"].includes(status)) codes.push("SECURITY_INVALIDATED");
+  if (execution?.state === "UNTRADABLE") codes.push("EXECUTION_UNTRADABLE");
+  return [...new Set(codes)];
 }
 
 function thesisOutcome(scorecard, result, horizonObservation) {
@@ -179,7 +181,8 @@ function labelDecisionAtCheckpoint(decision, observations, checkpoint, asOf = Da
       executableReturnPercent: null,
       securityStateAtHorizon: "UNKNOWN",
       thesisOutcome: "UNKNOWN",
-      catalystOutcome: "UNKNOWN"
+      catalystOutcome: "UNKNOWN",
+      invalidationCodes: []
     };
   }
   const entryPoint = points[0];
@@ -200,8 +203,8 @@ function labelDecisionAtCheckpoint(decision, observations, checkpoint, asOf = Da
   const execution = executionEvidence(exitPoint.observation);
   const feeBps = execution.feeBps;
   const slippageBps = execution.slippageBps;
-  const executableReturnPercent = execution.state === "TRADABLE"
-    ? forwardReturnPercent - ((slippageBps || 0) + (feeBps || 0)) / 100
+  const executableReturnPercent = execution.state === "TRADABLE" && slippageBps != null && feeBps != null
+    ? forwardReturnPercent - (slippageBps + feeBps) / 100
     : null;
   return {
     ...base,
@@ -219,7 +222,8 @@ function labelDecisionAtCheckpoint(decision, observations, checkpoint, asOf = Da
     executableReturnPercent: executableReturnPercent == null ? null : Number(executableReturnPercent.toFixed(6)),
     securityStateAtHorizon: securityState(exitPoint.observation),
     thesisOutcome: thesisOutcome(decision.scorecard, { ...checkpointState, forwardReturnPercent, maePercent }, exitPoint.observation),
-    catalystOutcome: catalystOutcome(exitPoint.observation)
+    catalystOutcome: catalystOutcome(exitPoint.observation),
+    invalidationCodes: invalidationCodes(exitPoint.observation, execution)
   };
 }
 

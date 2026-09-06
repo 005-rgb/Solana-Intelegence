@@ -20,6 +20,7 @@ function stable(value) {
 const CONFIGURATION_HASH = crypto.createHash("sha256").update(stable(EVALUATION_CONFIG)).digest("hex");
 
 function finite(value) {
+  if (value == null || value === "") return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -48,11 +49,15 @@ function normalizeRows(labels, horizon = EVALUATION_CONFIG.horizon) {
       time: timeOf(row),
       score: scoreOf(row),
       positive: positiveOf(row),
-      returnPercent: finite(row.executableReturnPercent ?? row.forwardReturnPercent),
+      priceReturnPercent: finite(row.forwardReturnPercent),
+      executableReturnPercent: finite(row.executableReturnPercent),
+      returnPercent: finite(row.forwardReturnPercent),
       maePercent: finite(row.maePercent),
       mint: row.mint || row.metadata?.mint || "UNKNOWN",
       discoveryClass: row.discoveryClass || row.metadata?.discoveryClass || "UNKNOWN",
-      complete: row.completionState === "FOUND"
+      complete: row.completionState === "FOUND",
+      pricePositive: finite(row.forwardReturnPercent) != null && Number(row.forwardReturnPercent) >= 5,
+      executablePositive: finite(row.executableReturnPercent) != null && Number(row.executableReturnPercent) >= 5
     }))
     .filter(row => row.time != null && row.complete && row.score != null && row.returnPercent != null);
   return rows.sort((a, b) => a.time - b.time || String(a.mint).localeCompare(String(b.mint)));
@@ -84,30 +89,36 @@ function wilson(successes, total) {
   return { lower: Number(Math.max(0, center - spread).toFixed(6)), upper: Number(Math.min(1, center + spread).toFixed(6)) };
 }
 
-function precisionAt(rows, k) {
-  const selected = distinctByMint([...rows].sort((a, b) => b.score - a.score || a.time - b.time).slice(0, k));
+function precisionAt(rows, k, mode = "price") {
+  const candidates = mode === "executable"
+    ? rows.filter(row => row.executableReturnPercent != null)
+    : rows.filter(row => row.priceReturnPercent != null);
+  const selected = distinctByMint([...candidates].sort((a, b) => b.score - a.score || a.time - b.time).slice(0, k));
   if (!selected.length) return null;
-  return selected.filter(row => row.positive).length / selected.length;
+  return selected.filter(row => mode === "executable" ? row.executablePositive : row.pricePositive).length / selected.length;
 }
 
-function metricSet(rows) {
-  const positives = rows.filter(row => row.positive).length;
+function metricSet(rows, mode = "price") {
+  const returnField = mode === "executable" ? "executableReturnPercent" : "priceReturnPercent";
+  const positiveField = mode === "executable" ? "executablePositive" : "pricePositive";
+  const eligibleRows = rows.filter(row => row[returnField] != null);
+  const positives = eligibleRows.filter(row => row[positiveField]).length;
   const precision = {};
-  for (const k of [1, 3, 5, 10]) precision[`precisionAt${k}`] = precisionAt(rows, k);
-  const winRate = rows.length ? positives / rows.length : null;
-  const ci = wilson(positives, rows.length);
+  for (const k of [1, 3, 5, 10]) precision[`precisionAt${k}`] = precisionAt(eligibleRows, k, mode);
+  const winRate = eligibleRows.length ? positives / eligibleRows.length : null;
+  const ci = wilson(positives, eligibleRows.length);
   return {
-    sampleSize: rows.length,
+    sampleSize: eligibleRows.length,
     precisionAt1: precision.precisionAt1,
     precisionAt3: precision.precisionAt3,
     precisionAt5: precision.precisionAt5,
     precisionAt10: precision.precisionAt10,
-    medianForwardReturnPercent: median(rows.map(row => row.returnPercent)),
+    medianForwardReturnPercent: median(eligibleRows.map(row => row[returnField])),
     winRate,
     winRate95Ci: ci,
-    falsePositiveRate: rows.length ? (rows.length - positives) / rows.length : null,
-    medianMaximumAdverseExcursionPercent: median(rows.map(row => row.maePercent)),
-    tradabilityRate: rows.length ? rows.filter(row => row.tradabilityState === "TRADABLE").length / rows.length : null
+    falsePositiveRate: eligibleRows.length ? (eligibleRows.length - positives) / eligibleRows.length : null,
+    medianMaximumAdverseExcursionPercent: median(eligibleRows.map(row => row.maePercent)),
+    tradabilityRate: eligibleRows.length ? eligibleRows.filter(row => row.tradabilityState === "TRADABLE").length / eligibleRows.length : null
   };
 }
 
@@ -216,6 +227,7 @@ function evaluateOutcomes(labels, options = {}) {
   const windowDays = timestamps.length > 1 ? (Math.max(...timestamps) - Math.min(...timestamps)) / (24 * 60 * 60 * 1000) : 0;
   const split = splitWalkForward(allRows, config.embargoMs);
   const holdout = metricSet(split.temporalHoldout);
+  const executableHoldout = metricSet(split.temporalHoldout, "executable");
   const scoreVersions = [...new Set(allRows.map(row => row.decisionVersion || "UNKNOWN"))];
   const eligibility = allRows.length >= config.minimumSample && windowDays >= config.minimumWindowDays;
   const report = {
@@ -245,9 +257,17 @@ function evaluateOutcomes(labels, options = {}) {
       boundaries: split.boundaries,
       training: metricSet(split.training),
       validation: metricSet(split.validation),
-      temporalHoldout: holdout
+      temporalHoldout: holdout,
+      executableTemporalHoldout: executableHoldout
     },
-    metrics: metricSet(allRows),
+    metrics: {
+      ...metricSet(allRows),
+      priceReturnCoverage: allRows.filter(row => row.priceReturnPercent != null).length,
+      executableReturnCoverage: allRows.filter(row => row.executableReturnPercent != null).length,
+      executableCoverageRate: allRows.length ? allRows.filter(row => row.executableReturnPercent != null).length / allRows.length : null
+    },
+    priceMetrics: metricSet(allRows, "price"),
+    executableMetrics: metricSet(allRows, "executable"),
     uncertainty: {
       precisionAt1: bootstrapByToken(allRows, "precisionAt1", config.bootstrapReplicates, config.bootstrapSeed),
       precisionAt3: bootstrapByToken(allRows, "precisionAt3", config.bootstrapReplicates, `${config.bootstrapSeed}:3`),

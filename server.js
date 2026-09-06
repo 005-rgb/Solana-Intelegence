@@ -971,15 +971,34 @@ async function requestExecutionQuote(url, signal) {
 }
 
 function executionQuoteRecord(payload, source, quoteAt) {
+  const numeric = value => value == null || value === "" ? null : (Number.isFinite(Number(value)) ? Number(value) : null);
   const outAmount = Number(payload?.outAmount);
   const routePlan = safeRouteEvidence(payload?.routePlan);
   const routeAvailable = routePlan.length > 0 && Number.isFinite(outAmount) && outAmount > 0;
+  const priceImpactPercent = numeric(payload?.priceImpactPct);
+  const estimatedSlippageBps = numeric(payload?.estimatedSlippageBps) ?? numeric(payload?.slippageBps);
+  const feeAmount = numeric(payload?.feeAmount) ?? numeric(payload?.platformFee?.amount);
+  const feeMint = typeof payload?.feeMint === "string"
+    ? payload.feeMint
+    : typeof payload?.platformFee?.mint === "string"
+      ? payload.platformFee.mint
+      : null;
+  const feeBps = numeric(payload?.feeBps) ?? (numeric(payload?.feePercent) == null ? null : numeric(payload.feePercent) * 100);
+  const invalidationCodes = [];
+  if (!routeAvailable) invalidationCodes.push("SELL_ROUTE_UNAVAILABLE");
+  if (priceImpactPercent != null && priceImpactPercent > 2) invalidationCodes.push("PRICE_IMPACT_TOO_HIGH");
+  if (estimatedSlippageBps != null && estimatedSlippageBps > 200) invalidationCodes.push("SLIPPAGE_TOO_HIGH");
   return {
     status: routeAvailable ? "PASS" : "FAILED",
     routeAvailable,
     minimumReceived: Number.isFinite(Number(payload?.otherAmountThreshold)) ? Number(payload.otherAmountThreshold) : routeAvailable ? outAmount : null,
-    priceImpactPercent: Number.isFinite(Number(payload?.priceImpactPct)) ? Number(payload.priceImpactPct) : null,
-    estimatedSlippageBps: null,
+    priceImpactPercent,
+    estimatedSlippageBps,
+    slippageBps: estimatedSlippageBps,
+    feeBps,
+    feeAmount,
+    feeMint,
+    invalidationCodes,
     transferFee: null,
     transferHook: null,
     accountCreationRequired: null,

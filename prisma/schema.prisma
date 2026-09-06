@@ -536,6 +536,7 @@ model OutcomeCheckpoint {
   securityStateAtHorizon     String
   thesisOutcome              String
   catalystOutcome            String
+  invalidationCodes          Json
   completionState            String
   censoringReason            String?
   entryPriceDefinition       String

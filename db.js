@@ -1200,6 +1200,10 @@ async function recordOutcomeCheckpoints(asOf = new Date()) {
           source: decision.observation?.source || null,
           decisionConfigurationHash: decision.configurationHash
         };
+        const existing = await tx.outcomeCheckpoint.findUnique({
+          where: { decisionSnapshotId_checkpoint: { decisionSnapshotId: decision.id, checkpoint: label.checkpoint } },
+          select: { id: true }
+        });
         await tx.outcomeCheckpoint.upsert({
           where: { decisionSnapshotId_checkpoint: { decisionSnapshotId: decision.id, checkpoint: label.checkpoint } },
           create: {
@@ -1226,6 +1230,7 @@ async function recordOutcomeCheckpoints(asOf = new Date()) {
             securityStateAtHorizon: label.securityStateAtHorizon,
             thesisOutcome: label.thesisOutcome,
             catalystOutcome: label.catalystOutcome,
+            invalidationCodes: label.invalidationCodes || [],
             completionState: label.completionState,
             censoringReason: label.censoringReason,
             entryPriceDefinition: label.entryPriceDefinition,
@@ -1237,7 +1242,7 @@ async function recordOutcomeCheckpoints(asOf = new Date()) {
           },
           update: {}
         });
-        created += 1;
+        if (!existing) created += 1;
         if (label.completionState === "FOUND") completed += 1;
         if (label.completionState === "CENSORED") censored += 1;
       }
@@ -1325,6 +1330,7 @@ async function readOutcomeCheckpoints({ checkpoint = null, limit = 200 } = {}) {
     securityStateAtHorizon: row.securityStateAtHorizon,
     thesisOutcome: row.thesisOutcome,
     catalystOutcome: row.catalystOutcome,
+    invalidationCodes: row.invalidationCodes,
     completionState: row.completionState,
     censoringReason: row.censoringReason,
     sourceObservationId: row.sourceObservationId,

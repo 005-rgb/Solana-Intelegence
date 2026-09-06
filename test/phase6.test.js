@@ -8,6 +8,13 @@ const {
   splitWalkForward,
   evaluateOutcomes
 } = require("../evaluation");
+const {
+  prisma,
+  recordTokenObservations,
+  recordOutcomeCheckpoints,
+  readOutcomeCheckpoints,
+  readEvaluationReport
+} = require("../db");
 
 const SIGNAL = "2026-09-01T00:00:00.000Z";
 const signalMs = Date.parse(SIGNAL);
@@ -47,7 +54,17 @@ test("Phase 6 uses only observations at or after signal time and computes MFE, M
       observation(30, 90),
       observation(60, 110, {
         executionSafety: {
-          checks: [{ side: "sell", status: "PASS", slippageBps: 45 }]
+          source: "JUPITER_QUOTE",
+          evidence: {
+            sell: {
+              "100": {
+                status: "PASS",
+                routeAvailable: true,
+                estimatedSlippageBps: 45,
+                feeBps: 30
+              }
+            }
+          }
         }
       })
     ],
@@ -65,6 +82,124 @@ test("Phase 6 uses only observations at or after signal time and computes MFE, M
   assert.equal(label.slippageBps, 45);
   assert.equal(label.executableReturnPercent, 9.25);
   assert.equal(label.thesisOutcome, "INVALIDATED");
+});
+
+test("Phase 6 integration persists due labels idempotently and keeps executable evidence separate", { skip: !process.env.DATABASE_URL }, async () => {
+  const suffix = `${process.pid}-${Date.now()}`;
+  const mint = `phase6-integration-${suffix}`;
+  const pairAddress = `phase6-pair-${suffix}`;
+  const signal = new Date("2026-09-01T00:00:00.000Z");
+  const horizon = new Date("2026-09-01T01:00:00.000Z");
+  const raw = (sellEvidence = null) => ({
+    security: { status: "VERIFIED", verified: true },
+    executionSafety: sellEvidence ? {
+      source: "JUPITER_QUOTE",
+      evidence: { sell: { "100": sellEvidence } }
+    } : { source: "JUPITER_QUOTE", evidence: { sell: {} } }
+  });
+  const observationData = (observedAt, priceUsd, rawPayload) => ({
+    mint,
+    pairAddress,
+    chainId: "solana",
+    dexId: "test",
+    baseToken: { address: mint, symbol: "P6I" },
+    quoteToken: { address: "USDC", symbol: "USDC" },
+    observedAt,
+    providerUpdatedAt: observedAt,
+    priceUsd,
+    marketCap: 100_000,
+    fdv: 100_000,
+    liquidityUsd: 25_000,
+    volume: {},
+    transactions: {},
+    makers: {},
+    priceChange: {},
+    boostAmount: null,
+    ctoFlag: null,
+    source: "phase6-test",
+    sourceEndpoint: null,
+    sourceRequestId: null,
+    sourceResponseHash: null,
+    freshnessMs: 0,
+    dataQuality: "TEST",
+    decisionOutcome: "ACCEPTED",
+    decisionVersion: "phase2-v1",
+    qualityReasons: [],
+    accountTaxonomy: null,
+    poolEvidence: null,
+    concentration: null,
+    rawPayload
+  });
+  try {
+    await recordTokenObservations([
+      observationData(signal, 100, raw()),
+      observationData(horizon, 110, raw({
+        status: "PASS",
+        routeAvailable: true,
+        estimatedSlippageBps: 40,
+        feeBps: 30
+      }))
+    ], null);
+    const observations = await prisma.tokenObservation.findMany({ where: { mint }, orderBy: { observedAt: "asc" } });
+    const decision = await prisma.radarDecisionSnapshot.create({
+      data: {
+        observationId: observations[0].id,
+        mint,
+        pairAddress,
+        observedAt: signal,
+        decisionVersion: "phase4-v1",
+        featureVersion: "phase3-v1",
+        scorerBuildIdentifier: "phase6-test",
+        configurationHash: "phase6-test",
+        rolloutMode: "SHADOW",
+        decisionState: "QUALIFYING",
+        radarScore: 80,
+        opportunityScore: 80,
+        momentumScore: 70,
+        riskScore: 20,
+        confidenceScore: 60,
+        components: {},
+        radars: {},
+        thresholds: {},
+        coefficients: {},
+        sourceSet: ["phase6-test"],
+        scoreReasons: [],
+        scoreWarnings: [],
+        scorecard: { phase4a: { thesis: { state: "VALIDATING" } } }
+      }
+    });
+    const firstRun = await recordOutcomeCheckpoints(new Date("2026-09-01T01:01:00.000Z"));
+    const secondRun = await recordOutcomeCheckpoints(new Date("2026-09-01T01:01:00.000Z"));
+    const rows = await prisma.outcomeCheckpoint.findMany({ where: { decisionSnapshotId: decision.id } });
+    const oneHour = rows.find(row => row.checkpoint === "T+1H");
+    assert.ok(firstRun.created > 0);
+    assert.equal(secondRun.created, 0);
+    assert.equal(new Set(rows.map(row => row.checkpoint)).size, rows.length);
+    assert.equal(oneHour.completionState, "FOUND");
+    assert.equal(oneHour.executableReturnPercent, 9.3);
+    assert.equal(oneHour.invalidationCodes.length, 0);
+    assert.equal((await readOutcomeCheckpoints({ checkpoint: "T+1H", limit: 10 })).some(row => row.id === oneHour.id), true);
+    const report = await readEvaluationReport({ persist: false });
+    assert.equal(report.horizon, "T+1H");
+  } finally {
+    await prisma.outcomeCheckpoint.deleteMany({ where: { mint } });
+    await prisma.radarDecisionSnapshot.deleteMany({ where: { mint } });
+    await prisma.tokenObservation.deleteMany({ where: { mint } });
+  }
+});
+
+test("outcome and evaluation API routes expose safe empty-state contracts", { skip: !process.env.REPLIT_DEV_DOMAIN }, async () => {
+  const base = `https://${process.env.REPLIT_DEV_DOMAIN}`;
+  const outcomesResponse = await fetch(`${base}/api/outcomes?limit=1`);
+  const evaluationResponse = await fetch(`${base}/api/evaluation`);
+  assert.equal(outcomesResponse.status, 200);
+  assert.equal(evaluationResponse.status, 200);
+  const outcomes = await outcomesResponse.json();
+  const evaluation = await evaluationResponse.json();
+  assert.equal(outcomes.ok, true);
+  assert.ok(Array.isArray(outcomes.outcomes));
+  assert.equal(evaluation.ok, true);
+  assert.equal(evaluation.report.efficacyClaimAllowed, false);
 });
 
 test("Phase 6 keeps future checkpoints not due and missing coverage censored", () => {
@@ -100,6 +235,51 @@ test("Phase 6 does not claim execution when sell evidence or catalyst evidence i
   assert.equal(label.executableReturnPercent, null);
   assert.equal(label.thesisOutcome, "INVALIDATED");
   assert.equal(label.catalystOutcome, "UNKNOWN");
+});
+
+test("Phase 6 keeps executable return unknown when route costs are incomplete", () => {
+  const label = labelDecisionAtCheckpoint(
+    decision(),
+    [
+      observation(0, 100),
+      observation(60, 110, {
+        executionSafety: {
+          evidence: {
+            sell: {
+              "100": { status: "PASS", routeAvailable: true, estimatedSlippageBps: 40 }
+            }
+          }
+        }
+      })
+    ],
+    CHECKPOINTS.find(item => item.key === "T+1H"),
+    at(61)
+  );
+  assert.equal(label.tradabilityState, "TRADABLE");
+  assert.equal(label.executableReturnPercent, null);
+});
+
+test("Phase 6 never coerces missing numeric execution evidence into zero", () => {
+  const label = labelDecisionAtCheckpoint(
+    decision(),
+    [
+      observation(0, 100),
+      observation(60, 110, {
+        executionSafety: {
+          evidence: {
+            sell: {
+              "100": { status: "PASS", routeAvailable: true, estimatedSlippageBps: null, feeBps: null }
+            }
+          }
+        }
+      })
+    ],
+    CHECKPOINTS.find(item => item.key === "T+1H"),
+    at(61)
+  );
+  assert.equal(label.slippageBps, null);
+  assert.equal(label.feeBps, null);
+  assert.equal(label.executableReturnPercent, null);
 });
 
 test("Phase 6A keeps embargoed walk-forward boundaries separate", () => {
@@ -142,4 +322,7 @@ test("Phase 6A gates claims, bootstraps token blocks, and keeps calibration inap
   assert.equal(report.uncertainty.precisionAt10.unit, "TOKEN_BLOCK");
   assert.equal(report.discoveryBias.BOOSTED.discoveryClass, "BOOSTED");
   assert.equal(report.discoveryBias.NON_BOOSTED.discoveryClass, "NON_BOOSTED");
+  assert.equal(report.metrics.priceReturnCoverage, 32);
+  assert.equal(report.metrics.executableReturnCoverage, 0);
+  assert.equal(report.executableMetrics.sampleSize, 0);
 });

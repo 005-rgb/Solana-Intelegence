@@ -29,6 +29,7 @@ const EXECUTION_REASON_LABELS = Object.freeze({
 });
 
 function finite(value) {
+  if (value == null || value === "") return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -169,6 +170,90 @@ function summarizeExecutionSafety(items, options = {}) {
   };
 }
 
+function extractSellExecutionEvidence(executionSafety, orderSizeUsd = 100) {
+  const source = executionSafety && typeof executionSafety === "object" ? executionSafety : {};
+  const size = String(orderSizeUsd);
+  const sellEvidence = source.evidence?.sell?.[size]
+    || source.sell?.[size]
+    || (Array.isArray(source.checks) ? source.checks.find(check => String(check.side).toLowerCase() === "sell" && Number(check.orderSizeUsd) === Number(orderSizeUsd)) : null);
+  if (!sellEvidence || typeof sellEvidence !== "object") {
+    return {
+      state: "UNKNOWN",
+      reason: "SELL_ROUTE_EVIDENCE_UNAVAILABLE",
+      routeAvailable: null,
+      quoteStatus: "UNKNOWN",
+      quoteAt: null,
+      slippageBps: null,
+      priceImpactPercent: null,
+      feeBps: null,
+      feeAmount: null,
+      feeMint: null,
+      source: source.source || null,
+      invalidationCodes: []
+    };
+  }
+  const status = normalizeStatus(sellEvidence.status || sellEvidence.quoteStatus);
+  const routeAvailable = sellEvidence.routeAvailable === true
+    ? true
+    : sellEvidence.routeAvailable === false
+      ? false
+      : null;
+  const invalidationCodes = Array.isArray(sellEvidence.invalidationCodes)
+    ? sellEvidence.invalidationCodes.map(code => String(code).slice(0, 80))
+    : [];
+  const slippageBps = finite(sellEvidence.estimatedSlippageBps ?? sellEvidence.slippageBps);
+  const priceImpactPercent = finite(sellEvidence.priceImpactPercent ?? sellEvidence.priceImpactPct);
+  const feeBps = finite(sellEvidence.feeBps ?? (finite(sellEvidence.feePercent) == null ? null : finite(sellEvidence.feePercent) * 100));
+  const feeAmount = finite(sellEvidence.feeAmount ?? sellEvidence.fee);
+  const feeMint = typeof sellEvidence.feeMint === "string" ? sellEvidence.feeMint : null;
+  if (status === "FAILED" || routeAvailable === false) {
+    return {
+      state: "UNTRADABLE",
+      reason: "SELL_ROUTE_EVIDENCE_FAILED",
+      routeAvailable,
+      quoteStatus: status,
+      quoteAt: sellEvidence.quoteAt || null,
+      slippageBps,
+      priceImpactPercent,
+      feeBps,
+      feeAmount,
+      feeMint,
+      source: sellEvidence.source || source.source || null,
+      invalidationCodes: [...new Set([...invalidationCodes, "SELL_ROUTE_UNAVAILABLE"])]
+    };
+  }
+  if (status === "PASS" || status === "PASSED" || status === "SUCCESS" || routeAvailable === true) {
+    return {
+      state: "TRADABLE",
+      reason: "SELL_ROUTE_EVIDENCE_PASS",
+      routeAvailable: true,
+      quoteStatus: status,
+      quoteAt: sellEvidence.quoteAt || null,
+      slippageBps,
+      priceImpactPercent,
+      feeBps,
+      feeAmount,
+      feeMint,
+      source: sellEvidence.source || source.source || null,
+      invalidationCodes
+    };
+  }
+  return {
+    state: "UNKNOWN",
+    reason: "SELL_ROUTE_EVIDENCE_INCOMPLETE",
+    routeAvailable,
+    quoteStatus: status,
+    quoteAt: sellEvidence.quoteAt || null,
+    slippageBps,
+    priceImpactPercent,
+    feeBps,
+    feeAmount,
+    feeMint,
+    source: sellEvidence.source || source.source || null,
+    invalidationCodes
+  };
+}
+
 module.exports = {
   EXECUTION_SAFETY_VERSION,
   DEFAULT_ORDER_SIZES_USD,
@@ -178,5 +263,6 @@ module.exports = {
   EXECUTION_REASON_LABELS,
   evaluateExecutionSafety,
   normalizeEvidence,
+  extractSellExecutionEvidence,
   summarizeExecutionSafety
 };
