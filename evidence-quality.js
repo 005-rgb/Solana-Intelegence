@@ -199,9 +199,12 @@ function activeRadarFor(candidate) {
       || candidate?.classification
       || candidate?.details?.providerMetadata?.classification
   );
-  if (classification === "REAL_PROJECT") return "REAL_PROJECT";
-  if (classification === "REACTIVATION") return "REACTIVATION";
-  return "SPECULATIVE_MEME";
+  const radarByClassification = {
+    REAL_PROJECT: "REAL_PROJECT",
+    REACTIVATION: "REACTIVATION",
+    SPECULATIVE_MEME: "SPECULATIVE_MEME"
+  };
+  return radarByClassification[classification] || null;
 }
 
 function evaluateEvidenceQuality(candidate, {

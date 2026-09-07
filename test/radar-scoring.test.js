@@ -69,8 +69,9 @@ test("Phase 4 produces deterministic versioned scores with configuration lineage
   assert.deepEqual(first.details.scorecard, second.details.scorecard);
   assert.equal(first.details.scorecard.version, SCORE_VERSION);
   assert.equal(first.details.scorecard.configurationHash, CONFIGURATION_HASH);
-  assert.equal(first.details.scorecard.activeRadar, "SPECULATIVE_MEME");
-  assert.equal(first.radar, Math.round(first.details.scorecard.radars.SPECULATIVE_MEME));
+  assert.equal(first.details.scorecard.activeRadar, null);
+  assert.equal(first.radar, null);
+  assert.ok(first.details.scorecard.scoreWarnings.includes("ACTIVE_RADAR_UNVERIFIED_CLASSIFICATION"));
   assert.ok(first.confidence >= 60);
   assert.ok(first.details.scorecard.scoreWarnings.includes("PROJECT_TRACTION_UNKNOWN"));
   assert.ok(first.details.scorecard.scoreWarnings.includes("CAP_PROJECT_TRACTION_70"));

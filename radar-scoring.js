@@ -337,7 +337,7 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
     ).value
   };
   const activeRadar = activeRadarFor(candidate);
-  const activeScore = radars[activeRadar];
+  const activeScore = activeRadar ? radars[activeRadar] : null;
   const evidenceQuality = evaluateEvidenceQuality(candidate, { activeRadar });
   const baselineInput = {
     ...candidate,
@@ -383,6 +383,7 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
     ...chase.reasons,
     ...evidenceQuality.reasons,
     ...phase4a.warnings,
+    ...(activeRadar ? [] : ["ACTIVE_RADAR_UNVERIFIED_CLASSIFICATION"]),
     ...(blockingFlags.length ? blockingFlags.map(flag => `${flag.toUpperCase()}_BLOCKS_QUALIFYING`) : [])
   ])];
   const scorecard = {

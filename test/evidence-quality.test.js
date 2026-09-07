@@ -97,6 +97,48 @@ test("active radar follows explicit project classification", () => {
   assert.equal(result.radar, Math.round(result.details.scorecard.radars.REAL_PROJECT));
 });
 
+test("active radar follows each supported classification without changing the other radar scores", () => {
+  for (const classification of ["REAL_PROJECT", "REACTIVATION", "SPECULATIVE_MEME"]) {
+    const result = scoreRadarCandidate(candidate({
+      details: {
+        ...candidate().details,
+        projectTraction: {
+          version: "phase3b-v1",
+          classification,
+          status: classification === "REAL_PROJECT" ? "VERIFIED" : "PARTIAL",
+          capLifted: classification === "REAL_PROJECT",
+          sourceSet: ["official", "independent"]
+        }
+      }
+    }), {
+      manipulationEvidence: { sampleStatus: "SUFFICIENT", flags: {} }
+    });
+    assert.equal(result.details.scorecard.activeRadar, classification);
+    assert.equal(result.radar, Math.round(result.details.scorecard.radars[classification]));
+    for (const radar of ["REAL_PROJECT", "REACTIVATION", "SPECULATIVE_MEME"]) {
+      assert.notEqual(result.details.scorecard.radars[radar], undefined);
+    }
+  }
+});
+
+test("unverified classification does not activate a project radar", () => {
+  const result = scoreRadarCandidate(candidate({
+    details: {
+      ...candidate().details,
+      projectTraction: {
+        version: "phase3b-v1",
+        classification: "UNVERIFIED",
+        status: "UNKNOWN",
+        capLifted: false,
+        sourceSet: []
+      }
+    }
+  }));
+  assert.equal(result.details.scorecard.activeRadar, null);
+  assert.equal(result.radar, null);
+  assert.equal(result.details.scorecard.eligibility.qualifying, false);
+});
+
 test("future as-of evidence is rejected by the evidence gate", () => {
   const result = evaluateEvidenceQuality(candidate({
     details: { ...candidate().details, observedAt: "2030-01-01T00:00:00.000Z" }

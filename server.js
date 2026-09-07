@@ -57,6 +57,7 @@ const {
   PROVIDER_SCHEMA_VERSION
 } = require("./radar-core");
 const { SCORE_VERSION, scoreRadarCandidate } = require("./radar-scoring");
+const { deriveProjectTraction } = require("./project-traction");
 const { deriveCandidateLifecycle } = require("./candidate-lifecycle");
 const { buildPhase7Report, rollbackRollout } = require("./phase7");
 const { createSolanaRpcPool } = require("./solana-rpc-pool");
@@ -1410,6 +1411,11 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
           providerMetadata,
           profile: { description, imageUrl, headerUrl, websites, socials, openGraph: sourceItem.openGraph || null },
           projectEvidence: providerMetadata.projectEvidence || null,
+           projectTraction: deriveProjectTraction({
+             providerMetadata,
+             profile: { description, websites, socials },
+             projectEvidence: providerMetadata.projectEvidence || null
+           }, { asOf: new Date(observedAt) }),
           evidence
         }
       };
