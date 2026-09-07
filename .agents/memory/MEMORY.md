@@ -11,3 +11,4 @@
 - [Phase 4 scorecard boundaries](phase4-scorecard-boundaries.md) — deterministic evidence scores may rank research candidates, but unknown inputs cap confidence and never become probability claims.
 - [Project traction evidence](project-traction-evidence.md) — project quality caps lift only from fresh, as-of, multi-source verified evidence; market activity is not product traction.
 - [Outcome and execution separation](outcome-execution-separation.md) — price labels may complete without sell-route evidence, but executable returns must stay unknown unless execution evidence is explicit.
+- [Phase 7 rollout safety](phase7-rollout-safety.md) — operational health and scorer efficacy are separate gates; unknown evidence cannot promote a champion.

@@ -169,6 +169,25 @@ npm run db:push
 - Phase 6A never treats deterministic Radar scores as probabilities. Calibration is `NOT_APPLICABLE` until a probability-like output exists, and insufficient sample/time windows keep `efficacyClaimAllowed` false. The UI exposes these gates at the Backtest / Outcome evaluation page and the server provides `GET /api/evaluation`.
 - Scans advance due labels only after observations and immutable decision snapshots are persisted. Evaluation runs are retained in `EvaluationRun`; outcome rows are idempotent on decision snapshot plus checkpoint.
 
+## Phase 7 controlled core rollout
+
+- `phase7.js` computes SLOs directly from persisted scan runs: scheduled-start
+  adherence, completion, p50/p95/p99 latency, provider/RPC freshness,
+  persistence success, last-known-good age, partial scans, and timeouts.
+- The Phase 7 report exposes liveness, readiness, degraded state, incident
+  classification, and a response runbook. Missing operational evidence remains
+  `UNKNOWN` and blocks readiness instead of being treated as healthy.
+- Champion promotion is fail-closed and requires a measured challenger sample,
+  preserved security rejection behavior, non-worse completeness and adverse
+  excursion, fixed top-k improvement, operational budgets, and explainable
+  reasons. The active champion is not replaced by a score-only comparison.
+- `GET /api/phase7` exposes the report and the Controlled Rollout UI page.
+  `POST /api/phase7/rollback` returns the rollout to `BASELINE` while
+  preserving immutable observations, outcomes, and decision history.
+- Phase 7 never enables wallet execution, real-fund movement, or probability
+  claims. Degraded operation keeps new qualification fail-closed and preserves
+  the last-known-good board.
+
 The authoritative product specification is
 [`docs/integrated-radar-core-market-brain-prd.md`](docs/integrated-radar-core-market-brain-prd.md).
 It integrates the existing Radar Core implementation plan with the project-first

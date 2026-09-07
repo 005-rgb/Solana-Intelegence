@@ -12,6 +12,8 @@ let reactivationLoading = false;
 let selectedTokenHistory = [];
 let evaluationReport = null;
 let evaluationLoading = false;
+let phase7Report = null;
+let phase7Loading = false;
 
 const NAV_GROUPS = [
   ["Workspace", [
@@ -30,6 +32,7 @@ const NAV_GROUPS = [
   ["Research", [
     ["patterns", "⌁", "Patterns"],
     ["backtest", "◫", "Backtest"],
+    ["phase7", "▤", "Controlled Rollout"],
     ["model", "◎", "Model Intelligence"],
     ["token-search", "⌕", "Token Search"],
     ["bubble-map", "◉", "Bubble Map"]
@@ -539,6 +542,64 @@ function loadEvaluation() {
     if (activePage === "backtest") render();
   });
 }
+function phase7StatusBadge(status) {
+  const value = String(status || "UNKNOWN");
+  const tone = value === "PASS" || value === "READY" || value === "PASSED" || value === "ELIGIBLE" ? "badge-green" : value === "UNKNOWN" || value === "DEGRADED" ? "badge-yellow" : "badge-red";
+  return `<span class="badge ${tone}">${esc(value)}</span>`;
+}
+function phase7Metric(value, unit = "") {
+  if (value == null) return "UNKNOWN";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "UNKNOWN";
+  return `${number.toLocaleString("en-US", { maximumFractionDigits: 2 })}${unit}`;
+}
+function phase7() {
+  const report = phase7Report;
+  if (!report) {
+    return head("Phase 7", "Controlled core rollout", "Operational SLOs, promotion evidence, rollback controls, and degraded-state visibility. Nothing is promoted without measured evidence.", `<button class="btn btn-primary" onclick="loadPhase7()">↻ Load rollout status</button>`) +
+      `<section class="card page-panel"><div class="empty"><strong>${phase7Loading ? "Loading rollout status…" : "No rollout status loaded"}</strong><span>${phase7Loading ? "Reading persisted scans and outcome evidence." : "Load the report to inspect the core acceptance gate."}</span></div></section>`;
+  }
+  const monitoring = report.monitoring || {};
+  const metrics = monitoring.metrics || {};
+  const gate = report.acceptanceGate || {};
+  const promotion = report.promotion || {};
+  const rollout = report.rollout || {};
+  const slos = Array.isArray(monitoring.slos) ? monitoring.slos : [];
+  const runbook = Array.isArray(report.runbook) ? report.runbook : [];
+  const gateTone = gate.status === "PASSED" ? "badge-green" : "badge-red";
+  const failed = Array.isArray(gate.failedChecks) ? gate.failedChecks : [];
+  return head("Phase 7", "Controlled core rollout", "A production-readiness boundary for the Radar core. The current champion remains unchanged unless the fixed evidence gate passes.", `<button class="btn btn-primary" onclick="loadPhase7()">↻ Refresh status</button><button class="btn btn-danger" onclick="rollbackPhase7()">↩ Roll back to baseline</button>`) +
+    `<section class="card page-panel"><div class="card-head"><div><div class="card-title">Core acceptance gate</div><div class="card-kicker">Report ${esc(report.version)} · configuration ${esc(String(report.configurationHash || "").slice(0, 12))}</div></div><span class="badge ${gateTone}">${esc(gate.status || "UNKNOWN")}</span></div><div class="data-note">${gate.status === "PASSED" ? "All required rollout evidence passed. This does not enable wallet execution or probability claims." : "Promotion is blocked fail-closed. Missing evidence is not treated as a pass."}</div><div class="health-row"><span>Failed gate checks</span><strong class="${failed.length ? "health-warn" : "health-ok"}">${failed.join(" · ") || "NONE"}</strong></div><div class="health-row"><span>Readiness / incident class</span><strong>${phase7StatusBadge(monitoring.readiness)} · ${esc(monitoring.incidentClass || "NONE")}</strong></div></section>` +
+    `<div class="grid metrics">${stat("Scan p95", phase7Metric(metrics.scanP95LatencyMs, "ms"), "budget 20,000ms", "◷", metrics.scanP95LatencyMs > 20000 ? "metric-negative" : "")}${stat("Completion", metrics.scanCompletionRate == null ? "UNKNOWN" : `${(metrics.scanCompletionRate * 100).toFixed(1)}%`, "successful / eligible scans", "✓")}${stat("Last known good", phase7Metric(metrics.lastKnownGoodAgeMs, "ms"), "maximum age 900,000ms", "◌")}${stat("Partial rate", metrics.partialScanRate == null ? "UNKNOWN" : `${(metrics.partialScanRate * 100).toFixed(1)}%`, "unknown evidence stays visible", "!", metrics.partialScanRate > .2 ? "metric-negative" : "")}</div>` +
+    `<div class="grid main-grid"><section class="card page-panel"><div class="card-head"><div><div class="card-title">Rollout control</div><div class="card-kicker">Champion / challenger state is explicit and reversible</div></div>${phase7StatusBadge(rollout.mode)}</div><div class="health-row"><span>Current mode</span><strong>${esc(rollout.mode || "BASELINE")}</strong></div><div class="health-row"><span>Champion version</span><strong>${esc(rollout.championVersion || "UNKNOWN")}</strong></div><div class="health-row"><span>Challenger version</span><strong>${esc(rollout.challengerVersion || "NONE")}</strong></div><div class="health-row"><span>Promotion eligibility</span><strong>${phase7StatusBadge(promotion.status)}</strong></div><div class="health-row"><span>Promotion sample</span><strong>${promotion.sampleSize ?? "UNKNOWN"} · minimum 30</strong></div><div class="data-note">${esc(promotion.rule || "Promotion rules unavailable.")}</div></section><section class="card page-panel"><div class="card-head"><div><div class="card-title">SLO monitor</div><div class="card-kicker">Persisted scan, provider, RPC, and recovery measurements</div></div></div>${slos.map(item => `<div class="health-row"><span>${esc(item.name)}</span><strong>${phase7StatusBadge(item.status)} <small>${phase7Metric(item.value, item.unit === "ratio" ? "" : item.unit || "")} / target ${phase7Metric(item.target, item.unit === "ratio" ? "" : item.unit || "")}</small></strong></div>`).join("")}</section></div>` +
+    `<section class="card page-panel"><div class="card-head"><div><div class="card-title">Incident runbook</div><div class="card-kicker">Operational response preserves the last-known-good board and immutable evidence</div></div><span class="badge badge-blue">ROLLBACK READY</span></div>${runbook.map(item => `<div class="runbook-row"><span class="badge ${item.severity === "P1" ? "badge-red" : "badge-yellow"}">${esc(item.severity)}</span><strong>${esc(item.trigger)}</strong><span>${esc(item.action)}</span></div>`).join("")}<div class="data-note">Degraded state: ${monitoring.degraded ? "ACTIVE · new qualification remains fail-closed." : "not active"} Wallet execution: ${report.safety?.walletExecutionEnabled ? "ENABLED" : "DISABLED"} · probability claims: ${report.safety?.probabilityClaimsEnabled ? "ENABLED" : "DISABLED"}.</div></section>`;
+}
+function loadPhase7() {
+  if (phase7Loading) return;
+  phase7Loading = true;
+  if (activePage === "phase7") render();
+  api("/api/phase7").then(result => {
+    phase7Report = result.report;
+    phase7Loading = false;
+    if (activePage === "phase7") render();
+  }).catch(error => {
+    phase7Loading = false;
+    toast(error.message, true);
+    if (activePage === "phase7") render();
+  });
+}
+async function rollbackPhase7() {
+  if (!window.confirm("Roll back the controlled rollout to BASELINE? Immutable evidence will be preserved.")) return;
+  try {
+    const result = await api("/api/phase7/rollback", { method: "POST", body: JSON.stringify({ reason: "operator_rollback_from_ui" }) });
+    phase7Report = result.report;
+    snapshot = result.state;
+    toast("Phase 7 rollout set to BASELINE; evidence was preserved.");
+    render();
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
 function modelIntelligence() {
   const patterns = snapshot.patterns || [];
   const tokens = [...snapshot.tokens].sort((a, b) => (b.confidence ?? -1) - (a.confidence ?? -1));
@@ -632,6 +693,7 @@ function render() {
     alerts,
     patterns,
     backtest,
+    phase7,
     model: modelIntelligence,
     "token-search": tokenSearch,
     "bubble-map": bubbleMapPage,
@@ -648,6 +710,7 @@ function go(page) {
   render();
   if (page === "health") loadReactivation();
   if (page === "backtest") loadEvaluation();
+  if (page === "phase7") loadPhase7();
 }
 async function loadReactivation() {
   if (reactivationLoading) return;
@@ -926,8 +989,8 @@ if (NAV.some(([id]) => id === hashPage)) activePage = hashPage;
   const page = window.location.hash.slice(1);
   if (NAV.some(([id]) => id === page)) { activePage = page; render(); if (page === "health") loadReactivation(); }
 });
-window.go=go; window.scan=scan; window.showToken=showToken; window.toggleWatch=toggleWatch; window.removeWatch=removeWatch; window.trade=trade; window.setWhaleRange=setWhaleRange; window.setRadarSort=setRadarSort; window.setRadarStatus=setRadarStatus; window.analyzePatterns=analyzePatterns; window.setTokenSearch=setTokenSearch; window.setBubbleMapToken=setBubbleMapToken;
-refresh().then(() => { if (activePage === "health") loadReactivation(); if (activePage === "backtest") loadEvaluation(); }).catch(error => { app.innerHTML = `<div class="empty" style="margin:40px"><strong>Unable to load radar</strong>${esc(error.message)}</div>`; });
+window.go=go; window.scan=scan; window.showToken=showToken; window.toggleWatch=toggleWatch; window.removeWatch=removeWatch; window.trade=trade; window.setWhaleRange=setWhaleRange; window.setRadarSort=setRadarSort; window.setRadarStatus=setRadarStatus; window.analyzePatterns=analyzePatterns; window.setTokenSearch=setTokenSearch; window.setBubbleMapToken=setBubbleMapToken; window.loadPhase7=loadPhase7; window.rollbackPhase7=rollbackPhase7;
+refresh().then(() => { if (activePage === "health") loadReactivation(); if (activePage === "backtest") loadEvaluation(); if (activePage === "phase7") loadPhase7(); }).catch(error => { app.innerHTML = `<div class="empty" style="margin:40px"><strong>Unable to load radar</strong>${esc(error.message)}</div>`; });
 setInterval(() => {
   const label = document.querySelector("#next-scan-label");
   if (label && snapshot) label.textContent = nextScanLabel();

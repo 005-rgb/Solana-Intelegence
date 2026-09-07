@@ -58,6 +58,7 @@ const {
 } = require("./radar-core");
 const { SCORE_VERSION, scoreRadarCandidate } = require("./radar-scoring");
 const { deriveCandidateLifecycle } = require("./candidate-lifecycle");
+const { buildPhase7Report, rollbackRollout } = require("./phase7");
 const { createSolanaRpcPool } = require("./solana-rpc-pool");
 const {
   EXECUTION_SAFETY_VERSION,
@@ -148,7 +149,8 @@ function freshState() {
     system: {
       scheduler: "RUNNING · 15s", worker: "READY", database: "POSTGRESQL / PRISMA", rpc: "LIVE PROVIDER", market: "LIVE PROVIDER",
       lastScanStatus: "NOT RUN YET", avgDuration: "—", tokensPerScan: 0, transactionsPerScan: 0, errors: 0,
-      securityFilter: lastFilterReport
+      securityFilter: lastFilterReport,
+      phase7: { mode: "BASELINE", championVersion: ACTIVE_DECISION_VERSION }
     }
   };
 }
@@ -263,7 +265,7 @@ function idempotencyReplay(previousRun, fingerprint, requestId) {
 }
 
 function mutationRoute(url, method) {
-  return method === "POST" && (url.pathname === "/api/scan" || url.pathname === "/api/analysis" || url.pathname === "/api/trades" || url.pathname.startsWith("/api/watchlist/") || /^\/api\/alerts\/[^/]+\/(acknowledge|resolve)$/.test(url.pathname))
+  return method === "POST" && (url.pathname === "/api/scan" || url.pathname === "/api/analysis" || url.pathname === "/api/trades" || url.pathname === "/api/phase7/rollback" || url.pathname.startsWith("/api/watchlist/") || /^\/api\/alerts\/[^/]+\/(acknowledge|resolve)$/.test(url.pathname))
     || method === "DELETE" && url.pathname.startsWith("/api/watchlist/");
 }
 
@@ -340,6 +342,23 @@ function jsonState() {
       roi: ((state.portfolio.cash + positions.reduce((sum, p) => sum + p.currentValue, 0) - state.portfolio.starting) / state.portfolio.starting) * 100
     }
   };
+}
+
+async function phase7Report() {
+  let evaluation = null;
+  try {
+    evaluation = await readEvaluationReport({ persist: false });
+  } catch (error) {
+    console.warn("Phase 7 evaluation evidence unavailable:", error.message);
+  }
+  return buildPhase7Report({
+    scanRuns: state.scanRuns,
+    evaluation,
+    rollout: state.system?.phase7,
+    now: Date.now(),
+    databaseReady: true,
+    schedulerRunning: !state.scanRunning
+  });
 }
 function formatAge(ms) {
   const minutes = Math.max(0, Math.floor(ms / 60000));
@@ -1795,6 +1814,14 @@ async function handleApi(req, res, url) {
     return send(res, 403, { error: "Mutation is not authorized for this origin.", requestId: req.requestId });
   }
   if (req.method === "GET" && url.pathname === "/api/state") return send(res, 200, jsonState());
+  if (req.method === "GET" && url.pathname === "/api/phase7") {
+    try {
+      return send(res, 200, { ok: true, report: await phase7Report() });
+    } catch (error) {
+      console.error(`[${req.requestId}] Phase 7 report failed`, error.message);
+      return send(res, 500, { error: "Unable to build the Phase 7 rollout report.", requestId: req.requestId });
+    }
+  }
   if (req.method === "GET" && url.pathname === "/api/evaluation") {
     try {
       const report = await readEvaluationReport({ persist: true });
@@ -1835,6 +1862,31 @@ async function handleApi(req, res, url) {
     return item
       ? send(res, 200, { token: item, history: await readTokenHistory(item.mint), mode: state.mode })
       : send(res, 404, { error: "Token not found" });
+  }
+  if (req.method === "POST" && url.pathname === "/api/phase7/rollback") {
+    let mutationOwner = null;
+    try {
+      const body = await readBody(req);
+      mutationOwner = await lockMutation(req);
+      if (!mutationOwner) return send(res, 409, { error: "Another state mutation is in progress.", requestId: req.requestId });
+      state = await readState(state);
+      const nextState = {
+        ...state,
+        system: {
+          ...state.system,
+          phase7: rollbackRollout(state.system?.phase7, body.reason || "operator_rollback", Date.now()),
+          lastRolloutAction: "ROLLBACK_TO_BASELINE"
+        }
+      };
+      await persistState(nextState);
+      state = nextState;
+      return send(res, 200, { ok: true, report: await phase7Report(), state: jsonState(), requestId: req.requestId });
+    } catch (error) {
+      console.error(`[${req.requestId}] Phase 7 rollback failed`, error.message);
+      return send(res, 500, { error: "Unable to roll back the rollout mode.", requestId: req.requestId });
+    } finally {
+      await unlockMutation(mutationOwner, req.requestId);
+    }
   }
   if (req.method === "POST" && url.pathname === "/api/scan") {
     let key;
