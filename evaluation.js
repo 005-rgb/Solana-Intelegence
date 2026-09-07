@@ -5,10 +5,15 @@ const EVALUATION_CONFIG = Object.freeze({
   version: EVALUATION_VERSION,
   horizon: "T+1H",
   minimumSample: 30,
+  minimumUniqueTokens: 10,
+  minimumTemporalWindows: 3,
   minimumWindowDays: 7,
   embargoMs: 60 * 60 * 1000,
   bootstrapReplicates: 500,
-  bootstrapSeed: "phase6a-v1"
+  bootstrapSeed: "phase6a-v1",
+  minimumPrecisionImprovement: 0.02,
+  maximumFalsePositiveDeterioration: 0,
+  maximumMaeDeteriorationPercent: 2
 });
 
 function stable(value) {
@@ -48,6 +53,11 @@ function normalizeRows(labels, horizon = EVALUATION_CONFIG.horizon) {
       ...row,
       time: timeOf(row),
       score: scoreOf(row),
+      challengerScore: scoreOf(row),
+      baselineScore: finite(row?.baselineScore ?? row?.baselineRankScore),
+      challengerAccepted: row?.challengerAccepted == null ? true : row.challengerAccepted === true,
+      baselineAccepted: row?.baselineAccepted == null ? true : row.baselineAccepted === true,
+      evidenceCompleteness: finite(row?.evidenceCompleteness),
       positive: positiveOf(row),
       priceReturnPercent: finite(row.forwardReturnPercent),
       executableReturnPercent: finite(row.executableReturnPercent),
@@ -61,6 +71,105 @@ function normalizeRows(labels, horizon = EVALUATION_CONFIG.horizon) {
     }))
     .filter(row => row.time != null && row.complete && row.score != null && row.returnPercent != null);
   return rows.sort((a, b) => a.time - b.time || String(a.mint).localeCompare(String(b.mint)));
+}
+
+function modelMetricSet(rows, model = "challenger") {
+  const scoreField = model === "baseline" ? "baselineScore" : "challengerScore";
+  const acceptedField = model === "baseline" ? "baselineAccepted" : null;
+  const eligibleRows = rows.filter(row => finite(row?.[scoreField]) != null
+    && (!acceptedField || row?.[acceptedField] !== false));
+  const rank = eligibleRows
+    .slice()
+    .sort((a, b) => finite(b[scoreField]) - finite(a[scoreField])
+      || a.time - b.time
+      || String(a.mint).localeCompare(String(b.mint)));
+  const precision = {};
+  for (const k of [1, 3, 5, 10]) {
+    const selected = rank.slice(0, k);
+    precision[`precisionAt${k}`] = selected.length
+      ? selected.filter(row => row.pricePositive).length / selected.length
+      : null;
+  }
+  const positives = eligibleRows.filter(row => row.pricePositive).length;
+  return {
+    model,
+    sampleSize: eligibleRows.length,
+    precisionAt1: precision.precisionAt1,
+    precisionAt3: precision.precisionAt3,
+    precisionAt5: precision.precisionAt5,
+    precisionAt10: precision.precisionAt10,
+    medianForwardReturnPercent: median(eligibleRows.map(row => row.priceReturnPercent)),
+    winRate: eligibleRows.length ? positives / eligibleRows.length : null,
+    falsePositiveRate: eligibleRows.length ? (eligibleRows.length - positives) / eligibleRows.length : null,
+    medianMaximumAdverseExcursionPercent: median(eligibleRows.map(row => row.maePercent)),
+    evidenceCompleteness: median(eligibleRows.map(row => row.evidenceCompleteness))
+  };
+}
+
+function metricDelta(candidate, baseline, field) {
+  const current = finite(candidate?.[field]);
+  const reference = finite(baseline?.[field]);
+  return current == null || reference == null
+    ? null
+    : Number((current - reference).toFixed(6));
+}
+
+function evaluateBaselineComparison(rows, options = {}) {
+  const config = { ...EVALUATION_CONFIG, ...options };
+  const normalized = Array.isArray(rows) ? rows : [];
+  const baseline = modelMetricSet(normalized, "baseline");
+  const challenger = modelMetricSet(normalized, "challenger");
+  const uniqueTokens = new Set(normalized.map(row => row.mint).filter(Boolean)).size;
+  const temporalWindows = new Set(normalized
+    .map(row => row.time)
+    .filter(value => value != null)
+    .map(value => new Date(value).toISOString().slice(0, 10))).size;
+  const sampleReady = challenger.sampleSize >= config.minimumSample
+    && baseline.sampleSize >= config.minimumSample
+    && uniqueTokens >= config.minimumUniqueTokens
+    && temporalWindows >= config.minimumTemporalWindows;
+  const precisionLift = metricDelta(challenger, baseline, "precisionAt10");
+  const falsePositiveDelta = metricDelta(challenger, baseline, "falsePositiveRate");
+  const maeDelta = metricDelta(challenger, baseline, "medianMaximumAdverseExcursionPercent");
+  const medianReturnDelta = metricDelta(challenger, baseline, "medianForwardReturnPercent");
+  const completenessDelta = metricDelta(challenger, baseline, "evidenceCompleteness");
+  const checks = {
+    sampleSize: sampleReady,
+    precisionLift: precisionLift != null && precisionLift >= config.minimumPrecisionImprovement,
+    falsePositiveRate: falsePositiveDelta != null
+      && falsePositiveDelta <= config.maximumFalsePositiveDeterioration,
+    maximumAdverseExcursion: maeDelta != null
+      && maeDelta >= -config.maximumMaeDeteriorationPercent,
+    medianReturn: medianReturnDelta != null && medianReturnDelta >= 0,
+    completeness: completenessDelta == null || completenessDelta >= 0
+  };
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    status: failedChecks.length ? (sampleReady ? "BLOCKED" : "INSUFFICIENT_SAMPLE") : "ELIGIBLE",
+    claimAllowed: failedChecks.length === 0,
+    sample: {
+      rows: normalized.length,
+      uniqueTokens,
+      temporalWindows,
+      minimumRows: config.minimumSample,
+      minimumUniqueTokens: config.minimumUniqueTokens,
+      minimumTemporalWindows: config.minimumTemporalWindows
+    },
+    baseline,
+    challenger,
+    delta: {
+      precisionAt10: precisionLift,
+      falsePositiveRate: falsePositiveDelta,
+      medianMaximumAdverseExcursionPercent: maeDelta,
+      medianForwardReturnPercent: medianReturnDelta,
+      evidenceCompleteness: completenessDelta
+    },
+    checks,
+    failedChecks,
+    rule: "The challenger must improve precision at the locked top-k horizon without worsening false positives, adverse excursion, completeness, or median outcome."
+  };
 }
 
 function distinctByMint(rows) {
@@ -228,15 +337,29 @@ function evaluateOutcomes(labels, options = {}) {
   const split = splitWalkForward(allRows, config.embargoMs);
   const holdout = metricSet(split.temporalHoldout);
   const executableHoldout = metricSet(split.temporalHoldout, "executable");
+  const baselineComparison = evaluateBaselineComparison(allRows, config);
+  const holdoutBaselineComparison = evaluateBaselineComparison(split.temporalHoldout, config);
   const scoreVersions = [...new Set(allRows.map(row => row.decisionVersion || "UNKNOWN"))];
   const eligibility = allRows.length >= config.minimumSample && windowDays >= config.minimumWindowDays;
+  const leakageRows = Array.isArray(labels) ? labels.filter(row => {
+    const signal = timeOf(row);
+    const observed = Date.parse(String(row.observedAt || ""));
+    return signal != null && Number.isFinite(observed) && observed < signal;
+  }) : [];
+  const efficacyClaimAllowed = eligibility
+    && leakageRows.length === 0
+    && holdoutBaselineComparison.claimAllowed;
   const report = {
     version: EVALUATION_VERSION,
     configurationHash: CONFIGURATION_HASH,
     horizon: config.horizon,
     generatedAt: new Date().toISOString(),
-    claimStatus: eligibility ? "DESCRIPTIVE_ONLY_UNTIL_GOVERNANCE_APPROVAL" : "INSUFFICIENT_SAMPLE_OR_TIME_WINDOW",
-    efficacyClaimAllowed: false,
+    claimStatus: !eligibility
+      ? "INSUFFICIENT_SAMPLE_OR_TIME_WINDOW"
+      : efficacyClaimAllowed
+        ? "BASELINE_COMPARISON_PASSED_PENDING_GOVERNANCE"
+        : "DESCRIPTIVE_ONLY_UNTIL_GOVERNANCE_APPROVAL",
+    efficacyClaimAllowed,
     minimumRequirements: {
       sampleSize: config.minimumSample,
       windowDays: config.minimumWindowDays,
@@ -245,11 +368,7 @@ function evaluateOutcomes(labels, options = {}) {
       met: eligibility
     },
     noLookAhead: {
-      droppedRows: Array.isArray(labels) ? labels.filter(row => {
-        const signal = timeOf(row);
-        const observed = Date.parse(String(row.observedAt || ""));
-        return signal != null && Number.isFinite(observed) && observed < signal;
-      }).length : 0,
+      droppedRows: leakageRows.length,
       rule: "Only observations at or after signal time enter a label."
     },
     walkForward: {
@@ -276,6 +395,8 @@ function evaluateOutcomes(labels, options = {}) {
       winRate: bootstrapByToken(allRows, "winRate", config.bootstrapReplicates, `${config.bootstrapSeed}:win`)
     },
     discoveryBias: discoveryBias(allRows),
+    baselineComparison,
+    temporalHoldoutBaselineComparison: holdoutBaselineComparison,
     calibration: calibration(allRows),
     scoreVersions,
     dataQuality: {
@@ -295,5 +416,6 @@ module.exports = {
   CONFIGURATION_HASH,
   normalizeRows,
   splitWalkForward,
+  evaluateBaselineComparison,
   evaluateOutcomes
 };

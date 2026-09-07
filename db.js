@@ -1252,6 +1252,8 @@ async function recordOutcomeCheckpoints(asOf = new Date()) {
 }
 
 function evaluationInput(row) {
+  const scorecard = row.decisionSnapshot?.scorecard || {};
+  const baselineShadow = scorecard.baselineShadow || {};
   return {
     checkpoint: row.checkpoint,
     signalTime: row.signalTime.toISOString(),
@@ -1263,7 +1265,12 @@ function evaluationInput(row) {
     tradabilityState: row.tradabilityState,
     mint: row.mint,
     discoveryClass: row.metadata?.discoveryClass || "UNKNOWN",
-    decisionVersion: row.decisionSnapshot?.decisionVersion || "UNKNOWN"
+    decisionVersion: row.decisionSnapshot?.decisionVersion || "UNKNOWN",
+    baselineScore: baselineShadow.rankScore,
+    baselineAccepted: baselineShadow.accepted,
+    challengerScore: row.decisionSnapshot?.radarScore,
+    challengerAccepted: scorecard.decisionState === "QUALIFYING" || scorecard.decisionState === "ACTIONABLE_RESEARCH",
+    evidenceCompleteness: scorecard.evidenceQuality?.coverage
   };
 }
 
@@ -1271,7 +1278,7 @@ async function readEvaluationReport({ persist = true, options = {} } = {}) {
   const rows = await prisma.outcomeCheckpoint.findMany({
     orderBy: { signalTime: "asc" },
     take: 50_000,
-    include: { decisionSnapshot: { select: { decisionVersion: true } } }
+    include: { decisionSnapshot: { select: { decisionVersion: true, radarScore: true, scorecard: true } } }
   });
   const report = evaluateOutcomes(rows.map(evaluationInput), options);
   if (persist) {

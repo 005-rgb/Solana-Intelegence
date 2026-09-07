@@ -1,0 +1,1118 @@
+# PRD — Evidence Quality & Baseline Validation
+
+**Status:** Proposed  
+**Versi:** 1.0  
+**Tanggal:** 2026-09-08  
+**Pemilik:** Radar Core / Research Reliability  
+**Ruang lingkup:** Kualitas evidence, validitas scorecard, dan pembuktian bahwa scorer menghasilkan kandidat yang lebih baik daripada baseline.
+
+---
+
+## 1. Ringkasan
+
+Radar harus dapat menjawab dua pertanyaan secara terpisah:
+
+1. **Apakah evidence yang dipakai untuk menilai token cukup valid, fresh, lengkap, dan dapat ditelusuri?**
+2. **Apakah scorecard Radar benar-benar menghasilkan kandidat yang lebih baik daripada metode baseline yang lebih sederhana?**
+
+PRD ini menetapkan standar untuk kedua hal tersebut.
+
+Score Radar tetap diperlakukan sebagai **evidence-ranking score**, bukan probabilitas profit. Sebuah scorer tidak boleh dipromosikan hanya karena menghasilkan angka score lebih tinggi, lebih banyak kandidat, atau grafik return yang terlihat menarik. Promosi harus didukung oleh:
+
+- evidence yang memiliki lineage dan batas waktu yang jelas;
+- outcome yang tidak mengalami look-ahead leakage;
+- perbandingan yang adil terhadap baseline;
+- hasil temporal holdout;
+- confidence interval dan ukuran sampel yang cukup;
+- keamanan dan kelengkapan data yang tidak memburuk;
+- alasan keputusan yang tetap dapat dijelaskan.
+
+---
+
+## 2. Masalah yang ingin diselesaikan
+
+### 2.1 Masalah kualitas evidence
+
+Saat ini kandidat dapat memiliki kombinasi evidence yang berbeda-beda:
+
+- security lengkap tetapi project traction tidak tersedia;
+- liquidity tersedia tetapi volume atau maker history belum cukup;
+- price outcome tersedia tetapi sell-route evidence tidak tersedia;
+- manipulation sample belum cukup;
+- provider mengirim data yang stale atau tidak konsisten;
+- dua sumber memberikan nilai berbeda untuk field yang sama.
+
+Tanpa kontrak kualitas yang konsisten, score dapat terlihat presisi padahal dibangun dari evidence yang tidak setara.
+
+### 2.2 Masalah pembuktian scorer
+
+Score baru tidak boleh dianggap lebih baik hanya karena:
+
+- score rata-ratanya lebih tinggi;
+- jumlah kandidat qualifying meningkat;
+- satu periode bull market terlihat menguntungkan;
+- hasilnya hanya berasal dari boosted tokens;
+- outcome dengan coverage buruk dibuang;
+- missing execution evidence diam-diam dianggap sebagai hasil negatif atau positif;
+- threshold dipilih setelah melihat hasil holdout.
+
+Radar membutuhkan proses evaluasi yang dapat membedakan:
+
+```text
+scorer benar-benar lebih baik
+vs
+scorer hanya lebih agresif
+vs
+scorer mendapat data lebih lengkap
+vs
+scorer terkena kebocoran informasi masa depan
+```
+
+---
+
+## 3. Tujuan
+
+### 3.1 Tujuan utama
+
+1. Menetapkan kontrak evidence yang seragam untuk semua domain Radar.
+2. Menjaga data `UNKNOWN`, `STALE`, `INVALID`, dan `CONFLICT` tetap terlihat.
+3. Mencegah evidence setelah waktu keputusan masuk ke score atau feature snapshot.
+4. Menjamin setiap score dapat ditelusuri ke sumber, waktu observasi, versi feature, dan konfigurasi.
+5. Membandingkan scorer terhadap baseline dengan split waktu yang tetap dan dapat diulang.
+6. Memisahkan evaluasi price outcome dari executable outcome.
+7. Menetapkan syarat minimum sebelum scorer boleh menjadi champion.
+8. Menjaga scorer yang sedang aktif tetap pada `BASELINE` ketika evidence atau hasil evaluasi belum cukup.
+
+### 3.2 Bukan tujuan
+
+PRD ini tidak mencakup:
+
+- wallet signing;
+- automatic trading;
+- perpindahan dana real;
+- menjanjikan profit atau probabilitas profit;
+- mengganti deterministic scorer dengan machine learning;
+- menganggap market activity sebagai bukti product traction;
+- menghapus outcome yang censored atau memiliki execution evidence yang tidak lengkap;
+- mengoptimalkan threshold berdasarkan satu periode holdout.
+
+---
+
+## 4. Prinsip desain
+
+### P1 — Unknown bukan pass
+
+Evidence yang tidak ada, tidak fresh, atau tidak dapat diverifikasi harus tetap `UNKNOWN`, bukan dikonversi menjadi nilai positif.
+
+### P2 — Evidence memiliki waktu
+
+Setiap evidence harus memiliki:
+
+- `observedAt`;
+- `asOf`;
+- waktu ingestion;
+- freshness limit;
+- source lineage.
+
+Nilai yang diterbitkan setelah keputusan tidak boleh memengaruhi keputusan tersebut.
+
+### P3 — Security gate mendahului score
+
+Score tidak dapat mengatasi security rejection, invalidation, atau blocking manipulation evidence.
+
+### P4 — Score bukan probabilitas
+
+Score digunakan untuk ranking research candidates. Score tidak boleh ditampilkan sebagai peluang token naik, peluang profit, atau jaminan return.
+
+### P5 — Price outcome dan executable outcome terpisah
+
+Price return, MFE, MAE, dan drawdown dapat dihitung dari observation market. Executable return hanya boleh dihitung jika sell-route evidence eksplisit tersedia dan cukup lengkap.
+
+### P6 — Baseline harus tetap hidup
+
+Baseline adalah comparator permanen, bukan scorer sementara yang boleh dihapus setelah scorer baru terlihat lebih baik.
+
+### P7 — Operational health dan scorer efficacy adalah gate berbeda
+
+Scorer tidak boleh dipromosikan ketika database, provider, RPC, persistence, atau freshness sedang degraded, walaupun metrik outcome terlihat bagus.
+
+### P8 — Penjelasan adalah bagian dari correctness
+
+Setiap keputusan qualifying atau promotion harus memiliki reasons, warnings, evidence coverage, dan lineage yang dapat dibaca manusia.
+
+---
+
+## 5. Definisi utama
+
+### 5.1 Evidence
+
+Data terstruktur yang mendukung atau melemahkan suatu klaim tentang token, market, project, atau execution.
+
+### 5.2 Evidence record
+
+Unit evidence terkecil yang dapat diaudit:
+
+```json
+{
+  "domain": "SECURITY",
+  "claim": "mint_authority_renounced",
+  "value": true,
+  "status": "VERIFIED",
+  "source": "solana_rpc",
+  "sourceId": "provider-or-request-lineage",
+  "observedAt": "2026-09-08T10:00:00.000Z",
+  "asOf": "2026-09-08T10:00:00.000Z",
+  "ingestedAt": "2026-09-08T10:00:02.000Z",
+  "freshUntil": "2026-09-08T10:10:00.000Z",
+  "schemaVersion": "security-v1",
+  "quality": {
+    "sourceTier": "DIRECT",
+    "completeness": 1,
+    "conflict": false
+  }
+}
+```
+
+### 5.3 Decision time
+
+Waktu saat Radar membuat decision snapshot. Hanya evidence dengan `asOf <= decisionTime` yang boleh digunakan.
+
+### 5.4 Evidence coverage
+
+Persentase evidence wajib yang tersedia dan valid untuk suatu domain. Coverage tidak boleh disamakan dengan confidence.
+
+### 5.5 Evidence confidence
+
+Penilaian terhadap kekuatan sumber, freshness, consistency, dan kelengkapan evidence. Confidence tidak sama dengan peluang profit.
+
+### 5.6 Baseline
+
+Metode pembanding yang dikunci dan tidak menggunakan feature scorer baru. Baseline harus tetap tersedia untuk setiap evaluation run.
+
+### 5.7 Candidate set
+
+Semua token yang eligible untuk dibandingkan pada waktu tertentu setelah discovery, normalization, chain filtering, dan data validity checks.
+
+Candidate set tidak boleh hanya berisi token yang lolos scorer baru.
+
+### 5.8 Champion
+
+Scorer yang sedang digunakan sebagai konfigurasi utama untuk research qualification.
+
+### 5.9 Challenger
+
+Scorer yang dievaluasi terhadap champion dan baseline tanpa menggantikan keputusan live.
+
+---
+
+## 6. Evidence quality contract
+
+Semua evidence yang masuk ke scorecard harus melewati pemeriksaan berikut.
+
+### 6.1 Validity
+
+Evidence valid jika:
+
+- tipe data sesuai schema;
+- angka finite dan berada dalam range yang diizinkan;
+- address/token identity valid;
+- timestamp valid dan tidak berada jauh di masa depan;
+- source response dapat diidentifikasi;
+- data tidak berasal dari record yang ditolak schema validation.
+
+Evidence invalid tidak boleh ikut scoring.
+
+### 6.2 Freshness
+
+Setiap domain memiliki freshness policy. Nilai awal yang direkomendasikan:
+
+| Domain | Freshness awal | Catatan |
+|---|---:|---|
+| Security RPC | 10 menit | Authority dan holder concentration |
+| Market pair | 10 menit | Harga, liquidity, market cap, volume |
+| Lifecycle stale | 5 menit | Lebih konservatif untuk state candidate |
+| Time-series feature | 10 menit | Harus memiliki jumlah sample minimum |
+| Manipulation evidence | 15 menit | Bergantung pada coverage trade |
+| Project traction | 7 hari | Harus tetap memiliki `asOf` dan source lineage |
+| Execution quote | 2 menit | Quote research hanya valid pada jendela pendek |
+
+Nilai tersebut adalah konfigurasi awal, bukan kebenaran universal. Perubahan freshness harus versioned dan ikut masuk ke configuration hash.
+
+### 6.3 As-of boundary
+
+Untuk decision snapshot dengan `decisionTime = T`, setiap feature dan evidence harus memenuhi:
+
+```text
+evidence.asOf <= T
+```
+
+Jika evidence memiliki rentang waktu, seluruh rentang yang digunakan harus berakhir pada atau sebelum `T`.
+
+Evidence masa depan harus:
+
+- dikeluarkan dari score;
+- dihitung sebagai leakage violation;
+- membuat evaluation run gagal jika melewati toleransi nol.
+
+### 6.4 Source lineage
+
+Setiap evidence harus menyimpan minimal:
+
+- source name;
+- source type;
+- endpoint atau adapter identifier;
+- request ID jika tersedia;
+- response hash jika tersedia;
+- schema version;
+- retrieval time;
+- provider status.
+
+Lineage tidak boleh menyimpan secret atau credential.
+
+### 6.5 Source tier
+
+Source diklasifikasikan sebagai:
+
+| Tier | Makna |
+|---|---|
+| `DIRECT` | Data langsung dari RPC, quote, atau adapter resmi |
+| `VERIFIED_ADAPTER` | Adapter yang schema dan provenance-nya diverifikasi |
+| `INDEXED` | Data indexer yang memiliki lineage tetapi bukan source of truth langsung |
+| `DERIVED` | Nilai yang dihitung dari evidence lain |
+| `UNVERIFIED` | Data yang tidak cukup untuk mendukung keputusan |
+
+`UNVERIFIED` tidak boleh menaikkan score. `DERIVED` harus menyimpan input evidence dan formula version.
+
+### 6.6 Completeness
+
+Completeness dihitung per domain, bukan hanya per token.
+
+Contoh domain minimum:
+
+#### Security
+
+- mint account;
+- supply;
+- largest holders;
+- authority status;
+- RPC context;
+- freshness.
+
+#### Market quality
+
+- price;
+- liquidity;
+- market cap atau FDV sesuai formula;
+- volume;
+- pair creation time;
+- updated time;
+- price change;
+- entry impact estimate jika tersedia.
+
+#### Momentum/flow
+
+- minimum jumlah observation;
+- minimum span waktu;
+- price change history;
+- volume history;
+- maker history;
+- buy/sell transaction history.
+
+#### Manipulation
+
+- trade sample;
+- time span;
+- wallet/entity coverage;
+- pool liquidity history;
+- flag evaluation status.
+
+#### Project traction
+
+- product reality;
+- users/growth;
+- economic activity;
+- developer activity;
+- utility/tokenomics;
+- integrations;
+- minimal dua source independen untuk cap lift;
+- minimal tiga titik waktu bila trend digunakan.
+
+#### Execution
+
+- buy route;
+- sell route;
+- route status;
+- price impact;
+- slippage;
+- fee;
+- account creation/transfer evidence;
+- freshness.
+
+### 6.7 Status evidence
+
+Status yang diperbolehkan:
+
+```text
+VERIFIED
+PARTIAL
+UNKNOWN
+STALE
+INVALID
+CONFLICT
+```
+
+Aturan:
+
+- `VERIFIED` boleh dipakai sesuai bobotnya;
+- `PARTIAL` boleh dipakai hanya jika domain policy mengizinkan dan harus menurunkan confidence;
+- `UNKNOWN` tidak memberi poin positif;
+- `STALE` tidak boleh dipakai untuk keputusan baru;
+- `INVALID` dikeluarkan dan dicatat;
+- `CONFLICT` tidak boleh dipaksa menjadi nilai tunggal tanpa resolver yang versioned.
+
+### 6.8 Conflict resolution
+
+Jika dua sumber bertentangan:
+
+1. simpan kedua record;
+2. jangan menimpa evidence asli;
+3. tandai domain `CONFLICT`;
+4. pilih nilai hanya melalui resolver versioned;
+5. turunkan confidence;
+6. blokir `ACTIONABLE_RESEARCH` jika conflict menyentuh security, route, atau market tradability.
+
+Jika tidak ada resolver, hasil harus tetap `UNKNOWN`.
+
+---
+
+## 7. Evidence gates untuk decision state
+
+### 7.1 Observed
+
+Syarat minimum:
+
+- token identity valid;
+- chain adalah Solana;
+- discovery lineage tersedia.
+
+### 7.2 Watch
+
+Token boleh masuk `WATCH` jika:
+
+- evidence belum cukup untuk qualifying;
+- atau terdapat unknown/partial domain;
+- atau ada warning non-blocking;
+- atau score menarik tetapi confidence belum memadai.
+
+### 7.3 Qualifying
+
+Selain threshold score yang berlaku, wajib memenuhi:
+
+- security tidak `UNKNOWN`, `STALE`, atau `INVALID`;
+- market quality tidak `UNKNOWN` untuk field wajib;
+- market data masih fresh;
+- tidak ada blocking manipulation flag;
+- tidak ada `THESIS_CONFLICT`;
+- confidence dan opportunity melewati threshold;
+- risk berada di bawah maksimum;
+- active radar score melewati threshold radar yang sesuai;
+- evidence completeness per domain melewati minimum.
+
+### 7.4 Actionable research
+
+`ACTIONABLE_RESEARCH` hanya boleh diberikan jika:
+
+- seluruh syarat `QUALIFYING` terpenuhi;
+- execution evidence fresh;
+- buy dan sell route memiliki status yang cukup;
+- slippage dan fee evidence tersedia untuk executable analysis;
+- tidak ada route invalidation;
+- quote tidak melewati freshness limit;
+- provider/RPC tidak sedang degraded pada decision window.
+
+Price opportunity tanpa sell-route evidence tetap boleh menghasilkan price outcome, tetapi tidak boleh menghasilkan executable return.
+
+### 7.5 Stale dan invalidated
+
+Kandidat menjadi `STALE` ketika market evidence melewati freshness limit.
+
+Kandidat menjadi `INVALIDATED` ketika:
+
+- security berubah menjadi rejected/invalid/unverified;
+- blocking manipulation evidence muncul;
+- identity atau token lineage tidak lagi valid;
+- thesis memiliki contradiction yang memblokir;
+- execution evidence mengalami invalidation yang relevan dengan state actionable.
+
+---
+
+## 8. Evidence completeness dan confidence caps
+
+Confidence harus mempunyai dua dimensi yang terpisah:
+
+```text
+evidence completeness
+source quality
+```
+
+Rekomendasi awal:
+
+| Kondisi | Dampak |
+|---|---|
+| Security unknown | confidence maksimal 40, tidak qualifying |
+| Feature completeness < 75% | confidence maksimal 65 |
+| Manipulation sample belum cukup | confidence maksimal 70 |
+| Project traction single-source | quality cap tetap aktif |
+| Project traction stale | tidak boleh mengangkat quality cap |
+| Execution sell evidence missing | executable return `UNKNOWN` |
+| Conflict pada security/route | tidak actionable |
+| Future evidence terdeteksi | evaluation run invalid |
+
+Cap harus selalu disimpan bersama:
+
+- cap code;
+- domain;
+- evidence record yang memicu cap;
+- decision version;
+- configuration hash.
+
+---
+
+## 9. Baseline yang wajib dipertahankan
+
+Evaluation harus membandingkan minimal tiga output:
+
+### 9.1 Baseline A — Safety-only baseline
+
+Kandidat lolos jika memenuhi gate deterministik:
+
+- chain Solana;
+- security verified;
+- liquidity minimum;
+- positive price change;
+- market freshness;
+- tidak ada blocking rejection.
+
+Baseline ini menjawab:
+
+> Apakah scoring menambah kualitas di atas filter keamanan dan market minimum?
+
+### 9.2 Baseline B — Current champion
+
+Scorecard yang sedang aktif sebelum perubahan. Baseline ini harus menggunakan:
+
+- configuration hash yang dikunci;
+- feature version yang dicatat;
+- decision rules yang tidak berubah selama evaluation window.
+
+### 9.3 Baseline C — Naive market ranking
+
+Ranking sederhana yang tidak memakai score baru, misalnya:
+
+- market cap/liquidity ratio;
+- liquidity;
+- positive 24h change;
+- volume yang dinormalisasi terhadap liquidity.
+
+Tujuannya untuk memeriksa apakah scorer hanya meniru ranking market provider.
+
+### 9.4 Challenger
+
+Scorecard atau konfigurasi baru yang diuji dalam mode shadow. Challenger tidak boleh memengaruhi live alerts atau live qualification selama evaluation berlangsung.
+
+---
+
+## 10. Candidate-set fairness
+
+Perbandingan baseline dan challenger harus menggunakan candidate set yang sama.
+
+Wajib:
+
+- token universe yang sama;
+- waktu discovery yang sama;
+- aturan chain filter yang sama;
+- aturan provider validity yang sama;
+- window observasi yang sama;
+- outcome labeling yang sama;
+- hanya feature sebelum decision time;
+- deduplication yang sama.
+
+Tidak boleh:
+
+- memberi challenger data tambahan yang tidak tersedia untuk baseline;
+- menghapus token yang gagal challenger;
+- mengubah candidate universe setelah melihat outcome;
+- menggabungkan token dari periode berbeda tanpa stratifikasi;
+- membandingkan top-k challenger dengan seluruh universe baseline tanpa definisi yang jelas.
+
+---
+
+## 11. Metodologi evaluasi scorer
+
+### 11.1 Unit evaluasi
+
+Unit utama adalah:
+
+```text
+decision snapshot × token × canonical checkpoint
+```
+
+Setiap decision snapshot harus memiliki:
+
+- token mint;
+- decision time;
+- scorer version;
+- configuration hash;
+- feature snapshot;
+- evidence coverage;
+- decision state;
+- active radar;
+- baseline outputs;
+- outcome lineage.
+
+### 11.2 Split waktu
+
+Evaluasi harus chronological, bukan random split.
+
+Contoh:
+
+```text
+Tuning window       → memilih threshold/configuration
+Embargo window      → mencegah overlap informasi
+Temporal holdout    → evaluasi final yang tidak disentuh tuning
+```
+
+Rekomendasi:
+
+- minimal tiga walk-forward folds;
+- setiap fold memiliki tuning, embargo, dan holdout;
+- holdout paling akhir hanya dibuka setelah configuration hash dikunci;
+- perubahan threshold setelah holdout dianggap evaluation restart.
+
+### 11.3 Embargo
+
+Embargo harus cukup panjang untuk mencegah outcome horizon yang tumpang tindih memengaruhi fold berikutnya.
+
+Nilai awal:
+
+```text
+embargo >= horizon evaluasi utama
+```
+
+Jika horizon utama T+1D, embargo minimal satu hari. Nilai final harus disimpan dalam `EvaluationRun`.
+
+### 11.4 Canonical horizon
+
+Satu horizon utama harus ditetapkan sebelum evaluasi, misalnya T+1D atau T+4H. Horizon tambahan boleh dilaporkan, tetapi tidak boleh dipilih setelah melihat hasil terbaik.
+
+Setiap run harus menyimpan:
+
+- canonical horizon;
+- secondary horizons;
+- checkpoint completion;
+- censored count;
+- missing coverage reason.
+
+### 11.5 Top-k evaluation
+
+Karena Radar menghasilkan ranking, metrik utama harus mencakup:
+
+- precision@5;
+- precision@10;
+- precision@20;
+- recall terhadap eligible positive outcomes;
+- median return;
+- mean return dengan outlier report;
+- win rate;
+- false-positive rate;
+- MFE;
+- MAE;
+- drawdown;
+- stale/invalidation rate;
+- tradability rate.
+
+Top-k harus dihitung dengan tie-breaking deterministic:
+
+```text
+score desc
+confidence desc
+decision time asc
+mint asc
+```
+
+### 11.6 Definisi positive outcome
+
+Positive outcome harus dikunci sebelum run. Contoh:
+
+```text
+price return >= configured threshold
+dan MAE tidak melewati configured risk bound
+```
+
+Definisi harus memisahkan:
+
+- price-positive;
+- executable-positive;
+- tradable;
+- censored;
+- invalidated.
+
+Tidak boleh menganggap `UNKNOWN` sebagai negative atau positive.
+
+### 11.7 Statistical uncertainty
+
+Setiap metrik penting harus menyertakan:
+
+- sample size;
+- number of unique tokens;
+- number of time windows;
+- bootstrap confidence interval;
+- bootstrap unit;
+- number of bootstrap resamples;
+- missing/censored ratio.
+
+Bootstrap sebaiknya menggunakan token-block atau time-block agar repeated observations dari token yang sama tidak dianggap sebagai sample independen penuh.
+
+---
+
+## 12. Syarat scorer dianggap lebih baik
+
+Challenger hanya boleh disebut **lebih baik dari baseline** jika seluruh gate berikut terpenuhi pada temporal holdout.
+
+### 12.1 Efficacy gate
+
+Minimal:
+
+- precision@10 tidak lebih rendah dari baseline;
+- ada peningkatan precision@10 sesuai minimum improvement yang dikonfigurasi;
+- false-positive rate tidak memburuk melewati toleransi;
+- MAE tidak memburuk melewati toleransi;
+- median outcome tidak lebih buruk;
+- improvement konsisten pada minimal dua fold temporal;
+- interval uncertainty tidak menunjukkan hasil yang sekadar noise.
+
+### 12.2 Coverage gate
+
+- evidence completeness challenger tidak lebih rendah dari baseline;
+- candidate coverage tidak turun secara tidak dapat dijelaskan;
+- censored rate tidak meningkat melewati toleransi;
+- future-evidence violation harus nol;
+- provider partial rate berada dalam operational budget.
+
+### 12.3 Safety gate
+
+- security rejection behavior tetap sama atau lebih ketat;
+- blocking manipulation flags tidak dilewati;
+- stale dan invalidated candidate tetap ditangani;
+- execution evidence tidak dibuat dari price-only evidence;
+- wallet execution tetap disabled.
+
+### 12.4 Explainability gate
+
+- seluruh qualifying candidate memiliki reasons;
+- score component dan warnings dapat direproduksi;
+- configuration hash dan source set tersedia;
+- missing evidence dan confidence caps dapat ditampilkan;
+- tidak ada keputusan yang bergantung pada field tanpa lineage.
+
+### 12.5 Operational gate
+
+- scan completion memenuhi SLO;
+- persistence success memenuhi SLO;
+- p95 latency berada dalam budget;
+- RPC/provider freshness memenuhi budget;
+- last-known-good age tidak melewati batas;
+- tidak ada degraded incident yang mencemari holdout.
+
+### 12.6 Minimum sample gate
+
+Jika jumlah sample, jumlah token unik, atau jumlah temporal window belum cukup, hasil harus berstatus:
+
+```text
+INSUFFICIENT_SAMPLE
+```
+
+`INSUFFICIENT_SAMPLE` bukan pass dan bukan fail efficacy. Scorer tetap pada `BASELINE`.
+
+---
+
+## 13. Promotion dan rollback
+
+### 13.1 Mode rollout
+
+```text
+BASELINE
+SHADOW
+CHALLENGER
+PROMOTED
+ROLLBACK
+```
+
+### 13.2 Shadow
+
+Pada mode `SHADOW`:
+
+- challenger menghitung score;
+- challenger menghasilkan decision snapshot;
+- challenger tidak mengubah live candidate state;
+- challenger tidak mengirim opportunity alert;
+- outcome challenger tetap dikumpulkan;
+- perbandingan baseline/challenger dilakukan pada candidate set yang sama.
+
+### 13.3 Promotion
+
+Promosi hanya boleh terjadi jika:
+
+1. semua efficacy gate lolos;
+2. semua safety gate lolos;
+3. completeness tidak memburuk;
+4. operational SLO sehat;
+5. reasons tetap explainable;
+6. sample dan temporal holdout cukup;
+7. configuration hash dikunci;
+8. approval/promotion event tersimpan immutable.
+
+### 13.4 Rollback
+
+Rollback otomatis atau manual harus tersedia jika setelah promosi terjadi:
+
+- security rejection behavior memburuk;
+- MAE melewati batas;
+- false-positive rate meningkat;
+- provider/RPC degraded;
+- explanation atau lineage hilang;
+- scorer menghasilkan keputusan non-deterministic;
+- evidence leakage ditemukan;
+- persistence gagal.
+
+Rollback harus mengembalikan live mode ke `BASELINE` tanpa menghapus:
+
+- observations;
+- decision snapshots;
+- outcome labels;
+- evaluation runs;
+- promotion/rollback history.
+
+---
+
+## 14. Model data dan audit record
+
+Implementasi harus mempertahankan atau memperluas record berikut.
+
+### 14.1 Evidence record
+
+```text
+EvidenceRecord
+- id
+- mint
+- domain
+- claim
+- valueJson
+- status
+- sourceName
+- sourceType
+- sourceTier
+- requestId
+- responseHash
+- schemaVersion
+- observedAt
+- asOf
+- ingestedAt
+- freshUntil
+- completeness
+- conflictGroup
+- qualityReasons
+```
+
+### 14.2 Evidence quality summary
+
+```text
+EvidenceQualitySummary
+- decisionSnapshotId
+- domain
+- requiredCount
+- validCount
+- unknownCount
+- staleCount
+- invalidCount
+- conflictCount
+- completeness
+- sourceCoverage
+- confidenceCap
+- reasons
+```
+
+### 14.3 Evaluation run
+
+```text
+EvaluationRun
+- id
+- baselineVersion
+- challengerVersion
+- featureVersion
+- configurationHash
+- candidateSetHash
+- canonicalHorizon
+- tuningWindow
+- embargoWindow
+- holdoutWindow
+- metricsJson
+- confidenceIntervalsJson
+- coverageJson
+- leakageReportJson
+- operationalHealthJson
+- efficacyClaimAllowed
+- status
+- createdAt
+```
+
+### 14.4 Promotion event
+
+```text
+ScorerPromotionEvent
+- id
+- fromMode
+- toMode
+- baselineVersion
+- challengerVersion
+- evaluationRunId
+- decision
+- gateResultsJson
+- configurationHash
+- approvedAt
+- rollbackOf
+```
+
+---
+
+## 15. API dan UI requirements
+
+### 15.1 Evaluation API
+
+`GET /api/evaluation` harus menampilkan:
+
+- status evaluation;
+- baseline dan challenger;
+- canonical horizon;
+- fold windows;
+- sample counts;
+- top-k metrics;
+- price versus executable outcomes;
+- confidence intervals;
+- censored/unknown counts;
+- leakage status;
+- evidence completeness;
+- operational health;
+- `efficacyClaimAllowed`.
+
+### 15.2 Evidence detail UI
+
+Untuk setiap candidate, UI harus dapat menunjukkan:
+
+- evidence status per domain;
+- source dan as-of time;
+- freshness;
+- completeness;
+- conflict;
+- warnings;
+- confidence caps;
+- unknown dimensions;
+- decision time;
+- scorer version;
+- configuration hash.
+
+### 15.3 Score comparison UI
+
+UI harus membandingkan baseline dan challenger dalam tabel yang sama:
+
+| Metrik | Baseline | Challenger | Delta | CI | Status |
+|---|---:|---:|---:|---:|---|
+| Precision@10 | | | | | |
+| MAE | | | | | |
+| False-positive rate | | | | | |
+| Coverage | | | | | |
+| Tradability | | | | | |
+
+UI harus menampilkan alasan jika promotion diblokir.
+
+### 15.4 Operational state
+
+Jika evidence atau operational health degraded, UI harus menggunakan status yang jelas:
+
+```text
+READY
+DEGRADED
+UNKNOWN
+BLOCKED
+```
+
+`UNKNOWN` dan `DEGRADED` tidak boleh ditampilkan sebagai green/healthy.
+
+---
+
+## 16. Alert requirements
+
+Alert harus dibuat untuk:
+
+- evidence menjadi stale;
+- evidence conflict;
+- security berubah;
+- manipulation coverage turun;
+- project traction cap tidak dapat diangkat;
+- leakage violation;
+- evaluation sample tidak cukup;
+- baseline/challenger candidate set berbeda;
+- scorer promotion diblokir;
+- scorer rollback;
+- operational health mencemari evaluation window.
+
+Alert deduplication tetap mengikuti lifecycle event policy dan tidak boleh menghilangkan historical evidence.
+
+---
+
+## 17. Acceptance criteria
+
+### Evidence quality
+
+- [ ] Semua score input memiliki source lineage dan `asOf`.
+- [ ] Evidence masa depan selalu ditolak dari score.
+- [ ] `UNKNOWN`, `STALE`, `INVALID`, dan `CONFLICT` tetap terlihat.
+- [ ] Setiap domain memiliki completeness summary.
+- [ ] Security unknown tidak dapat menjadi qualifying.
+- [ ] Project quality cap tidak dapat diangkat oleh market activity saja.
+- [ ] Project quality cap lift membutuhkan evidence fresh dari minimal dua source independen.
+- [ ] Manipulation sample yang tidak cukup menurunkan confidence dan tidak dianggap bersih.
+- [ ] Sell-route evidence yang tidak ada menjaga executable return tetap `UNKNOWN`.
+- [ ] Conflict security atau route memblokir actionable state.
+
+### Baseline validation
+
+- [ ] Safety-only baseline selalu dihitung.
+- [ ] Current champion selalu dihitung.
+- [ ] Naive market baseline tersedia atau alasan pengecualiannya dicatat.
+- [ ] Candidate set baseline dan challenger dapat direkonsiliasi.
+- [ ] Configuration hash dan feature version disimpan.
+- [ ] Evaluasi menggunakan chronological walk-forward split.
+- [ ] Embargo diterapkan dan dicatat.
+- [ ] Temporal holdout tidak digunakan untuk tuning.
+- [ ] Top-k tie-breaking deterministic.
+- [ ] Confidence interval dan sample count tersedia.
+- [ ] Censored dan unknown outcome tidak dipaksa menjadi negative/positive.
+- [ ] Price dan executable metrics dipisahkan.
+- [ ] Leakage report tersedia dan harus bersih.
+- [ ] Efficacy claim tetap false saat sample tidak cukup.
+
+### Promotion
+
+- [ ] Challenger tidak memengaruhi live state selama shadow.
+- [ ] Promotion membutuhkan efficacy, safety, completeness, explainability, dan operational gates.
+- [ ] Baseline tetap tersedia setelah promotion.
+- [ ] Rollback mengembalikan mode ke baseline tanpa menghapus history.
+- [ ] Promotion dan rollback tercatat immutable.
+
+---
+
+## 18. Rencana implementasi bertahap
+
+### Phase A — Evidence contract
+
+1. Normalisasi EvidenceRecord.
+2. Tambahkan source tier, freshness, as-of, completeness, dan conflict status.
+3. Pastikan semua feature snapshot membawa lineage.
+4. Tambahkan domain completeness summary.
+5. Tambahkan audit untuk future evidence.
+
+### Phase B — Decision gates
+
+1. Tambahkan minimum evidence per domain.
+2. Terapkan active radar threshold sesuai classification.
+3. Pisahkan opportunity, quality, entry, confidence, dan risk.
+4. Perketat project traction cap.
+5. Pastikan actionable state membutuhkan execution evidence.
+
+### Phase C — Baseline harness
+
+1. Bekukan safety-only baseline.
+2. Bekukan current champion.
+3. Tambahkan naive market baseline.
+4. Buat candidate-set hash dan reconciliation.
+5. Jalankan evaluasi chronological dengan embargo.
+
+### Phase D — Evaluation report
+
+1. Tambahkan metrik top-k, return, MAE, false-positive, tradability.
+2. Tambahkan token-block bootstrap interval.
+3. Pisahkan price dan executable outcomes.
+4. Tambahkan leakage, coverage, dan censoring report.
+5. Tampilkan status `efficacyClaimAllowed`.
+
+### Phase E — Controlled rollout
+
+1. Jalankan challenger di `SHADOW`.
+2. Simpan outcome baseline dan challenger pada candidate set yang sama.
+3. Terapkan promotion gates.
+4. Tambahkan immutable promotion event.
+5. Uji rollback ke baseline.
+
+---
+
+## 19. Risiko dan mitigasi
+
+| Risiko | Dampak | Mitigasi |
+|---|---|---|
+| Provider market data bias | Score terlihat lebih baik karena mengikuti provider | Tambahkan naive market baseline dan source coverage |
+| Look-ahead leakage | Metrik palsu | As-of boundary, leakage report, temporal holdout |
+| Missing data dibuang | Kandidat sulit terlihat buruk | Laporkan unknown dan censored secara eksplisit |
+| Score lebih agresif | Precision turun tetapi volume kandidat naik | Ukur precision@k, false-positive, dan MAE |
+| Bull-market bias | Scorer gagal di regime lain | Stratifikasi berdasarkan market regime |
+| Repeated token observations | Sample size terlihat lebih besar | Token-block bootstrap |
+| Project activity disamakan dengan traction | False fundamental confidence | Minimal dua source independen dan domain-specific evidence |
+| Execution tidak tersedia | Return executable palsu | Pisahkan price dan executable outcome |
+| Provider/RPC degraded | Hasil evaluasi tidak valid | Operational health gate dan last-known-good policy |
+| Threshold overfitting | Holdout tidak lagi murni | Lock configuration sebelum holdout |
+
+---
+
+## 20. Keputusan yang harus dikunci sebelum implementasi
+
+1. Canonical evaluation horizon.
+2. Positive outcome definition.
+3. Minimum sample size.
+4. Minimum unique token count.
+5. Minimum number of temporal folds.
+6. Embargo duration.
+7. Minimum precision improvement atas baseline.
+8. Maximum MAE deterioration.
+9. Maximum false-positive deterioration.
+10. Minimum evidence completeness per domain.
+11. Freshness limit final per evidence domain.
+12. Active radar selection policy.
+
+Semua keputusan tersebut harus masuk ke configuration hash dan evaluation run. Tidak boleh berubah tanpa membuat scorer/evaluation version baru.
+
+---
+
+## 21. Definisi selesai
+
+PRD ini dianggap selesai diimplementasikan jika tim dapat membuka satu evaluation run dan menjawab secara reproducible:
+
+1. Token apa saja yang masuk candidate set?
+2. Evidence apa yang tersedia pada saat setiap decision?
+3. Evidence mana yang unknown, stale, invalid, atau conflict?
+4. Score dan baseline apa yang dihitung?
+5. Apakah ada future evidence yang masuk?
+6. Outcome apa yang tersedia pada canonical horizon?
+7. Berapa precision@top-k, MAE, false-positive, coverage, dan tradability masing-masing?
+8. Apakah hasilnya konsisten di temporal holdout?
+9. Apakah improvement lebih besar dari uncertainty?
+10. Apakah security, completeness, explanation, dan operational gates tetap aman?
+11. Mengapa scorer boleh atau tidak boleh dipromosikan?
+
+Jika salah satu jawaban tersebut tidak tersedia, sistem harus mempertahankan status:
+
+```text
+BASELINE
+efficacyClaimAllowed = false
+```
+
+dan tidak boleh menyatakan bahwa scorer baru lebih baik.

@@ -6,6 +6,12 @@ const {
   PHASE4A_CONFIG,
   evaluatePhase4A
 } = require("./phase4a");
+const { evaluateBaselineCandidate } = require("./radar-core");
+const {
+  activeRadarFor,
+  evaluateEvidenceQuality,
+  EVIDENCE_QUALITY_VERSION
+} = require("./evidence-quality");
 
 const SCORE_VERSION = "phase4-v1";
 const FEATURE_VERSION = "phase3-v1";
@@ -18,6 +24,7 @@ const SCORE_CONFIG = Object.freeze({
     confidenceForQualifying: 60,
     maximumRiskForQualifying: 55,
     minimumOpportunityForQualifying: 55,
+    minimumActiveRadarScore: 55,
     minimumEntryForAcceptable: 60,
     chasePriceChangePercent: 25,
     blockingManipulation: ["washTrading", "circularActivity", "coordinatedActivity", "poolDrain"]
@@ -329,8 +336,26 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
       [30, 18, 18, 9, 15, 10]
     ).value
   };
-  const activeRadar = "SPECULATIVE_MEME";
+  const activeRadar = activeRadarFor(candidate);
   const activeScore = radars[activeRadar];
+  const evidenceQuality = evaluateEvidenceQuality(candidate, { activeRadar });
+  const baselineInput = {
+    ...candidate,
+    security: candidate.details.security,
+    price: candidate.price ?? candidate.details.pair?.priceUsd,
+    liquidity: candidate.liquidity ?? candidate.details.pair?.liquidityUsd,
+    priceChange: candidate.priceChange ?? candidate.details.pair?.priceChange?.h24,
+    details: {
+      ...candidate.details,
+      providerMetadata: candidate.details.providerMetadata || {}
+    }
+  };
+  const baseline = evaluateBaselineCandidate(baselineInput);
+  const liquidity = finite(baselineInput.liquidity);
+  const priceChange = percent(baselineInput.priceChange);
+  const baselineRankScore = liquidity == null || priceChange == null
+    ? null
+    : clamp(50 + Math.min(35, Math.max(0, priceChange) * 1.5) + Math.min(15, Math.log10(Math.max(1, liquidity / 10_000)) * 10));
   const blockingFlags = SCORE_CONFIG.thresholds.blockingManipulation
     .filter(flag => candidate.details.manipulationEvidence?.flags?.[flag] === true);
   const qualifying = confidence.value != null
@@ -339,6 +364,9 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
     && risk.value <= SCORE_CONFIG.thresholds.maximumRiskForQualifying
     && opportunityResult.value != null
     && opportunityValue >= SCORE_CONFIG.thresholds.minimumOpportunityForQualifying
+    && activeScore != null
+    && activeScore >= SCORE_CONFIG.thresholds.minimumActiveRadarScore
+    && evidenceQuality.qualifyingAllowed
     && !blockingFlags.length;
   const phase4aQualifying = !phase4a.thesis.strongContradiction;
   const finalQualifying = qualifying && phase4aQualifying;
@@ -353,6 +381,7 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
     ...confidence.reasons,
     ...entry.reasons,
     ...chase.reasons,
+    ...evidenceQuality.reasons,
     ...phase4a.warnings,
     ...(blockingFlags.length ? blockingFlags.map(flag => `${flag.toUpperCase()}_BLOCKS_QUALIFYING`) : [])
   ])];
@@ -360,6 +389,7 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
     version: SCORE_VERSION,
     decisionVersion: SCORE_VERSION,
     featureVersion: candidate.details.featureSnapshot?.featureVersion || FEATURE_VERSION,
+    evidenceQualityVersion: EVIDENCE_QUALITY_VERSION,
     scorerBuildIdentifier: SCORER_BUILD_IDENTIFIER,
     projectTractionVersion: candidate.details.projectTraction?.version || null,
     configurationHash: CONFIGURATION_HASH,
@@ -399,6 +429,8 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
       requiredConfidence: SCORE_CONFIG.thresholds.confidenceForQualifying,
       requiredOpportunity: SCORE_CONFIG.thresholds.minimumOpportunityForQualifying,
       maximumRisk: SCORE_CONFIG.thresholds.maximumRiskForQualifying
+      ,
+      minimumActiveRadarScore: SCORE_CONFIG.thresholds.minimumActiveRadarScore
     },
     scoreReasons: [
       `Active ${activeRadar} score is ${activeScore == null ? "UNKNOWN" : activeScore}.`,
@@ -407,6 +439,14 @@ function scoreRadarCandidate(item, { manipulationEvidence = null } = {}) {
     ],
     scoreWarnings: warnings,
     confidenceCaps: confidence.caps,
+    evidenceQuality,
+    baselineShadow: {
+      decisionVersion: "baseline-v1",
+      accepted: baseline.accepted,
+      outcome: baseline.outcome,
+      reasonCodes: baseline.reasonCodes,
+      rankScore: baselineRankScore
+    },
     phase4a: {
       version: phase4a.version,
       configurationHash: phase4a.configurationHash,
