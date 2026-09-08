@@ -46,7 +46,10 @@ function abortableDelay(ms, signal) {
 function createSolanaRpcPool({
   endpoints = [],
   fetchImpl = globalThis.fetch,
-  maxConcurrent = 1,
+  maxConcurrent = 3,
+  workloadLimits = { security: 2, holder_enrichment: 1, default: 1 },
+  workloadBudgets = {},
+  reservedSlots = { security: 1 },
   failureThreshold = DEFAULT_FAILURE_THRESHOLD,
   cooldownMs = DEFAULT_COOLDOWN_MS,
   maxAttemptsPerEndpoint = DEFAULT_MAX_ATTEMPTS,
@@ -61,6 +64,8 @@ function createSolanaRpcPool({
   const waiters = [];
   let roundRobin = 0;
   let inFlight = 0;
+  const workloadInFlight = new Map();
+  const workloadStarts = new Map();
 
   function endpointState(endpoint) {
     const current = health.get(endpoint.url) || {
@@ -128,23 +133,85 @@ function createSolanaRpcPool({
     return { from: from?.provider || endpointHost(from?.url), to: to.provider || endpointHost(to.url) };
   }
 
-  async function acquireSlot() {
-    if (inFlight < maxConcurrent) {
-      inFlight += 1;
-      return;
-    }
-    await new Promise(resolve => waiters.push(resolve));
+  function workloadLimit(workload) {
+    return Math.max(1, Number(workloadLimits[workload] ?? workloadLimits.default ?? maxConcurrent));
+  }
+
+  function workloadBudget(workload) {
+    const configured = workloadBudgets[workload] || workloadBudgets.default || {};
+    return {
+      windowMs: Math.max(1_000, Number(configured.windowMs || 60_000)),
+      maxRequests: Math.max(1, Number(configured.maxRequests || 1_000))
+    };
+  }
+
+  function pruneWorkloadStarts(workload, at = Date.now()) {
+    const budget = workloadBudget(workload);
+    const starts = (workloadStarts.get(workload) || []).filter(time => time > at - budget.windowMs);
+    workloadStarts.set(workload, starts);
+    return { starts, budget };
+  }
+
+  function budgetAvailable(workload, at = Date.now()) {
+    const { starts, budget } = pruneWorkloadStarts(workload, at);
+    return starts.length < budget.maxRequests;
+  }
+
+  function reserveAvailable(workload) {
+    const reserved = Object.entries(reservedSlots)
+      .filter(([name]) => name !== workload)
+      .reduce((total, [, slots]) => total + Math.max(0, Number(slots) || 0), 0);
+    return inFlight < Math.max(0, maxConcurrent - reserved);
+  }
+
+  function canAcquire(workload) {
+    const current = workloadInFlight.get(workload) || 0;
+    if (current >= workloadLimit(workload) || inFlight >= maxConcurrent || !budgetAvailable(workload)) return false;
+    if (reservedSlots[workload]) return true;
+    return reserveAvailable(workload);
+  }
+
+  function markWorkloadStart(workload) {
+    const starts = workloadStarts.get(workload) || [];
+    starts.push(Date.now());
+    workloadStarts.set(workload, starts);
+    workloadInFlight.set(workload, (workloadInFlight.get(workload) || 0) + 1);
     inFlight += 1;
   }
 
-  function releaseSlot() {
-    inFlight -= 1;
-    waiters.shift()?.();
+  function releaseWorkload(workload) {
+    workloadInFlight.set(workload, Math.max(0, (workloadInFlight.get(workload) || 1) - 1));
+    inFlight = Math.max(0, inFlight - 1);
+    pumpWaiters();
   }
 
-  async function execute(requests, signal, isBatch) {
+  function pumpWaiters() {
+    for (let index = 0; index < waiters.length; index += 1) {
+      const waiter = waiters[index];
+      if (!canAcquire(waiter.workload)) continue;
+      waiters.splice(index, 1);
+      markWorkloadStart(waiter.workload);
+      waiter.resolve();
+      index -= 1;
+    }
+  }
+
+  async function acquireSlot(workload) {
+    if (!canAcquire(workload)) {
+      await new Promise((resolve, reject) => waiters.push({ workload, resolve, reject }));
+      return;
+    }
+    markWorkloadStart(workload);
+  }
+
+  async function execute(requests, signal, isBatch, workload = "default") {
     if (typeof fetchImpl !== "function") throw new Error("No fetch implementation is available for Solana RPC.");
-    await acquireSlot();
+    if (!budgetAvailable(workload)) {
+      const error = new Error(`Solana RPC budget exhausted for ${workload}.`);
+      error.code = "RPC_BUDGET_EXHAUSTED";
+      throw error;
+    }
+    await acquireSlot(workload);
     try {
       let lastError;
       let previous = null;
@@ -240,21 +307,36 @@ function createSolanaRpcPool({
       }
       throw lastError || new Error(`No Solana RPC endpoint responded. Tried: ${tried.join(", ")}`);
     } finally {
-      releaseSlot();
+      releaseWorkload(workload);
     }
   }
 
-  function request(method, params) {
-    return execute([{ jsonrpc: "2.0", id: `${Date.now()}:${method}`, method, params }], null, false);
+  function request(method, params, options = {}) {
+    const workload = typeof options === "string" ? options : options?.workload || "default";
+    return execute([{ jsonrpc: "2.0", id: `${Date.now()}:${method}`, method, params }], options?.signal || null, false, workload);
   }
 
-  function batch(requests, signal) {
-    return execute(requests, signal, true);
+  function batch(requests, signal, workload = "default") {
+    return execute(requests, signal, true, workload);
   }
 
   function summary() {
     return {
       configuredEndpoints: normalizedEndpoints.length,
+      maxConcurrent,
+      inFlight,
+      workloads: [...new Set(["default", ...Object.keys(workloadLimits), ...Object.keys(workloadBudgets)])].reduce((result, workload) => {
+        const { starts, budget } = pruneWorkloadStarts(workload);
+        result[workload] = {
+          inFlight: workloadInFlight.get(workload) || 0,
+          limit: workloadLimit(workload),
+          budgetUsed: starts.length,
+          budgetLimit: budget.maxRequests,
+          budgetRemaining: Math.max(0, budget.maxRequests - starts.length),
+          reservedSlots: Number(reservedSlots[workload] || 0)
+        };
+        return result;
+      }, {}),
       endpoints: normalizedEndpoints.map(endpoint => {
         const current = endpointState(endpoint);
         return {

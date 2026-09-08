@@ -68,6 +68,7 @@ const { createSolanaRpcPool } = require("./solana-rpc-pool");
 const { createProviderGateway } = require("./provider-gateway");
 const { createProviderCache } = require("./cache/provider-cache");
 const { buildCacheKey } = require("./cache/cache-key");
+const { createScanWorkQueue, PRIORITIES: SCAN_PRIORITIES } = require("./scan-work-queue");
 const { createBaselineObservability } = require("./baseline-observability");
 const {
   EXECUTION_SAFETY_VERSION,
@@ -166,6 +167,21 @@ const MAX_TAXONOMY_HOLDERS_PER_TOKEN = 10;
 const MAX_TAXONOMY_ACCOUNT_REQUESTS = 120;
 const MUTATION_AUTH_REQUIRED = process.env.RADAR_REQUIRE_AUTH === "true" || process.env.NODE_ENV === "production";
 const rateBuckets = new Map();
+const scanWorkQueue = createScanWorkQueue({
+  maxQueue: Number(process.env.SCAN_QUEUE_MAX || 32),
+  maxAttempts: Number(process.env.SCAN_QUEUE_MAX_ATTEMPTS || 2),
+  budgets: {
+    background: {
+      windowMs: Number(process.env.SCAN_BACKGROUND_BUDGET_WINDOW_MS || 60_000),
+      maxStarts: Number(process.env.SCAN_BACKGROUND_BUDGET || 2)
+    },
+    interactive: {
+      windowMs: Number(process.env.SCAN_INTERACTIVE_BUDGET_WINDOW_MS || 60_000),
+      maxStarts: Number(process.env.SCAN_INTERACTIVE_BUDGET || 6)
+    }
+  },
+  onEvent: () => baselineObservability.setQueueSnapshot(scanWorkQueue.snapshot())
+});
 let lastFilterReport = {
   checked: 0, accepted: 0, rejected: 0, unresolved: 0, reasons: [],
   providerRecords: 0, pairRequests: 0, pairFailures: 0, providerAgeMs: null,
@@ -469,7 +485,28 @@ const rpcConfiguration = {
 };
 const rpcPool = createSolanaRpcPool({
   endpoints: SOLANA_RPC_URLS.map(url => ({ url, provider: rpcProviderNames.get(url) })),
-  timeoutMs: 5_000
+  timeoutMs: 5_000,
+  maxConcurrent: Number(process.env.SOLANA_RPC_MAX_CONCURRENCY || 3),
+  workloadLimits: {
+    security: Number(process.env.SOLANA_RPC_SECURITY_CONCURRENCY || 2),
+    holder_enrichment: Number(process.env.SOLANA_RPC_HOLDER_CONCURRENCY || 1),
+    default: 1
+  },
+  workloadBudgets: {
+    security: {
+      windowMs: Number(process.env.SOLANA_RPC_SECURITY_BUDGET_WINDOW_MS || 60_000),
+      maxRequests: Number(process.env.SOLANA_RPC_SECURITY_BUDGET || 240)
+    },
+    holder_enrichment: {
+      windowMs: Number(process.env.SOLANA_RPC_HOLDER_BUDGET_WINDOW_MS || 60_000),
+      maxRequests: Number(process.env.SOLANA_RPC_HOLDER_BUDGET || 120)
+    },
+    default: {
+      windowMs: 60_000,
+      maxRequests: 60
+    }
+  },
+  reservedSlots: { security: 1 }
 });
 const rpcHealthSummary = () => ({
   source: rpcConfiguration.source,
@@ -478,8 +515,8 @@ const rpcHealthSummary = () => ({
   rejectedConfigurationEntries: rpcConfiguration.rejected,
   ...rpcPool.summary()
 });
-const solanaRpc = (method, params) => rpcPool.request(method, params);
-const solanaRpcBatch = (requests, signal) => rpcPool.batch(requests, signal);
+const solanaRpc = (method, params, workload = "security") => rpcPool.request(method, params, { workload });
+const solanaRpcBatch = (requests, signal, workload = "security") => rpcPool.batch(requests, signal, workload);
 
 function unverifiedSecurity(message, {
   poolEvidence = {},
@@ -663,7 +700,7 @@ async function verifyTokensSecurity(tokenRecords, signal) {
     { jsonrpc: "2.0", id: `${index}:largest`, method: "getTokenLargestAccounts", params: [record.mint, { commitment: "confirmed" }] }
   ]);
   try {
-    const responses = await solanaRpcBatch(requests, signal);
+    const responses = await solanaRpcBatch(requests, signal, "security");
     const byId = new Map(responses.map(response => [String(response.id), response]));
     const rpcEvidence = {
       observedAt: new Date().toISOString(),
@@ -696,7 +733,7 @@ async function verifyTokensSecurity(tokenRecords, signal) {
           id: `taxonomy:account:${index}`,
           method: "getAccountInfo",
           params: [ref.address, { encoding: "jsonParsed", commitment: "confirmed" }]
-        })), signal);
+        })), signal, "holder_enrichment");
         accountInfoByAddress = Object.fromEntries(accountResponses.map((response, index) => [
           holderRefs[index].address,
           response
@@ -716,7 +753,7 @@ async function verifyTokensSecurity(tokenRecords, signal) {
           id: `taxonomy:owner:${index}`,
           method: "getAccountInfo",
           params: [address, { encoding: "base64", commitment: "confirmed" }]
-        })), signal);
+        })), signal, "holder_enrichment");
         ownerInfoByAddress = Object.fromEntries(ownerResponses.map((response, index) => [
           ownerRefs[index],
           response
@@ -744,9 +781,9 @@ async function verifyTokensSecurity(tokenRecords, signal) {
 async function verifyTokenSecurity(mint) {
   try {
     const [account, supply, largest] = await Promise.all([
-      solanaRpc("getAccountInfo", [mint, { encoding: "jsonParsed", commitment: "confirmed" }]),
-      solanaRpc("getTokenSupply", [mint, { commitment: "confirmed" }]),
-      solanaRpc("getTokenLargestAccounts", [mint, { commitment: "confirmed" }])
+      solanaRpc("getAccountInfo", [mint, { encoding: "jsonParsed", commitment: "confirmed" }], "security"),
+      solanaRpc("getTokenSupply", [mint, { commitment: "confirmed" }], "security"),
+      solanaRpc("getTokenLargestAccounts", [mint, { commitment: "confirmed" }], "security")
     ]);
     const info = account?.value?.data?.parsed?.info;
     const mintAuthorityRenounced = Boolean(info) && info.mintAuthority == null;
@@ -1877,6 +1914,28 @@ async function runScan(manual = false, options = {}) {
   }
 }
 
+function enqueueScan(manual = false, options = {}) {
+  const queued = scanWorkQueue.enqueue({
+    id: options.requestId || `${manual ? "manual" : "scheduled"}-${Date.now()}`,
+    dedupeKey: "live-full-scan",
+    priority: manual ? SCAN_PRIORITIES.INTERACTIVE : SCAN_PRIORITIES.BACKGROUND,
+    budgetClass: manual ? "interactive" : "background",
+    run: () => runScan(manual, options)
+  });
+  if (!queued.accepted) {
+    return Promise.resolve({
+      ok: false,
+      skipped: true,
+      queued: false,
+      message: queued.duplicate
+        ? "A scan is already queued or running."
+        : "The scan queue is full; the request was deferred.",
+      requestId: options.requestId || null
+    });
+  }
+  return queued.item.promise;
+}
+
 async function handleApi(req, res, url) {
   if (mutationRoute(url, req.method) && !mutationAllowed(req)) {
     return send(res, 403, { error: "Mutation is not authorized for this origin.", requestId: req.requestId });
@@ -2002,7 +2061,7 @@ async function handleApi(req, res, url) {
     } catch (error) {
       return send(res, 400, { error: error.message, requestId: req.requestId });
     }
-    const result = await runScan(true, {
+    const result = await enqueueScan(true, {
       requestId: req.requestId,
       idempotencyKey: key,
       idempotencyFingerprint: requestFingerprint("scan", { method: "LIVE", version: ACTIVE_DECISION_VERSION })
@@ -2231,7 +2290,9 @@ async function start() {
       await persistPatterns(state.patterns);
     }
     await saveState();
-    setInterval(() => { if (!state.scanRunning) runScan(false).catch(error => console.error("Automatic scan failed", error)); }, AUTO_SCAN_MS);
+    setInterval(() => {
+      if (!state.scanRunning) enqueueScan(false).catch(error => console.error("Automatic scan failed", error));
+    }, AUTO_SCAN_MS);
     setInterval(() => {
       state.system.lastAnalysis = new Date().toISOString();
       saveState().catch(error => console.error("Analysis checkpoint failed", error));
@@ -2245,6 +2306,7 @@ async function start() {
 
 process.on("SIGTERM", async () => {
   clearInterval(providerAuditTimer);
+  scanWorkQueue.stop();
   await flushProviderAudit();
   await disconnectDb();
   process.exit(0);

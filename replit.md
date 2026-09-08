@@ -8,6 +8,8 @@ npm run dev
 
 The server binds to `0.0.0.0:5000`.
 
+The workflow uses Node.js 24 (`nodejs-24` in `.replit`); the package engine is pinned to `24.x`.
+
 Required environment variables:
 
 - `DATABASE_URL`: PostgreSQL connection string used by Prisma.
@@ -37,7 +39,7 @@ npm run db:push
 ## Live data and virtual trading
 
 - DexScreener is the only market-data provider and the application always runs in LIVE mode.
-- The server scans DexScreener every 15 seconds and keeps only Solana records.
+- The scheduler checks for work every 15 seconds, but full scans run through a bounded priority queue with separate interactive/background budgets; partial or deferred scans leave the last-known-good board unchanged.
 - Token boost metadata is combined with the provider's live token-pair data when available, including price, liquidity, market cap, 24-hour change, and pair URL.
 - Missing provider fields remain `UNKNOWN`; the app does not invent market values.
 - Paper trading uses virtual funds only: a $100,000 starting balance, fixed $100 entries, and a simulated 0.3% fee. No wallet, private key, signing, or real-fund transaction is supported.
@@ -51,9 +53,10 @@ npm run db:push
 - `radar-scoring.js`: phase4-v1 deterministic Real Project, Reactivation, and Speculative Meme scorecards with configuration hashing, confidence caps, and non-predictive explanations.
 - `manipulation-evidence.js`: phase3a-v1 fail-closed wash, circular, burst, coordination, entity, and pool-drain evidence evaluator.
 - `execution-safety.js`: phase2a-v1 buy/sell quote, route, simulation, slippage, transfer-evidence, account-creation, and freshness evaluator.
-- `solana-rpc-pool.js`: isolated Solana RPC pool with provider rotation, circuit cooldowns, failover telemetry, and safe health summaries.
+- `solana-rpc-pool.js`: isolated Solana RPC pool with provider rotation, circuit cooldowns, failover telemetry, separate security/holder-enrichment lanes, workload budgets, and safe health summaries.
 - `provider-gateway.js`: centralized outbound market-provider gateway with bounded concurrency, token budgets, Retry-After-aware exponential backoff/jitter, circuit breakers, and redacted per-attempt telemetry.
 - `baseline-observability.js`: bounded provider status/latency/retries, scan duration, freshness, last-known-good age, and active cache/queue health counters.
+- `scan-work-queue.js`: bounded priority/dedupe queue with retries, deferred work, per-class start budgets, and explicit queue health.
 - `cache/`: M2 provider cache contract with capability TTLs, normalized collision-safe keys, stale/failure states, persistent Prisma lineage, and in-process request coalescing.
 - `prisma/schema.prisma`: PostgreSQL schema for live tokens, signals, watchlists, paper trading, scan observability, and `TokenObservation` lineage rows.
 - `public/`: responsive research UI.

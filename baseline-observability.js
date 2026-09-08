@@ -43,6 +43,15 @@ function createBaselineObservability({ now = () => Date.now() } = {}) {
     entries: 0,
     running: 0
   };
+  let queue = {
+    enabled: true,
+    status: "READY",
+    queued: 0,
+    running: 0,
+    deferred: 0,
+    failed: 0,
+    deadLettered: 0
+  };
   let lastSuccessfulScanAt = null;
 
   function count(target, key) {
@@ -86,6 +95,14 @@ function createBaselineObservability({ now = () => Date.now() } = {}) {
     }
     cache.enabled = snapshot.enabled !== false;
     cache.status = String(snapshot.status || "ACTIVE");
+  }
+
+  function setQueueSnapshot(snapshot = {}) {
+    queue = {
+      ...queue,
+      ...snapshot,
+      budgets: snapshot.budgets ? { ...snapshot.budgets } : queue.budgets
+    };
   }
 
   function recordScanOutcome({
@@ -151,15 +168,7 @@ function createBaselineObservability({ now = () => Date.now() } = {}) {
         hitRatio: cache.hits + cache.misses ? cache.hits / (cache.hits + cache.misses) : null,
         staleRatio: cache.hits ? cache.staleHits / cache.hits : 0
       },
-      queue: {
-        enabled: false,
-        status: "NOT_IMPLEMENTED",
-        queued: 0,
-        running: 0,
-        deferred: 0,
-        failed: 0,
-        deadLettered: 0
-      },
+      queue: { ...queue },
       freshness: {
         providerMs: {
           sampleSize: scans.providerFreshnessSamples.length,
@@ -182,6 +191,7 @@ function createBaselineObservability({ now = () => Date.now() } = {}) {
     recordScanOutcome,
     recordCacheEvent,
     setCacheSnapshot,
+    setQueueSnapshot,
     seedLastKnownGood,
     snapshot
   };

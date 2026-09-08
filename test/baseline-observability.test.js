@@ -22,7 +22,7 @@ test("M0 baseline observability keeps bounded provider, scan, freshness, cache, 
   assert.equal(snapshot.freshness.lastKnownGoodAgeMs, 0);
   assert.equal(snapshot.cache.status, "ACTIVE");
   assert.equal(snapshot.cache.enabled, true);
-  assert.equal(snapshot.queue.status, "NOT_IMPLEMENTED");
+  assert.equal(snapshot.queue.status, "READY");
 });
 
 test("M0 baseline fixture is deterministic, bounded, and network-free", () => {

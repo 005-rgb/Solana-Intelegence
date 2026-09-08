@@ -80,3 +80,56 @@ test("RPC pool fails over from retryable JSON-RPC batch quota errors", async () 
   assert.equal(summary.endpoints[0].lastFailureKind, "rate_limited");
   assert.equal(summary.endpoints[1].successes, 1);
 });
+
+test("RPC pool reserves capacity for security while holder enrichment is busy", async () => {
+  let releaseHolder;
+  const holderStarted = new Promise(resolve => { releaseHolder = resolve; });
+  let holderCalls = 0;
+  let securityCalls = 0;
+  const pool = createSolanaRpcPool({
+    endpoints: ["https://rpc.test"],
+    maxConcurrent: 2,
+    workloadLimits: { security: 1, holder_enrichment: 2, default: 1 },
+    reservedSlots: { security: 1 },
+    fetchImpl: async (url, options) => {
+      const body = JSON.parse(options.body);
+      if (body.method === "holder") {
+        holderCalls += 1;
+        await holderStarted;
+      } else {
+        securityCalls += 1;
+      }
+      return jsonResponse({ jsonrpc: "2.0", id: body.id, result: { ok: true } });
+    }
+  });
+  const holder = pool.request("holder", [], "holder_enrichment");
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const security = await pool.request("security", [], "security");
+  releaseHolder();
+  await holder;
+  assert.equal(holderCalls, 1);
+  assert.equal(securityCalls, 1);
+  assert.equal(pool.summary().workloads.security.reservedSlots, 1);
+});
+
+test("RPC pool enforces independent workload budgets", async () => {
+  const pool = createSolanaRpcPool({
+    endpoints: ["https://rpc.test"],
+    workloadBudgets: {
+      security: { maxRequests: 1, windowMs: 60_000 },
+      holder_enrichment: { maxRequests: 2, windowMs: 60_000 }
+    },
+    fetchImpl: async (url, options) => {
+      const body = JSON.parse(options.body);
+      return jsonResponse({ jsonrpc: "2.0", id: body.id, result: { ok: true } });
+    }
+  });
+  await pool.request("security", [], "security");
+  await assert.rejects(
+    pool.request("security", [], "security"),
+    error => error.code === "RPC_BUDGET_EXHAUSTED"
+  );
+  await pool.request("holder", [], "holder_enrichment");
+  assert.equal(pool.summary().workloads.security.budgetUsed, 1);
+  assert.equal(pool.summary().workloads.holder_enrichment.budgetUsed, 1);
+});
