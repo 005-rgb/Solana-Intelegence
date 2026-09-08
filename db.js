@@ -1519,6 +1519,74 @@ async function recordProviderRequest(event) {
   });
 }
 
+function providerCacheData(entry) {
+  return {
+    cacheKey: String(entry.cacheKey),
+    providerId: String(entry.providerId || "unknown").slice(0, 80),
+    capability: String(entry.capability || "DEFAULT").slice(0, 80),
+    chain: entry.chain ? String(entry.chain).slice(0, 40) : null,
+    entityType: entry.entityType ? String(entry.entityType).slice(0, 80) : null,
+    entityId: entry.entityId ? String(entry.entityId).slice(0, 255) : null,
+    requestParams: entry.requestParams ?? null,
+    payload: entry.payload ?? null,
+    payloadHash: entry.payloadHash ? String(entry.payloadHash).slice(0, 128) : null,
+    sourceObservedAt: entry.sourceObservedAt == null ? null : new Date(Number(entry.sourceObservedAt)),
+    cachedAt: new Date(Number(entry.cachedAt || Date.now())),
+    expiresAt: new Date(Number(entry.expiresAt || Date.now())),
+    staleUntil: new Date(Number(entry.staleUntil || Date.now())),
+    status: String(entry.status || "UNKNOWN").slice(0, 40),
+    sourceRequestId: entry.sourceRequestId ? String(entry.sourceRequestId).slice(0, 128) : null,
+    responseHash: entry.responseHash ? String(entry.responseHash).slice(0, 128) : null,
+    slot: entry.slot == null ? null : String(entry.slot).slice(0, 80),
+    schemaVersion: entry.schemaVersion ? String(entry.schemaVersion).slice(0, 80) : null,
+    configHash: entry.configHash ? String(entry.configHash).slice(0, 128) : null,
+    failedUntil: entry.failedUntil == null ? null : new Date(Number(entry.failedUntil)),
+    errorCode: entry.errorCode ? String(entry.errorCode).slice(0, 80) : null,
+    errorMessage: entry.errorMessage ? String(entry.errorMessage).slice(0, 240) : null
+  };
+}
+
+function fromProviderCache(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    sourceObservedAt: row.sourceObservedAt?.getTime() ?? null,
+    cachedAt: row.cachedAt?.getTime() ?? null,
+    expiresAt: row.expiresAt?.getTime() ?? null,
+    staleUntil: row.staleUntil?.getTime() ?? null,
+    failedUntil: row.failedUntil?.getTime() ?? null
+  };
+}
+
+async function readProviderCacheEntry(cacheKey) {
+  if (!cacheKey) return null;
+  return fromProviderCache(await prisma.providerCacheEntry.findUnique({ where: { cacheKey: String(cacheKey) } }));
+}
+
+async function writeProviderCacheEntry(entry) {
+  if (!entry?.cacheKey) return null;
+  const data = providerCacheData(entry);
+  try {
+    return fromProviderCache(await prisma.$transaction(async tx => {
+      const existing = await tx.providerCacheEntry.findUnique({ where: { cacheKey: data.cacheKey } });
+      const incomingObservedAt = data.sourceObservedAt?.getTime() ?? null;
+      const existingObservedAt = existing?.sourceObservedAt?.getTime() ?? null;
+      if (existing && existing.status !== "FAILED" && existingObservedAt != null &&
+          incomingObservedAt != null && incomingObservedAt < existingObservedAt) {
+        return existing;
+      }
+      return tx.providerCacheEntry.upsert({
+        where: { cacheKey: data.cacheKey },
+        update: data,
+        create: data
+      });
+    }));
+  } catch (error) {
+    if (error?.code === "P2021" || error?.code === "P2022") return null;
+    throw error;
+  }
+}
+
 function providerAuditText(value, maxLength = 120) {
   const text = String(value || "").trim();
   return text ? text.slice(0, maxLength) : null;
@@ -1624,5 +1692,7 @@ module.exports = {
   readReactivationHistory,
   recordProviderRequest,
   readProviderRequests,
+  readProviderCacheEntry,
+  writeProviderCacheEntry,
   disconnectDb
 };

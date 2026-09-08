@@ -48,6 +48,37 @@ model ProviderRequest {
   @@index([status, createdAt])
 }
 
+model ProviderCacheEntry {
+  id              String   @id @default(cuid())
+  cacheKey        String   @unique
+  providerId      String
+  capability      String
+  chain           String?
+  entityType      String?
+  entityId        String?
+  requestParams   Json?
+  payload         Json?
+  payloadHash     String?
+  sourceObservedAt DateTime?
+  cachedAt        DateTime
+  expiresAt       DateTime
+  staleUntil      DateTime
+  status          String
+  sourceRequestId String?
+  responseHash    String?
+  slot            String?
+  schemaVersion   String?
+  configHash      String?
+  failedUntil     DateTime?
+  errorCode       String?
+  errorMessage    String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([providerId, capability, updatedAt])
+  @@index([status, staleUntil])
+}
+
 model Token {
   id              Int              @id @default(autoincrement())
   mint            String           @unique

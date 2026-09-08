@@ -31,6 +31,18 @@ function createBaselineObservability({ now = () => Date.now() } = {}) {
     providerFreshnessSamples: [],
     rpcFreshnessSamples: []
   };
+  const cache = {
+    enabled: true,
+    status: "ACTIVE",
+    hits: 0,
+    misses: 0,
+    staleHits: 0,
+    failures: 0,
+    coalesced: 0,
+    writes: 0,
+    entries: 0,
+    running: 0
+  };
   let lastSuccessfulScanAt = null;
 
   function count(target, key) {
@@ -56,6 +68,24 @@ function createBaselineObservability({ now = () => Date.now() } = {}) {
 
   function recordScanStarted() {
     scans.started += 1;
+  }
+
+  function recordCacheEvent(event = {}) {
+    if (event.type === "hit") {
+      cache.hits += 1;
+      if (event.status === "STALE_BUT_USABLE") cache.staleHits += 1;
+    } else if (event.type === "miss") cache.misses += 1;
+    else if (event.type === "failure") cache.failures += 1;
+    else if (event.type === "coalesced") cache.coalesced += 1;
+    else if (event.type === "write") cache.writes += 1;
+  }
+
+  function setCacheSnapshot(snapshot = {}) {
+    for (const key of ["entries", "running", "hits", "misses", "staleHits", "failures", "coalesced", "writes"]) {
+      if (Number.isFinite(Number(snapshot[key]))) cache[key] = Number(snapshot[key]);
+    }
+    cache.enabled = snapshot.enabled !== false;
+    cache.status = String(snapshot.status || "ACTIVE");
   }
 
   function recordScanOutcome({
@@ -117,10 +147,9 @@ function createBaselineObservability({ now = () => Date.now() } = {}) {
         }
       },
       cache: {
-        enabled: false,
-        status: "NOT_IMPLEMENTED",
-        hits: 0,
-        misses: 0
+        ...cache,
+        hitRatio: cache.hits + cache.misses ? cache.hits / (cache.hits + cache.misses) : null,
+        staleRatio: cache.hits ? cache.staleHits / cache.hits : 0
       },
       queue: {
         enabled: false,
@@ -151,6 +180,8 @@ function createBaselineObservability({ now = () => Date.now() } = {}) {
     recordProviderRequest,
     recordScanStarted,
     recordScanOutcome,
+    recordCacheEvent,
+    setCacheSnapshot,
     seedLastKnownGood,
     snapshot
   };

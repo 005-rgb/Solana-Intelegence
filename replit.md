@@ -53,7 +53,8 @@ npm run db:push
 - `execution-safety.js`: phase2a-v1 buy/sell quote, route, simulation, slippage, transfer-evidence, account-creation, and freshness evaluator.
 - `solana-rpc-pool.js`: isolated Solana RPC pool with provider rotation, circuit cooldowns, failover telemetry, and safe health summaries.
 - `provider-gateway.js`: centralized outbound market-provider gateway with bounded concurrency, token budgets, Retry-After-aware exponential backoff/jitter, circuit breakers, and redacted per-attempt telemetry.
-- `baseline-observability.js`: bounded M0 counters for provider status/latency/retries, scan duration, freshness, last-known-good age, and explicit cache/queue placeholders.
+- `baseline-observability.js`: bounded provider status/latency/retries, scan duration, freshness, last-known-good age, and active cache/queue health counters.
+- `cache/`: M2 provider cache contract with capability TTLs, normalized collision-safe keys, stale/failure states, persistent Prisma lineage, and in-process request coalescing.
 - `prisma/schema.prisma`: PostgreSQL schema for live tokens, signals, watchlists, paper trading, scan observability, and `TokenObservation` lineage rows.
 - `public/`: responsive research UI.
 
@@ -68,6 +69,10 @@ npm run db:push
   payloads and authorization material are never persisted or returned.
 - The System Health page renders gateway state and the redacted audit history. Unknown, failed, rate-limited, and
   cooldown states remain explicit rather than being presented as healthy.
+- Provider JSON reads use the M2 cache before the gateway. Concurrent identical reads share one provider promise,
+  caller aborts do not cancel the owner request, stale data remains labeled, and failed refreshes never become an empty feed.
+- `ProviderCacheEntry` persists payload lineage, freshness windows, response hashes, request IDs, and latest-write-wins
+  metadata in PostgreSQL. The process keeps a bounded memory layer for fast reads and coalescing.
 
 ## Phase 3 time-series features
 

@@ -33,6 +33,8 @@ const {
   findTradeByIdempotencyKey,
   persistPatterns,
   recordProviderRequest,
+  readProviderCacheEntry,
+  writeProviderCacheEntry,
   readProviderRequests,
   disconnectDb
 } = require("./db");
@@ -64,6 +66,8 @@ const { deriveCandidateLifecycle } = require("./candidate-lifecycle");
 const { buildPhase7Report, rollbackRollout } = require("./phase7");
 const { createSolanaRpcPool } = require("./solana-rpc-pool");
 const { createProviderGateway } = require("./provider-gateway");
+const { createProviderCache } = require("./cache/provider-cache");
+const { buildCacheKey } = require("./cache/cache-key");
 const { createBaselineObservability } = require("./baseline-observability");
 const {
   EXECUTION_SAFETY_VERSION,
@@ -129,6 +133,14 @@ const providerGateway = createProviderGateway({
     }
   },
   onRequest: queueProviderAudit
+});
+
+const providerCache = createProviderCache({
+  store: {
+    get: readProviderCacheEntry,
+    set: writeProviderCacheEntry
+  },
+  onEvent: event => baselineObservability.recordCacheEvent(event)
 });
 
 const PORT = Number(process.env.PORT || 5000);
@@ -898,16 +910,51 @@ async function fetchProviderJson(endpoint, {
   requestId = null,
   correlationId = null
 } = {}) {
-  return providerGateway.requestJson({
+  const effectiveRequestId = requestId || crypto.randomUUID();
+  const cacheInput = {
+    cacheKey: buildCacheKey({
+      providerId,
+      capability,
+      chain: "solana",
+      endpoint
+    }),
     providerId,
     capability,
-    endpoint,
+    params: { endpoint }
+  };
+  const result = await providerCache.getOrFetch(cacheInput, {
     signal,
-    timeoutMs,
-    requestId: requestId || crypto.randomUUID(),
-    correlationId,
-    headers: { Accept: "application/json" }
+    metadata: {
+      providerId,
+      capability,
+      sourceRequestId: effectiveRequestId
+    },
+    fetch: () => providerGateway.requestJson({
+      providerId,
+      capability,
+      endpoint,
+      signal,
+      timeoutMs,
+      requestId: effectiveRequestId,
+      correlationId,
+      headers: { Accept: "application/json" }
+    })
   });
+  const payload = result.value;
+  if (payload && typeof payload === "object") {
+    Object.defineProperty(payload, "__cacheMeta", {
+      value: {
+        status: result.cacheStatus,
+        cacheHit: result.cacheHit,
+        staleFallback: Boolean(result.staleFallback),
+        sourceRequestId: result.entry?.sourceRequestId || effectiveRequestId,
+        responseHash: result.entry?.responseHash || null
+      },
+      enumerable: false,
+      configurable: true
+    });
+  }
+  return payload;
 }
 
 async function mapWithConcurrency(items, concurrency, worker) {
@@ -1185,7 +1232,9 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
             requestId,
             correlationId: sourceRequestId
           });
-        const responseHash = hashPayload(payload);
+        const cacheMeta = payload?.__cacheMeta || {};
+        const responseHash = cacheMeta.responseHash || hashPayload(payload);
+        const effectiveRequestId = cacheMeta.sourceRequestId || requestId;
         const validation = validator(payload);
         invalidFeedRecords += validation.invalidRecords || 0;
         for (const [reason, count] of Object.entries(validation.invalidReasonCounts || {})) {
@@ -1193,7 +1242,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
         }
         if (!validation.ok) {
           schemaErrors += 1;
-          return { ok: false, configured: true, entries: [], error: validation.errors.join("; "), schemaVersion: validation.schemaVersion, requestId, responseHash };
+          return { ok: false, configured: true, entries: [], error: validation.errors.join("; "), schemaVersion: validation.schemaVersion, requestId: effectiveRequestId, responseHash };
         }
         return {
           ok: true,
@@ -1202,12 +1251,12 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
             ...entry,
             __sourceName: sourceName,
             __sourceEndpoint: endpoint,
-            __sourceRequestId: requestId,
+            __sourceRequestId: effectiveRequestId,
             __sourceResponseHash: responseHash
           })),
           error: null,
           schemaVersion: validation.schemaVersion,
-          requestId,
+          requestId: effectiveRequestId,
           responseHash
         };
       } catch (error) {
@@ -1245,7 +1294,9 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
           requestId,
           correlationId: sourceRequestId
         });
-        const responseHash = hashPayload(payload);
+        const cacheMeta = payload?.__cacheMeta || {};
+        const responseHash = cacheMeta.responseHash || hashPayload(payload);
+        const effectiveRequestId = cacheMeta.sourceRequestId || requestId;
         const raw = Array.isArray(payload?.pairs) ? payload.pairs : [];
         const pairs = [];
         for (const candidate of raw) {
@@ -1256,7 +1307,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
               __sourceContext: {
                 endpoint: `${pairEndpoint}/${encodeURIComponent(mint)}`,
                 sourceName: "pair_fetch",
-                requestId,
+                 requestId: effectiveRequestId,
                 responseHash
               }
             });
@@ -1278,7 +1329,7 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
           pairs,
           invalidPairs: raw.length - pairs.length,
           endpoint: `${pairEndpoint}/${encodeURIComponent(mint)}`,
-          requestId,
+          requestId: effectiveRequestId,
           responseHash
         };
       } catch (error) {

@@ -1,0 +1,70 @@
+Phase 0 / M0 sudah dibangun, selesai, dan terintegrasi penuh tanpa mengubah decision contract Phase 2–7.
+
+Implementasi yang selesai
+baseline-observability.js
+
+Provider request count
+Status distribution
+Retry count
+Latency p50/p95/max
+Scan start/completion/status
+Scan duration
+Provider/RPC freshness
+Last-known-good age
+Cache dan queue placeholder yang eksplisit sebagai NOT_IMPLEMENTED
+Semua sample dibatasi agar metrics tidak tumbuh tanpa batas
+Integrasi runtime di server.js
+
+Provider gateway mencatat metrics setiap attempt
+Scan start/success/failure/partial/filtered tercatat
+Observability snapshot disimpan ke ScanRun.sourceMetrics.baselineObservability
+Last-known-good di-seed dari state persisted saat startup
+Endpoint baru:
+
+GET /api/observability
+
+Mengembalikan:
+
+m0-observability-v1
+provider metrics
+scan metrics
+freshness metrics
+last-known-good age
+provider health
+RPC health
+cache status
+queue status
+
+Fixture synthetic tanpa network:
+
+10 token
+100 token
+1.000 token
+100 watchlist
+HTTP 429
+timeout
+malformed provider response
+Dokumentasi M0:
+
+docs/provider-call-inventory.md
+docs/provider-resilient-m0-gate-report.md
+Roadmap diperbarui dengan status M0 COMPLETE
+replit.md diperbarui
+Keamanan dan boundary
+Tidak ada credential atau raw provider payload di metrics.
+Tidak ada DDL startup atau schema migration baru.
+Tidak ada direct outbound HTTP baru di luar provider gateway/RPC pool.
+Cache dan queue belum dipalsukan sebagai fitur aktif; statusnya tetap eksplisit NOT_IMPLEMENTED.
+Phase 2 safety gate dan fail-closed behavior tetap utuh.
+Validasi
+92/92 test lulus
+M0 focused tests: 9/9 lulus
+Runtime smoke lulus
+/api/observability aktif dan tervalidasi
+node --check lulus
+git diff --check lulus
+Workflow Start application berjalan normal
+Screenshot final tersimpan di:
+screenshots/phase0-baseline-final.jpg
+
+Task berikutnya yang relevan sudah diusulkan sebagai “Stop duplicate provider requests from exhausting quota”, yaitu implementasi M2 cache dan request coalescing.

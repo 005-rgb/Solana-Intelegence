@@ -10,6 +10,7 @@ let refreshInFlight = false;
 let reactivationRecords = null;
 let reactivationLoading = false;
 let providerHealth = null;
+let runtimeObservability = null;
 let providerHealthLoading = false;
 let providerAudit = null;
 let providerAuditLoading = false;
@@ -666,6 +667,7 @@ function providerGatewayPanel() {
   const configuredProviders = Array.isArray(gateway.configuredProviders) ? gateway.configuredProviders : [];
   const budgets = Object.entries(gateway.budgets || {});
   const auditQueue = health.audit || {};
+  const cache = runtimeObservability?.cache || {};
   const providerRows = providers.length
     ? providers.flatMap(provider => (provider.endpoints || []).map(endpoint => {
       const state = endpoint.circuitOpen ? "COOLDOWN" : endpoint.lastSuccessAt ? "HEALTHY" : endpoint.lastErrorCode || "READY";
@@ -675,7 +677,7 @@ function providerGatewayPanel() {
   const budgetRows = budgets.length
     ? budgets.map(([key, budget]) => `<div class="health-row"><span>${esc(key)}<small class="health-muted"> · reserved ${budget.reservedCapacity ?? "UNKNOWN"}</small></span><strong class="health-value">${budget.tokens ?? "UNKNOWN"} / ${budget.capacity ?? "UNKNOWN"} tokens</strong></div>`).join("")
     : `<div class="health-row"><span>Request budgets</span><strong class="health-value health-muted">UNKNOWN</strong></div>`;
-  return `<section class="card page-panel provider-gateway-panel"><div class="card-head"><div><div class="card-title">Provider gateway health</div><div class="card-kicker">Circuit, retry, concurrency, and quota state · outbound payloads are never exposed</div></div>${providerHealthBadge(providerGatewayStatus(health))}</div><div class="provider-gateway-summary"><div><span>Configured providers</span><strong>${configuredProviders.length || providers.length || "UNKNOWN"}</strong></div><div><span>Audit queued</span><strong>${auditQueue.queued ?? "UNKNOWN"} / ${auditQueue.queueLimit ?? "UNKNOWN"}</strong></div><div><span>Persisted view</span><strong>${providerAudit?.pagination?.total ?? "UNKNOWN"}</strong></div></div><div class="provider-endpoints">${providerRows}</div><div class="provider-budget-title">Concurrency budgets</div>${budgetRows}<div class="data-note">Healthy means the endpoint has succeeded recently. COOLDOWN, retry, timeout, and budget exhaustion remain visible as operational evidence, not as market quality.</div></section>`;
+  return `<section class="card page-panel provider-gateway-panel"><div class="card-head"><div><div class="card-title">Provider gateway health</div><div class="card-kicker">Circuit, retry, concurrency, and quota state · outbound payloads are never exposed</div></div>${providerHealthBadge(providerGatewayStatus(health))}</div><div class="provider-gateway-summary"><div><span>Configured providers</span><strong>${configuredProviders.length || providers.length || "UNKNOWN"}</strong></div><div><span>Audit queued</span><strong>${auditQueue.queued ?? "UNKNOWN"} / ${auditQueue.queueLimit ?? "UNKNOWN"}</strong></div><div><span>Persisted view</span><strong>${providerAudit?.pagination?.total ?? "UNKNOWN"}</strong></div></div><div class="provider-endpoints">${providerRows}</div><div class="provider-budget-title">Concurrency budgets</div>${budgetRows}<div class="data-note">Healthy means the endpoint has succeeded recently. COOLDOWN, retry, timeout, and budget exhaustion remain visible as operational evidence, not as market quality.</div></section><section class="card page-panel provider-gateway-panel"><div class="card-head"><div><div class="card-title">M2 cache and request deduplication</div><div class="card-kicker">Freshness, stale fallback, and in-process coalescing · database lineage survives restart</div></div>${providerHealthBadge(cache.status || "UNKNOWN")}</div><div class="provider-gateway-summary"><div><span>Cache hits</span><strong>${cache.hits ?? "UNKNOWN"}</strong></div><div><span>Hit ratio</span><strong>${cache.hitRatio == null ? "UNKNOWN" : `${Math.round(cache.hitRatio * 100)}%`}</strong></div><div><span>Coalesced</span><strong>${cache.coalesced ?? "UNKNOWN"}</strong></div><div><span>Stale hits</span><strong>${cache.staleHits ?? "UNKNOWN"}</strong></div></div><div class="data-note">FRESH responses avoid provider calls. STALE_BUT_USABLE is visible and only used as a last-known-good fallback after refresh failure; failures never become an empty successful feed.</div></section>`;
 }
 function providerAuditStatus(status) {
   const value = String(status || "UNKNOWN").toUpperCase();
@@ -808,10 +810,11 @@ async function loadReactivation() {
   providerHealthLoading = true;
   providerAuditLoading = true;
   if (activePage === "health") render();
-  const [historyResult, healthResult, auditResult] = await Promise.allSettled([
+  const [historyResult, healthResult, auditResult, observabilityResult] = await Promise.allSettled([
     api("/api/reactivation"),
     api("/api/provider-health"),
-    api(`/api/provider-audit?${providerAuditQuery()}`)
+    api(`/api/provider-audit?${providerAuditQuery()}`),
+    api("/api/observability")
   ]);
   if (historyResult.status === "fulfilled") reactivationRecords = Array.isArray(historyResult.value.records) ? historyResult.value.records : [];
   else { reactivationRecords = []; if (activePage === "health") toast(historyResult.reason.message, true); }
@@ -819,6 +822,8 @@ async function loadReactivation() {
   else if (activePage === "health") toast(healthResult.reason.message, true);
   if (auditResult.status === "fulfilled") providerAudit = auditResult.value;
   else if (activePage === "health") toast(auditResult.reason.message, true);
+  if (observabilityResult.status === "fulfilled") runtimeObservability = observabilityResult.value;
+  else if (activePage === "health") toast(observabilityResult.reason.message, true);
   reactivationLoading = false;
   providerHealthLoading = false;
   providerAuditLoading = false;
