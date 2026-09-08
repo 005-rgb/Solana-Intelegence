@@ -16,6 +16,14 @@ test("runtime smoke contract exposes a healthy read surface", { skip: !domain },
   assert.equal(stateBody.mode, "live");
   assert.ok(stateBody.system);
 
+  const observability = await fetch(`${base}/api/observability`);
+  assert.equal(observability.status, 200);
+  const observabilityBody = await observability.json();
+  assert.equal(observabilityBody.ok, true);
+  assert.equal(observabilityBody.version, "m0-observability-v1");
+  assert.equal(observabilityBody.cache.status, "NOT_IMPLEMENTED");
+  assert.equal(observabilityBody.queue.status, "NOT_IMPLEMENTED");
+
   const providerHealth = await fetch(`${base}/api/provider-health`);
   assert.equal(providerHealth.status, 200);
   const providerHealthBody = await providerHealth.json();

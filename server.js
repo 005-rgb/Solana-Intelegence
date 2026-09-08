@@ -64,6 +64,7 @@ const { deriveCandidateLifecycle } = require("./candidate-lifecycle");
 const { buildPhase7Report, rollbackRollout } = require("./phase7");
 const { createSolanaRpcPool } = require("./solana-rpc-pool");
 const { createProviderGateway } = require("./provider-gateway");
+const { createBaselineObservability } = require("./baseline-observability");
 const {
   EXECUTION_SAFETY_VERSION,
   DEFAULT_ORDER_SIZES_USD,
@@ -79,8 +80,10 @@ const summarizeActiveCandidates = summarizePhase2Candidates;
 const providerAuditQueue = [];
 let providerAuditFlushPromise = null;
 const PROVIDER_AUDIT_QUEUE_LIMIT = 2_000;
+const baselineObservability = createBaselineObservability();
 
 function queueProviderAudit(event) {
+  baselineObservability.recordProviderRequest(event);
   if (!event || providerAuditQueue.length >= PROVIDER_AUDIT_QUEUE_LIMIT) return;
   providerAuditQueue.push({
     ...event,
@@ -383,6 +386,7 @@ function jsonState() {
   return {
     ...state,
     now,
+    observability: baselineObservability.snapshot(now),
     rpcHealth: rpcHealthSummary(),
     positions,
     portfolio: {
@@ -1584,8 +1588,10 @@ async function runScan(manual = false, options = {}) {
   }
   state.scanRunning = true;
   const started = Date.now();
+  baselineObservability.recordScanStarted();
   let scanRun = null;
   let scanResult = null;
+  let scanMetricsRecorded = false;
   const scanController = new AbortController();
   let scanDeadline;
   let deadlineExceeded = false;
@@ -1640,8 +1646,22 @@ async function runScan(manual = false, options = {}) {
     decisionVersion: ACTIVE_DECISION_VERSION,
     correlationId,
     requestId,
-    sourceMetrics: lastFilterReport.sourceMetrics || {}
+    sourceMetrics: {
+      ...(lastFilterReport.sourceMetrics || {}),
+      baselineObservability: baselineObservability.snapshot()
+    }
   });
+  const recordBaselineScan = (status, durationMs, finishedAt) => {
+    if (scanMetricsRecorded) return;
+    baselineObservability.recordScanOutcome({
+      status,
+      durationMs,
+      providerFreshnessMs: lastFilterReport.providerAgeMs,
+      rpcFreshnessMs: lastFilterReport.rpcFreshnessMs,
+      finishedAt
+    });
+    scanMetricsRecorded = true;
+  };
   try {
     try {
       scanRun = await Promise.race([
@@ -1714,6 +1734,7 @@ async function runScan(manual = false, options = {}) {
     state.scanRunning = false;
     const finishedAt = new Date();
     const durationMs = Date.now() - started;
+    recordBaselineScan("SUCCESS", durationMs, finishedAt);
     const finishData = {
       status: "SUCCESS",
       finishedAt,
@@ -1764,10 +1785,11 @@ async function runScan(manual = false, options = {}) {
     state.system.lastScanQuality = filtered ? lastFilterReport.qualityStatus : partial ? "PARTIAL" : "FAILED";
     if (scanRun?.id) state.system.lastScanRunId = scanRun.id;
     if (!filtered) state.system.errors += 1;
+    const finishedAt = new Date();
+    const durationMs = Date.now() - started;
+    const status = filtered ? "FILTERED" : partial ? "PARTIAL" : "FAILED";
+    recordBaselineScan(status, durationMs, finishedAt);
     if (scanRun) {
-      const finishedAt = new Date();
-      const durationMs = Date.now() - started;
-      const status = filtered ? "FILTERED" : partial ? "PARTIAL" : "FAILED";
       const audit = scanAudit();
       const finishData = {
         status,
@@ -1818,6 +1840,15 @@ async function handleApi(req, res, url) {
         queued: providerAuditQueue.length,
         queueLimit: PROVIDER_AUDIT_QUEUE_LIMIT
       },
+      requestId: req.requestId
+    });
+  }
+  if (req.method === "GET" && url.pathname === "/api/observability") {
+    return send(res, 200, {
+      ok: true,
+      ...baselineObservability.snapshot(),
+      providerHealth: providerGateway.summary(),
+      rpcHealth: rpcHealthSummary(),
       requestId: req.requestId
     });
   }
@@ -2135,6 +2166,9 @@ const server = http.createServer((req, res) => {
 async function start() {
   try {
     state = await readState(state);
+    baselineObservability.seedLastKnownGood(
+      state.lastScan || state.scanRuns.find(run => run.status === "SUCCESS")?.finishedAt
+    );
     await recordOutcomeCheckpoints(new Date());
     state.tokens = state.tokens.map(item => scoreRadarCandidate(item));
     state.system.database = "POSTGRESQL / PRISMA";

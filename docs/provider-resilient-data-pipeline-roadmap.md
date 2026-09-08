@@ -19,6 +19,7 @@
 | Versi | Tanggal | Perubahan |
 |---|---|---|
 | 1.0 | 2026-09-08 | Roadmap implementasi lengkap dari provider gateway sampai worker separation |
+| 1.1 | 2026-09-08 | M0 baseline inventory, bounded observability, synthetic fixtures, and gate report completed |
 
 ---
 
@@ -182,6 +183,7 @@ request.
 **Ukuran:** S, estimasi 2–4 hari kerja.  
 **Dependency:** None.  
 **Mode:** Tidak mengubah keputusan Radar.
+**Status:** COMPLETE — gate report: [`provider-resilient-m0-gate-report.md`](provider-resilient-m0-gate-report.md)
 
 ### M0.1 Baseline contract inventory
 
@@ -1754,14 +1756,17 @@ diputuskan, feature tetap shadow/disabled.
 
 Urutan yang langsung dapat dikerjakan:
 
-- [ ] Buat `docs/provider-call-inventory.md`.
+- [x] Buat `docs/provider-call-inventory.md`.
+- [x] Tambahkan baseline observability test tanpa mengubah runtime behavior.
+- [x] Buat synthetic baseline fixture untuk 10/100/1.000 token dan provider failures.
+- [x] Buat M0 gate report.
+- [x] Jalankan test suite dan runtime smoke.
 - [ ] Tambahkan test provider gateway tanpa mengubah runtime behavior.
 - [ ] Buat error taxonomy canonical.
 - [ ] Buat quota manager in-memory untuk unit test.
 - [ ] Migrasikan satu capability DexScreener ke gateway.
 - [ ] Tambahkan ProviderRequest additive schema.
 - [ ] Jalankan Prisma development sync.
-- [ ] Jalankan test suite dan runtime smoke.
 - [ ] Migrasikan capability DexScreener berikutnya.
 - [ ] Migrasikan RPC single/batch request.
 - [ ] Aktifkan gateway dalam shadow/canary.
