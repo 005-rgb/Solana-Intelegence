@@ -33,6 +33,7 @@ const {
   findTradeByIdempotencyKey,
   persistPatterns,
   recordProviderRequest,
+  readProviderRequests,
   disconnectDb
 } = require("./db");
 const {
@@ -1819,6 +1820,22 @@ async function handleApi(req, res, url) {
       },
       requestId: req.requestId
     });
+  }
+  if (req.method === "GET" && url.pathname === "/api/provider-audit") {
+    try {
+      const audit = await readProviderRequests({
+        providerId: url.searchParams.get("providerId"),
+        capability: url.searchParams.get("capability"),
+        status: url.searchParams.get("status"),
+        correlationId: url.searchParams.get("correlationId"),
+        limit: url.searchParams.get("limit"),
+        offset: url.searchParams.get("offset")
+      });
+      return send(res, 200, { ok: true, ...audit, requestId: req.requestId });
+    } catch (error) {
+      console.error(`[${req.requestId}] Provider audit failed`, error.message);
+      return send(res, 500, { error: "Unable to load provider audit history.", requestId: req.requestId });
+    }
   }
   if (req.method === "GET" && url.pathname === "/api/phase7") {
     try {

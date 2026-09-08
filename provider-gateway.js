@@ -456,7 +456,11 @@ function createProviderGateway({
         reservedCapacity: config.reservedCapacity
       };
     }
-    return { providers: Object.values(providerSummary), budgets };
+    return {
+      providers: Object.values(providerSummary),
+      configuredProviders: [...normalizedProviders.keys()],
+      budgets
+    };
   }
 
   return { request, requestJson, summary };

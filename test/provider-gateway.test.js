@@ -137,3 +137,18 @@ test("provider gateway caps concurrent requests per provider and capability", as
 
   assert.equal(maximum, 1);
 });
+
+test("provider gateway reports configured providers before the first request", () => {
+  const gateway = createProviderGateway({
+    providers: {
+      dexscreener: { capacity: 10 },
+      jupiter: { capacity: 5 }
+    },
+    fetchImpl: async () => jsonResponse({ ok: true })
+  });
+
+  const summary = gateway.summary();
+  assert.deepEqual(summary.configuredProviders, ["dexscreener", "jupiter"]);
+  assert.deepEqual(summary.providers, []);
+  assert.deepEqual(summary.budgets, {});
+});

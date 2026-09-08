@@ -9,6 +9,13 @@ let bubbleMapTokenMint = null;
 let refreshInFlight = false;
 let reactivationRecords = null;
 let reactivationLoading = false;
+let providerHealth = null;
+let providerHealthLoading = false;
+let providerAudit = null;
+let providerAuditLoading = false;
+let providerAuditPage = 0;
+const providerAuditPageSize = 25;
+let providerAuditFilters = { providerId: "", capability: "", status: "", correlationId: "" };
 let selectedTokenHistory = [];
 let evaluationReport = null;
 let evaluationLoading = false;
@@ -635,6 +642,88 @@ function reactivationBadge(status) {
   const value = status || "UNKNOWN";
   return `<span class="badge badge-${reactivationTone(value)}">${esc(value)}</span>`;
 }
+function providerHealthTone(status) {
+  const value = String(status || "UNKNOWN").toUpperCase();
+  if (["SUCCESS", "HEALTHY", "READY", "PASS"].includes(value)) return "green";
+  if (["FAILED", "OPEN", "COOLDOWN", "RATE_LIMITED", "TIMEOUT", "DEGRADED"].includes(value)) return "red";
+  return "yellow";
+}
+function providerHealthBadge(status) {
+  const value = status || "UNKNOWN";
+  return `<span class="badge badge-${providerHealthTone(value)}">${esc(value)}</span>`;
+}
+function providerGatewayStatus(health) {
+  if (!health?.gateway) return providerHealthLoading ? "LOADING" : "UNKNOWN";
+  const endpoints = (health.gateway.providers || []).flatMap(provider => provider.endpoints || []);
+  if (endpoints.some(endpoint => endpoint.circuitOpen || endpoint.lastErrorCode)) return "DEGRADED";
+  if (endpoints.length || Object.keys(health.gateway.budgets || {}).length || health.gateway.configuredProviders?.length) return "READY";
+  return "UNKNOWN";
+}
+function providerGatewayPanel() {
+  const health = providerHealth || {};
+  const gateway = health.gateway || {};
+  const providers = Array.isArray(gateway.providers) ? gateway.providers : [];
+  const configuredProviders = Array.isArray(gateway.configuredProviders) ? gateway.configuredProviders : [];
+  const budgets = Object.entries(gateway.budgets || {});
+  const auditQueue = health.audit || {};
+  const providerRows = providers.length
+    ? providers.flatMap(provider => (provider.endpoints || []).map(endpoint => {
+      const state = endpoint.circuitOpen ? "COOLDOWN" : endpoint.lastSuccessAt ? "HEALTHY" : endpoint.lastErrorCode || "READY";
+      return `<div class="provider-endpoint-row"><div><strong>${esc(provider.providerId)}</strong><span>${esc(provider.capability)} · ${esc(endpoint.endpoint)}</span></div><div class="provider-endpoint-status">${providerHealthBadge(state)}<small>${endpoint.attempts || 0} attempts · ${endpoint.retries || 0} retries</small></div></div>`;
+    })).join("")
+    : `<div class="provider-unknown"><strong>${providerHealthLoading ? "Loading provider gateway…" : configuredProviders.length ? `${configuredProviders.length} providers configured · no outbound attempt yet` : "No provider gateway configured"}</strong><span>${providerHealthLoading ? "Reading circuit and budget state." : configuredProviders.length ? "Configured providers remain ready; endpoint-level telemetry appears after the first request." : "The gateway will appear after provider configuration is loaded."}</span></div>`;
+  const budgetRows = budgets.length
+    ? budgets.map(([key, budget]) => `<div class="health-row"><span>${esc(key)}<small class="health-muted"> · reserved ${budget.reservedCapacity ?? "UNKNOWN"}</small></span><strong class="health-value">${budget.tokens ?? "UNKNOWN"} / ${budget.capacity ?? "UNKNOWN"} tokens</strong></div>`).join("")
+    : `<div class="health-row"><span>Request budgets</span><strong class="health-value health-muted">UNKNOWN</strong></div>`;
+  return `<section class="card page-panel provider-gateway-panel"><div class="card-head"><div><div class="card-title">Provider gateway health</div><div class="card-kicker">Circuit, retry, concurrency, and quota state · outbound payloads are never exposed</div></div>${providerHealthBadge(providerGatewayStatus(health))}</div><div class="provider-gateway-summary"><div><span>Configured providers</span><strong>${configuredProviders.length || providers.length || "UNKNOWN"}</strong></div><div><span>Audit queued</span><strong>${auditQueue.queued ?? "UNKNOWN"} / ${auditQueue.queueLimit ?? "UNKNOWN"}</strong></div><div><span>Persisted view</span><strong>${providerAudit?.pagination?.total ?? "UNKNOWN"}</strong></div></div><div class="provider-endpoints">${providerRows}</div><div class="provider-budget-title">Concurrency budgets</div>${budgetRows}<div class="data-note">Healthy means the endpoint has succeeded recently. COOLDOWN, retry, timeout, and budget exhaustion remain visible as operational evidence, not as market quality.</div></section>`;
+}
+function providerAuditStatus(status) {
+  const value = String(status || "UNKNOWN").toUpperCase();
+  if (value === "SUCCESS") return "green";
+  if (["FAILED", "CIRCUIT_OPEN"].includes(value)) return "red";
+  return "yellow";
+}
+function providerAuditTable() {
+  const result = providerAudit || {};
+  const records = Array.isArray(result.records) ? result.records : [];
+  const pagination = result.pagination || {};
+  const rows = records.length
+    ? records.map(record => `<tr><td>${esc(reactivationDate(record.startedAt, true))}</td><td><strong>${esc(record.providerId)}</strong><br><small>${esc(record.capability)}</small></td><td>${esc(record.endpointLabel || "UNKNOWN")}</td><td>${providerHealthBadge(record.status)}${record.errorCode ? `<small class="audit-error">${esc(record.errorCode)}</small>` : ""}</td><td>${record.httpStatus ?? "—"}</td><td>${record.attempt}</td><td>${record.latencyMs == null ? "UNKNOWN" : `${record.latencyMs}ms`}</td><td><code title="${esc(record.requestId)}">${esc(String(record.requestId).slice(0, 12))}…</code></td></tr>`).join("")
+    : `<tr><td colspan="8"><div class="provider-audit-empty">${providerAuditLoading ? "Loading provider attempts…" : "No provider audit records match these filters."}</div></td></tr>`;
+  const first = pagination.total ? pagination.offset + 1 : 0;
+  const last = pagination.total ? Math.min(pagination.offset + records.length, pagination.total) : 0;
+  return `<section class="card page-panel provider-audit-panel"><div class="card-head"><div><div class="card-title">Provider audit history</div><div class="card-kicker">Read-only metadata · hashes and correlation IDs support incident tracing without storing raw payloads</div></div><span class="badge badge-blue">${first}–${last} / ${pagination.total ?? "UNKNOWN"}</span></div><div class="provider-audit-toolbar"><label class="filter-control">Provider <input value="${esc(providerAuditFilters.providerId)}" placeholder="e.g. dexscreener" data-provider-audit-filter="providerId"></label><label class="filter-control">Capability <input value="${esc(providerAuditFilters.capability)}" placeholder="e.g. DISCOVERY" data-provider-audit-filter="capability"></label><label class="filter-control">Status <select data-provider-audit-filter="status"><option value="">All statuses</option>${["SUCCESS", "FAILED", "CIRCUIT_OPEN"].map(value => `<option value="${value}" ${providerAuditFilters.status === value ? "selected" : ""}>${value}</option>`).join("")}</select></label><label class="filter-control">Correlation <input value="${esc(providerAuditFilters.correlationId)}" placeholder="scan or request ID" data-provider-audit-filter="correlationId"></label><button class="btn btn-small btn-primary" onclick="applyProviderAuditFilters()">Apply</button></div><div class="table-wrap provider-audit-table-wrap"><table><thead><tr><th>Started</th><th>Provider / capability</th><th>Endpoint</th><th>Result</th><th>HTTP</th><th>Attempt</th><th>Latency</th><th>Request ID</th></tr></thead><tbody>${rows}</tbody></table></div><div class="provider-audit-footer"><span>Showing bounded, redacted metadata only. Response/request bodies and authorization material are never returned.</span><div><button class="btn btn-small btn-quiet" ${pagination.offset > 0 ? "" : "disabled"} onclick="changeProviderAuditPage(-1)">← Newer</button><button class="btn btn-small btn-quiet" ${pagination.hasMore ? "" : "disabled"} onclick="changeProviderAuditPage(1)">Older →</button></div></div></section>`;
+}
+function applyProviderAuditFilters() {
+  document.querySelectorAll("[data-provider-audit-filter]").forEach(input => {
+    providerAuditFilters[input.dataset.providerAuditFilter] = input.value.trim();
+  });
+  providerAuditPage = 0;
+  loadProviderAudit();
+}
+function changeProviderAuditPage(direction) {
+  providerAuditPage = Math.max(0, providerAuditPage + direction);
+  loadProviderAudit();
+}
+function providerAuditQuery() {
+  const params = new URLSearchParams({ limit: String(providerAuditPageSize), offset: String(providerAuditPage * providerAuditPageSize) });
+  Object.entries(providerAuditFilters).forEach(([key, value]) => { if (value) params.set(key, value); });
+  return params.toString();
+}
+async function loadProviderAudit() {
+  if (providerAuditLoading) return;
+  providerAuditLoading = true;
+  if (activePage === "health") render();
+  try {
+    providerAudit = await api(`/api/provider-audit?${providerAuditQuery()}`);
+  } catch (error) {
+    providerAudit = { records: [], pagination: { total: 0, offset: 0, hasMore: false } };
+    if (activePage === "health") toast(error.message, true);
+  } finally {
+    providerAuditLoading = false;
+    if (activePage === "health") render();
+  }
+}
 function reactivationDate(value, withTime = false) {
   if (!value) return "UNKNOWN";
   const options = withTime
@@ -665,7 +754,8 @@ function reactivation() {
       return `<tr><td><button class="token-link reactivation-token-link" onclick="showToken('${encodeURIComponent(record.mint)}')" aria-label="Open profile and history for ${esc(record.symbol)}"><div class="token-cell"><div class="token-logo">${esc(String(record.symbol || "?").slice(0, 2))}</div><div class="token-meta"><strong>${esc(record.symbol)}</strong><span>${esc(record.name)} · ${esc(record.mint)}</span></div></div></button><div class="reactivation-boards">${(record.sourceBoards || []).map(board => `<span>${esc(board.replaceAll("_", " "))}</span>`).join("")}</div></td><td>${reactivationBadge(currentStatus)}${record.current?.providerStatus ? `<small class="reactivation-subvalue">${esc(record.current.providerStatus)}</small>` : ""}</td><td>${record.latest ? reactivationBadge(record.latest.status) : `<span class="badge badge-blue">NO OBSERVATION</span>`}<small class="reactivation-subvalue">${esc(record.latest?.reason || "No latest observation")}</small></td><td>${esc(reactivationDate(record.firstSeenAt))}</td><td>${esc(reactivationDate(record.lastSeenAt, true))}</td><td class="reactivation-count">${record.observationCount}</td><td><span class="reactivation-recurrence ${record.recurrence === "RECURRING" ? "recurring" : ""}">${esc(record.recurrence)}</span></td><td><details class="reactivation-details"><summary>View ${record.history.length} events</summary>${reactivationTimeline(record)}</details></td></tr>`;
     }).join("")}</tbody></table></div><div class="data-note">Every row is a unique mint retained from Radar observations. Current status reflects the latest persisted board state; last decision remains separate evidence from the latest scan.</div>`
     : `<div class="terminal-empty"><div class="terminal-empty-icon">∅</div><strong>NO RADAR HISTORY</strong><span>Run a live scan to create the first immutable observation.</span><small>Tokens are retained here even when they leave the active baseline board.</small><button class="btn btn-small btn-primary" onclick="scan()">◎ Capture observation</button></div>`;
-  return head("Market memory", "Reactivation", "Every token that has appeared in Radar, preserved beyond the active board. Review current state, historical decisions, recurrence, and the evidence trail.", `<button class="btn btn-primary" onclick="loadReactivation()">↻ Refresh history</button><button class="btn btn-quiet" onclick="scan()">◎ Run scan</button>`) +
+  return head("System health / market memory", "Reactivation", "Every token that has appeared in Radar, preserved beyond the active board. Review provider reliability, audit lineage, historical decisions, recurrence, and the evidence trail.", `<button class="btn btn-primary" onclick="loadReactivation()">↻ Refresh health</button><button class="btn btn-quiet" onclick="scan()">◎ Run scan</button>`) +
+    providerGatewayPanel() + providerAuditTable() +
     `<div class="grid metrics reactivation-metrics">${stat("Historical mints", records.length, "unique tokens retained", "◈")}${stat("Active now", active, "currently on the baseline board", "✓", "metric-positive")}${stat("Recurring", recurring, "seen in more than one scan", "↻", "metric-positive")}${stat("Warnings / rejected", `${warning} / ${rejected}`, "uncertain and failed decisions", "!", rejected ? "metric-negative" : "")}</div>` +
     `<section class="card page-panel reactivation-panel"><div class="card-head"><div><div class="card-title">Passed-board history · permanent regression memory</div><div class="card-kicker">ONLY TOKENS THAT PASSED REAL PROJECT OR SPECULATIVE MEME · observation history stays attached to the profile</div></div><span class="badge badge-blue">${records.length} MINTS</span></div>${body}</section>`;
 }
@@ -715,16 +805,24 @@ function go(page) {
 async function loadReactivation() {
   if (reactivationLoading) return;
   reactivationLoading = true;
-  try {
-    const result = await api("/api/reactivation");
-    reactivationRecords = Array.isArray(result.records) ? result.records : [];
-    if (activePage === "health") render();
-  } catch (error) {
-    reactivationRecords = [];
-    if (activePage === "health") toast(error.message, true);
-  } finally {
-    reactivationLoading = false;
-  }
+  providerHealthLoading = true;
+  providerAuditLoading = true;
+  if (activePage === "health") render();
+  const [historyResult, healthResult, auditResult] = await Promise.allSettled([
+    api("/api/reactivation"),
+    api("/api/provider-health"),
+    api(`/api/provider-audit?${providerAuditQuery()}`)
+  ]);
+  if (historyResult.status === "fulfilled") reactivationRecords = Array.isArray(historyResult.value.records) ? historyResult.value.records : [];
+  else { reactivationRecords = []; if (activePage === "health") toast(historyResult.reason.message, true); }
+  if (healthResult.status === "fulfilled") providerHealth = healthResult.value;
+  else if (activePage === "health") toast(healthResult.reason.message, true);
+  if (auditResult.status === "fulfilled") providerAudit = auditResult.value;
+  else if (activePage === "health") toast(auditResult.reason.message, true);
+  reactivationLoading = false;
+  providerHealthLoading = false;
+  providerAuditLoading = false;
+  if (activePage === "health") render();
 }
 async function scan() { toast("Scan started · checking provider, security, and recording baseline evidence."); try { const result = await api("/api/scan", { method:"POST", body:"{}" }); if (!result.ok) throw new Error(result.message); toast(`Scan complete · ${result.tokens} accepted records updated.`); await refresh(); } catch (error) { toast(error.message, true); await refresh(); } }
 async function showToken(id) { const tokenId = decodeURIComponent(id); const data = await api(`/api/tokens/${encodeURIComponent(tokenId)}`); selectedToken = data.token; const t = selectedToken; const watch = snapshot.watchlist.includes(t.mint); layout(head("Token intelligence", `${esc(t.symbol)} / ${esc(t.name)}`, "Evidence-first profile. Scores stay separate from confidence, and unavailable fields remain explicit.", `<button class="btn btn-primary" onclick="trade('${encodeURIComponent(t.mint)}','BUY')">Paper buy $100</button>`) + `<div class="token-detail"><section class="card detail-hero"><div class="detail-heading"><div class="big-token"><div class="big-logo">${esc(t.symbol.slice(0,2))}</div><div><h2>${esc(t.symbol)}</h2><p>${esc(t.name)} · ${esc(t.mint)}</p></div></div><div class="score-hero"><strong>${t.radar ?? "?"}</strong><span>Radar score</span></div></div><div class="detail-stats"><div class="detail-stat"><label>Opportunity</label><strong>${t.opportunity ?? "UNKNOWN"}</strong></div><div class="detail-stat"><label>Smart money</label><strong>${t.smartMoney ?? "UNKNOWN"}</strong></div><div class="detail-stat"><label>Confidence</label><strong>${t.confidence ?? "UNKNOWN"}${t.confidence != null ? "%" : ""}</strong></div><div class="detail-stat"><label>Risk</label><strong class="${t.risk > 55 ? "negative":""}">${t.risk ?? "UNKNOWN"}</strong></div><div class="detail-stat"><label>Market cap</label><strong>${compact(t.marketCap)}</strong></div><div class="detail-stat"><label>Liquidity</label><strong>${compact(t.liquidity)}</strong></div><div class="detail-stat"><label>Holders</label><strong>${t.details.holders?.toLocaleString() || "UNKNOWN"}</strong></div><div class="detail-stat"><label>Potential</label><strong>${esc(t.potential)}</strong></div></div><div class="chart"><svg viewBox="0 0 500 90" preserveAspectRatio="none"><defs><linearGradient id="fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#2f6fed" stop-opacity=".18"/><stop offset="1" stop-color="#2f6fed" stop-opacity="0"/></linearGradient></defs><path class="chart-grid" d="M0 20H500M0 45H500M0 70H500"/><path class="chart-area" d="M0 70 L40 63 L75 67 L112 45 L145 52 L183 32 L220 39 L258 21 L302 30 L341 18 L380 28 L420 13 L460 20 L500 8 L500 90 L0 90Z"/><path class="chart-line" d="M0 70 L40 63 L75 67 L112 45 L145 52 L183 32 L220 39 L258 21 L302 30 L341 18 L380 28 L420 13 L460 20 L500 8"/></svg></div><div class="data-note" style="margin:16px -22px -22px">Data quality ${t.dataQuality ?? "UNKNOWN"} · social coverage ${esc(t.details.social)} · status ${statusBadge(t)}</div></section><section class="card evidence"><h3>Why this score?</h3><ul>${t.details.evidence.map(e => `<li>${esc(e)}</li>`).join("")}</ul><h3 style="margin-top:26px">Token security</h3><div class="health-row"><span>Mint authority</span><strong class="health-value">${esc(t.details.authorities.mint)}</strong></div><div class="health-row"><span>Freeze authority</span><strong class="health-value">${esc(t.details.authorities.freeze)}</strong></div><div class="health-row"><span>Metadata authority</span><strong class="health-value health-warn">${esc(t.details.authorities.metadata)}</strong></div><div class="health-row"><span>Pattern match</span><strong class="health-value health-ok">${t.details.patternMatch ?? "UNKNOWN"}%</strong></div><button class="btn ${watch ? "btn-danger":"btn-quiet"}" style="margin-top:18px;width:100%" onclick="toggleWatch('${encodeURIComponent(t.mint)}')">${watch ? "Remove from active watchlist" : "☆ Add to permanent watchlist"}</button></section></div>`); }

@@ -16,6 +16,25 @@ test("runtime smoke contract exposes a healthy read surface", { skip: !domain },
   assert.equal(stateBody.mode, "live");
   assert.ok(stateBody.system);
 
+  const providerHealth = await fetch(`${base}/api/provider-health`);
+  assert.equal(providerHealth.status, 200);
+  const providerHealthBody = await providerHealth.json();
+  assert.equal(providerHealthBody.ok, true);
+  assert.ok(providerHealthBody.gateway);
+  assert.ok(providerHealthBody.audit);
+
+  const providerAudit = await fetch(`${base}/api/provider-audit?limit=1&offset=0`);
+  assert.equal(providerAudit.status, 200);
+  const providerAuditBody = await providerAudit.json();
+  assert.equal(providerAuditBody.ok, true);
+  assert.ok(Array.isArray(providerAuditBody.records));
+  assert.equal(providerAuditBody.pagination.limit, 1);
+  for (const record of providerAuditBody.records) {
+    assert.equal("requestBody" in record, false);
+    assert.equal("responseBody" in record, false);
+    assert.equal("authorization" in record, false);
+  }
+
   const [phase7, evaluation] = await Promise.all([
     fetch(`${base}/api/phase7`),
     fetch(`${base}/api/evaluation`)

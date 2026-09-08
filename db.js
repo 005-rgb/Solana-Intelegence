@@ -1519,6 +1519,75 @@ async function recordProviderRequest(event) {
   });
 }
 
+function providerAuditText(value, maxLength = 120) {
+  const text = String(value || "").trim();
+  return text ? text.slice(0, maxLength) : null;
+}
+
+async function readProviderRequests({
+  providerId = null,
+  capability = null,
+  status = null,
+  correlationId = null,
+  limit = 25,
+  offset = 0
+} = {}) {
+  const safeLimit = Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 25));
+  const safeOffset = Math.min(10_000, Math.max(0, Number.parseInt(offset, 10) || 0));
+  const where = {};
+  const exactFilters = { providerId, capability, status, correlationId };
+  for (const [key, value] of Object.entries(exactFilters)) {
+    const normalized = providerAuditText(value);
+    if (normalized) where[key] = normalized;
+  }
+
+  const [rows, total] = await prisma.$transaction([
+    prisma.providerRequest.findMany({
+      where,
+      orderBy: [{ startedAt: "desc" }, { id: "desc" }],
+      skip: safeOffset,
+      take: safeLimit + 1
+    }),
+    prisma.providerRequest.count({ where })
+  ]);
+  const hasMore = rows.length > safeLimit;
+  const records = rows.slice(0, safeLimit).map(row => ({
+    id: row.id,
+    providerId: row.providerId,
+    adapterVersion: row.adapterVersion,
+    capability: row.capability,
+    endpointLabel: row.endpointLabel,
+    requestHash: row.requestHash,
+    correlationId: row.correlationId,
+    requestId: row.requestId,
+    attempt: row.attempt,
+    status: row.status,
+    httpStatus: row.httpStatus,
+    retryAfterMs: row.retryAfterMs,
+    startedAt: row.startedAt,
+    completedAt: row.completedAt,
+    latencyMs: row.latencyMs,
+    responseHash: row.responseHash,
+    responseBytes: row.responseBytes,
+    quotaClass: row.quotaClass,
+    errorCode: row.errorCode,
+    createdAt: row.createdAt
+  }));
+  return {
+    records,
+    pagination: {
+      limit: safeLimit,
+      offset: safeOffset,
+      total,
+      hasMore,
+      nextOffset: hasMore ? safeOffset + safeLimit : null
+    },
+    filters: Object.fromEntries(
+      Object.entries(exactFilters).map(([key, value]) => [key, providerAuditText(value)])
+    )
+  };
+}
+
 module.exports = {
   prisma,
   readState,
@@ -1554,5 +1623,6 @@ module.exports = {
   readTokenHistory,
   readReactivationHistory,
   recordProviderRequest,
+  readProviderRequests,
   disconnectDb
 };

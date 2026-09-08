@@ -52,8 +52,19 @@ npm run db:push
 - `manipulation-evidence.js`: phase3a-v1 fail-closed wash, circular, burst, coordination, entity, and pool-drain evidence evaluator.
 - `execution-safety.js`: phase2a-v1 buy/sell quote, route, simulation, slippage, transfer-evidence, account-creation, and freshness evaluator.
 - `solana-rpc-pool.js`: isolated Solana RPC pool with provider rotation, circuit cooldowns, failover telemetry, and safe health summaries.
+- `provider-gateway.js`: centralized outbound market-provider gateway with bounded concurrency, token budgets, Retry-After-aware exponential backoff/jitter, circuit breakers, and redacted per-attempt telemetry.
 - `prisma/schema.prisma`: PostgreSQL schema for live tokens, signals, watchlists, paper trading, scan observability, and `TokenObservation` lineage rows.
 - `public/`: responsive research UI.
+
+## Provider gateway observability
+
+- `GET /api/provider-health` exposes safe in-memory gateway/RPC health, circuit state, budgets, and the bounded audit queue.
+- `GET /api/provider-audit` provides read-only, paginated `ProviderRequest` metadata. It supports exact filters for
+  `providerId`, `capability`, `status`, and `correlationId`, with a maximum page size of 100.
+- Audit responses include hashes, endpoint labels, status, timing, retry, quota, and error metadata only. Request/response
+  payloads and authorization material are never persisted or returned.
+- The System Health page renders gateway state and the redacted audit history. Unknown, failed, rate-limited, and
+  cooldown states remain explicit rather than being presented as healthy.
 
 ## Phase 3 time-series features
 
