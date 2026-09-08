@@ -1493,6 +1493,32 @@ async function disconnectDb() {
   await prisma.$disconnect();
 }
 
+async function recordProviderRequest(event) {
+  if (!event?.providerId || !event?.requestId) return null;
+  return prisma.providerRequest.create({
+    data: {
+      providerId: String(event.providerId).slice(0, 80),
+      adapterVersion: String(event.adapterVersion || "gateway-v1").slice(0, 80),
+      capability: String(event.capability || "DEFAULT").slice(0, 80),
+      endpointLabel: String(event.endpoint || "unknown").slice(0, 255),
+      requestHash: String(event.requestHash || "unknown").slice(0, 128),
+      correlationId: event.correlationId ? String(event.correlationId).slice(0, 128) : null,
+      requestId: String(event.requestId).slice(0, 128),
+      attempt: Math.max(0, Number(event.attempt) || 0),
+      status: String(event.status || "UNKNOWN").slice(0, 40),
+      httpStatus: Number.isInteger(event.httpStatus) ? event.httpStatus : null,
+      retryAfterMs: Number.isInteger(event.retryAfterMs) ? event.retryAfterMs : null,
+      startedAt: event.startedAt ? new Date(event.startedAt) : new Date(),
+      completedAt: event.completedAt ? new Date(event.completedAt) : null,
+      latencyMs: Number.isFinite(Number(event.latencyMs)) ? Math.max(0, Math.round(Number(event.latencyMs))) : null,
+      responseHash: event.responseHash ? String(event.responseHash).slice(0, 128) : null,
+      responseBytes: Number.isFinite(Number(event.responseBytes)) ? Math.max(0, Math.round(Number(event.responseBytes))) : null,
+      quotaClass: String(event.quotaClass || `${event.providerId}:${event.capability || "DEFAULT"}`).slice(0, 120),
+      errorCode: event.errorCode ? String(event.errorCode).slice(0, 80) : null
+    }
+  });
+}
+
 module.exports = {
   prisma,
   readState,
@@ -1527,5 +1553,6 @@ module.exports = {
   readEvaluationReport,
   readTokenHistory,
   readReactivationHistory,
+  recordProviderRequest,
   disconnectDb
 };

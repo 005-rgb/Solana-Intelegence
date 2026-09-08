@@ -20,6 +20,34 @@ model RadarState {
   updatedAt        DateTime  @updatedAt
 }
 
+model ProviderRequest {
+  id              String   @id @default(cuid())
+  providerId      String
+  adapterVersion  String
+  capability      String
+  endpointLabel   String
+  requestHash     String
+  correlationId   String?
+  requestId       String
+  attempt         Int
+  status          String
+  httpStatus      Int?
+  retryAfterMs    Int?
+  startedAt       DateTime
+  completedAt     DateTime?
+  latencyMs       Int?
+  responseHash    String?
+  responseBytes   Int?
+  quotaClass      String
+  errorCode       String?
+  createdAt       DateTime @default(now())
+
+  @@index([providerId, capability, startedAt])
+  @@index([correlationId])
+  @@index([requestHash, createdAt])
+  @@index([status, createdAt])
+}
+
 model Token {
   id              Int              @id @default(autoincrement())
   mint            String           @unique

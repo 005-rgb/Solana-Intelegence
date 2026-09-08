@@ -32,6 +32,7 @@ const {
   findScanByIdempotencyKey,
   findTradeByIdempotencyKey,
   persistPatterns,
+  recordProviderRequest,
   disconnectDb
 } = require("./db");
 const {
@@ -61,6 +62,7 @@ const { deriveProjectTraction } = require("./project-traction");
 const { deriveCandidateLifecycle } = require("./candidate-lifecycle");
 const { buildPhase7Report, rollbackRollout } = require("./phase7");
 const { createSolanaRpcPool } = require("./solana-rpc-pool");
+const { createProviderGateway } = require("./provider-gateway");
 const {
   EXECUTION_SAFETY_VERSION,
   DEFAULT_ORDER_SIZES_USD,
@@ -72,6 +74,58 @@ const ACTIVE_DECISION_VERSION = PHASE2_DECISION_VERSION;
 const ACTIVE_FILTER_CONFIG = PHASE2_FILTER_CONFIG;
 const evaluateActiveCandidate = evaluatePhase2Candidate;
 const summarizeActiveCandidates = summarizePhase2Candidates;
+
+const providerAuditQueue = [];
+let providerAuditFlushPromise = null;
+const PROVIDER_AUDIT_QUEUE_LIMIT = 2_000;
+
+function queueProviderAudit(event) {
+  if (!event || providerAuditQueue.length >= PROVIDER_AUDIT_QUEUE_LIMIT) return;
+  providerAuditQueue.push({
+    ...event,
+    adapterVersion: "provider-gateway-v1",
+    quotaClass: `${event.providerId}:${event.capability || "DEFAULT"}`
+  });
+}
+
+async function flushProviderAudit() {
+  if (providerAuditFlushPromise || !providerAuditQueue.length) return providerAuditFlushPromise;
+  providerAuditFlushPromise = (async () => {
+    const batch = providerAuditQueue.splice(0, 50);
+    await Promise.allSettled(batch.map(event => recordProviderRequest(event)));
+  })().finally(() => {
+    providerAuditFlushPromise = null;
+    if (providerAuditQueue.length) setImmediate(() => flushProviderAudit().catch(() => {}));
+  });
+  return providerAuditFlushPromise;
+}
+
+const providerAuditTimer = setInterval(() => flushProviderAudit().catch(() => {}), 2_000);
+providerAuditTimer.unref();
+
+const providerGateway = createProviderGateway({
+  providers: {
+    dexscreener: {
+      capacity: Number(process.env.DEXSCREENER_REQUESTS_PER_MINUTE || 120),
+      refillPerMinute: Number(process.env.DEXSCREENER_REQUESTS_PER_MINUTE || 120),
+      reservedCapacity: Number(process.env.DEXSCREENER_RESERVED_REQUESTS || 10),
+      maxConcurrency: Number(process.env.DEXSCREENER_MAX_CONCURRENCY || 4)
+    },
+    indexed_discovery: {
+      capacity: Number(process.env.INDEXED_DISCOVERY_REQUESTS_PER_MINUTE || 60),
+      refillPerMinute: Number(process.env.INDEXED_DISCOVERY_REQUESTS_PER_MINUTE || 60),
+      reservedCapacity: Number(process.env.INDEXED_DISCOVERY_RESERVED_REQUESTS || 5),
+      maxConcurrency: Number(process.env.INDEXED_DISCOVERY_MAX_CONCURRENCY || 2)
+    },
+    jupiter: {
+      capacity: Number(process.env.JUPITER_REQUESTS_PER_MINUTE || 30),
+      refillPerMinute: Number(process.env.JUPITER_REQUESTS_PER_MINUTE || 30),
+      reservedCapacity: Number(process.env.JUPITER_RESERVED_REQUESTS || 4),
+      maxConcurrency: Number(process.env.JUPITER_MAX_CONCURRENCY || 2)
+    }
+  },
+  onRequest: queueProviderAudit
+});
 
 const PORT = Number(process.env.PORT || 5000);
 const ROOT = __dirname;
@@ -94,14 +148,8 @@ const API_RATE_LIMIT = 120;
 const MUTATION_RATE_LIMIT = 20;
 const MAX_TAXONOMY_HOLDERS_PER_TOKEN = 10;
 const MAX_TAXONOMY_ACCOUNT_REQUESTS = 120;
-const PROVIDER_MAX_CONCURRENCY = Math.max(1, Math.min(8, Number(process.env.PROVIDER_MAX_CONCURRENCY || 4)));
-const PROVIDER_MAX_RETRIES = 2;
-const PROVIDER_RETRY_BASE_MS = 250;
-const PROVIDER_CIRCUIT_FAILURE_THRESHOLD = 3;
-const PROVIDER_CIRCUIT_COOLDOWN_MS = 30_000;
 const MUTATION_AUTH_REQUIRED = process.env.RADAR_REQUIRE_AUTH === "true" || process.env.NODE_ENV === "production";
 const rateBuckets = new Map();
-const providerHealth = new Map();
 let lastFilterReport = {
   checked: 0, accepted: 0, rejected: 0, unresolved: 0, reasons: [],
   providerRecords: 0, pairRequests: 0, pairFailures: 0, providerAgeMs: null,
@@ -837,88 +885,24 @@ function timestampMs(value) {
   return Date.parse(String(value || ""));
 }
 
-function providerEndpointLabel(endpoint) {
-  try {
-    return new URL(endpoint).hostname;
-  } catch {
-    return "invalid-endpoint";
-  }
-}
-
-function providerHealthFor(endpoint) {
-  const current = providerHealth.get(endpoint) || { failures: 0, openedAt: 0, lastStatus: null };
-  if (current.openedAt && Date.now() - current.openedAt >= PROVIDER_CIRCUIT_COOLDOWN_MS) {
-    current.openedAt = 0;
-    current.failures = 0;
-  }
-  providerHealth.set(endpoint, current);
-  return current;
-}
-
-function providerFailure(endpoint, status = null) {
-  const health = providerHealthFor(endpoint);
-  health.failures += 1;
-  health.lastStatus = status;
-  if (health.failures >= PROVIDER_CIRCUIT_FAILURE_THRESHOLD) health.openedAt = Date.now();
-}
-
-function providerSuccess(endpoint) {
-  providerHealth.set(endpoint, { failures: 0, openedAt: 0, lastStatus: null });
-}
-
-function retryAfterMs(response, attempt) {
-  const header = response?.headers?.get("retry-after");
-  const seconds = header == null ? NaN : Number(header);
-  return Number.isFinite(seconds) && seconds >= 0
-    ? Math.min(5_000, seconds * 1_000)
-    : Math.min(5_000, PROVIDER_RETRY_BASE_MS * (2 ** attempt));
-}
-
-async function fetchProviderJson(endpoint, { signal, timeoutMs = 5_000 } = {}) {
-  const health = providerHealthFor(endpoint);
-  if (health.openedAt) throw new Error(`Provider circuit open for ${new URL(endpoint).hostname}.`);
-  let lastError;
-  for (let attempt = 0; attempt <= PROVIDER_MAX_RETRIES; attempt += 1) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const response = await fetch(endpoint, {
-        signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
-        headers: { Accept: "application/json" }
-      });
-      if (response.status === 429 || response.status >= 500) {
-        lastError = new Error(`Provider HTTP ${response.status}`);
-        lastError.status = response.status;
-        providerFailure(endpoint, response.status);
-        if (attempt < PROVIDER_MAX_RETRIES) {
-          await new Promise(resolve => setTimeout(resolve, retryAfterMs(response, attempt)));
-          continue;
-        }
-        throw lastError;
-      }
-      if (!response.ok) {
-        lastError = new Error(`Provider HTTP ${response.status}`);
-        lastError.status = response.status;
-        providerFailure(endpoint, response.status);
-        throw lastError;
-      }
-      const payload = await response.json();
-      providerSuccess(endpoint);
-      return payload;
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      lastError = error;
-      if (attempt >= PROVIDER_MAX_RETRIES || error.status >= 400 && error.status < 500 && error.status !== 429) {
-        providerFailure(endpoint, error.status || null);
-        throw error;
-      }
-      providerFailure(endpoint, error.status || null);
-      await new Promise(resolve => setTimeout(resolve, Math.min(5_000, PROVIDER_RETRY_BASE_MS * (2 ** attempt))));
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-  throw lastError || new Error("Provider request failed.");
+async function fetchProviderJson(endpoint, {
+  signal,
+  timeoutMs = 5_000,
+  providerId = "dexscreener",
+  capability = "DISCOVERY",
+  requestId = null,
+  correlationId = null
+} = {}) {
+  return providerGateway.requestJson({
+    providerId,
+    capability,
+    endpoint,
+    signal,
+    timeoutMs,
+    requestId: requestId || crypto.randomUUID(),
+    correlationId,
+    headers: { Accept: "application/json" }
+  });
 }
 
 async function mapWithConcurrency(items, concurrency, worker) {
@@ -970,26 +954,16 @@ function safeRouteEvidence(routePlan) {
     : [];
 }
 
-async function requestExecutionQuote(url, signal) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), EXECUTION_QUOTE_TIMEOUT_MS);
-  const abort = () => controller.abort();
-  signal?.addEventListener("abort", abort, { once: true });
-  try {
-    const response = await fetch(url, { signal: controller.signal, headers: { Accept: "application/json" } });
-    const text = await response.text();
-    let payload = null;
-    try {
-      payload = text ? JSON.parse(text) : null;
-    } catch {
-      throw new Error("Execution quote provider returned invalid JSON.");
-    }
-    if (!response.ok) throw new Error(`Execution quote provider HTTP ${response.status}.`);
-    return payload;
-  } finally {
-    clearTimeout(timeout);
-    signal?.removeEventListener("abort", abort);
-  }
+async function requestExecutionQuote(url, signal, correlationId = null) {
+  return providerGateway.requestJson({
+    providerId: "jupiter",
+    capability: "EXECUTION_QUOTE",
+    endpoint: String(url),
+    signal,
+    correlationId,
+    timeoutMs: EXECUTION_QUOTE_TIMEOUT_MS,
+    headers: { Accept: "application/json" }
+  });
 }
 
 function executionQuoteRecord(payload, source, quoteAt) {
@@ -1057,7 +1031,7 @@ async function collectExecutionEvidence(item, signal) {
     buyUrl.searchParams.set("slippageBps", "100");
     buyUrl.searchParams.set("restrictIntermediateTokens", "true");
     try {
-      const buyPayload = await requestExecutionQuote(buyUrl, signal);
+      const buyPayload = await requestExecutionQuote(buyUrl, signal, item?.mint || null);
       buy[String(size)] = executionQuoteRecord(buyPayload, source, quoteAt);
       const buyAmount = typeof buyPayload?.outAmount === "string" ? buyPayload.outAmount : null;
       if (!buyAmount || !buy[String(size)].routeAvailable) {
@@ -1070,7 +1044,7 @@ async function collectExecutionEvidence(item, signal) {
       sellUrl.searchParams.set("amount", buyAmount);
       sellUrl.searchParams.set("slippageBps", "100");
       sellUrl.searchParams.set("restrictIntermediateTokens", "true");
-      const sellPayload = await requestExecutionQuote(sellUrl, signal);
+      const sellPayload = await requestExecutionQuote(sellUrl, signal, item?.mint || null);
       sell[String(size)] = executionQuoteRecord(sellPayload, source, new Date().toISOString());
     } catch (error) {
       buy[String(size)] = { status: "FAILED", error: String(error.message).slice(0, 240), source };
@@ -1199,7 +1173,13 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
       }
       const requestId = `${sourceName}:${crypto.randomUUID()}`;
       try {
-        const payload = await fetchProviderJson(endpoint, { signal: requestSignal });
+          const payload = await fetchProviderJson(endpoint, {
+            signal: requestSignal,
+            providerId: sourceName === "indexed_feed" ? "indexed_discovery" : "dexscreener",
+            capability: "DISCOVERY",
+            requestId,
+            correlationId: sourceRequestId
+          });
         const responseHash = hashPayload(payload);
         const validation = validator(payload);
         invalidFeedRecords += validation.invalidRecords || 0;
@@ -1253,7 +1233,13 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
       const mint = entry.tokenAddress;
         const requestId = `pair_fetch:${crypto.randomUUID()}`;
       try {
-        const payload = await fetchProviderJson(`${pairEndpoint}/${encodeURIComponent(mint)}`, { signal: requestSignal });
+        const payload = await fetchProviderJson(`${pairEndpoint}/${encodeURIComponent(mint)}`, {
+          signal: requestSignal,
+          providerId: "dexscreener",
+          capability: "PAIR_MARKET",
+          requestId,
+          correlationId: sourceRequestId
+        });
         const responseHash = hashPayload(payload);
         const raw = Array.isArray(payload?.pairs) ? payload.pairs : [];
         const pairs = [];
@@ -1534,11 +1520,11 @@ async function fetchLiveTokens({ correlationId, signal } = {}) {
               executionEvidence: item.details?.executionEvidence
             }
           }))),
-         provider_health: Object.fromEntries([...providerHealth.entries()].map(([endpoint, health]) => [
-           providerEndpointLabel(endpoint),
-           { failures: health.failures, circuitOpen: Boolean(health.openedAt), lastStatus: health.lastStatus }
-         ]))
-         ,
+          provider_health: providerGateway.summary(),
+          provider_audit: {
+            queued: providerAuditQueue.length,
+            queueLimit: PROVIDER_AUDIT_QUEUE_LIMIT
+          },
          rpc_health: rpcHealthSummary()
       }
     });
@@ -1822,6 +1808,18 @@ async function handleApi(req, res, url) {
     return send(res, 403, { error: "Mutation is not authorized for this origin.", requestId: req.requestId });
   }
   if (req.method === "GET" && url.pathname === "/api/state") return send(res, 200, jsonState());
+  if (req.method === "GET" && url.pathname === "/api/provider-health") {
+    return send(res, 200, {
+      ok: true,
+      gateway: providerGateway.summary(),
+      rpc: rpcHealthSummary(),
+      audit: {
+        queued: providerAuditQueue.length,
+        queueLimit: PROVIDER_AUDIT_QUEUE_LIMIT
+      },
+      requestId: req.requestId
+    });
+  }
   if (req.method === "GET" && url.pathname === "/api/phase7") {
     try {
       return send(res, 200, { ok: true, report: await phase7Report() });
@@ -2144,6 +2142,8 @@ async function start() {
 }
 
 process.on("SIGTERM", async () => {
+  clearInterval(providerAuditTimer);
+  await flushProviderAudit();
   await disconnectDb();
   process.exit(0);
 });
