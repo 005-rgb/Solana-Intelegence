@@ -99,6 +99,7 @@ const PROVIDER_MAX_RETRIES = 2;
 const PROVIDER_RETRY_BASE_MS = 250;
 const PROVIDER_CIRCUIT_FAILURE_THRESHOLD = 3;
 const PROVIDER_CIRCUIT_COOLDOWN_MS = 30_000;
+const MUTATION_AUTH_REQUIRED = process.env.RADAR_REQUIRE_AUTH === "true" || process.env.NODE_ENV === "production";
 const rateBuckets = new Map();
 const providerHealth = new Map();
 let lastFilterReport = {
@@ -281,6 +282,7 @@ function mutationAllowed(req) {
   }
   if (req.headers["sec-fetch-site"] === "cross-site") return false;
   const configuredToken = process.env.RADAR_AUTH_TOKEN;
+  if (MUTATION_AUTH_REQUIRED && !configuredToken) return false;
   if (configuredToken) return req.headers.authorization === `Bearer ${configuredToken}`;
   return true;
 }
@@ -1830,7 +1832,9 @@ async function handleApi(req, res, url) {
   }
   if (req.method === "GET" && url.pathname === "/api/evaluation") {
     try {
-      const report = await readEvaluationReport({ persist: true });
+      // GET must stay side-effect free. Persisted evaluation runs are an
+      // explicit operation, otherwise dashboard refreshes grow the table.
+      const report = await readEvaluationReport({ persist: false });
       return send(res, 200, { ok: true, report });
     } catch (error) {
       console.error(`[${req.requestId}] Evaluation report failed`, error.message);

@@ -7,6 +7,12 @@ const { evaluateOutcomes, EVALUATION_VERSION, CONFIGURATION_HASH: EVALUATION_CON
 
 const prisma = new PrismaClient();
 const LIVE_ONLY_MIGRATION = "liveOnlyInitialized";
+const FEATURE_HISTORY_LIMIT = 2_000;
+const STATE_SNAPSHOT_LIMIT = 10_000;
+const OUTCOME_DECISION_LIMIT = 5_000;
+const OUTCOME_OBSERVATION_LIMIT = 50_000;
+const EVALUATION_ROW_LIMIT = 50_000;
+const EVALUATION_RUN_RETENTION = 100;
 
 function tokenData(item) {
   return {
@@ -264,25 +270,29 @@ async function readState(fallback) {
   const featureRows = dbTokens.length
     ? await prisma.radarFeatureSnapshot.findMany({
       where: { mint: { in: dbTokens.map(token => token.mint) } },
-      orderBy: { observedAt: "desc" }
+      orderBy: { observedAt: "desc" },
+      take: STATE_SNAPSHOT_LIMIT
     })
     : [];
   const manipulationRows = dbTokens.length
     ? await prisma.manipulationSnapshot.findMany({
       where: { mint: { in: dbTokens.map(token => token.mint) } },
-      orderBy: { observedAt: "desc" }
+      orderBy: { observedAt: "desc" },
+      take: STATE_SNAPSHOT_LIMIT
     })
     : [];
   const projectTractionRows = dbTokens.length
     ? await prisma.projectTractionSnapshot.findMany({
       where: { mint: { in: dbTokens.map(token => token.mint) } },
-      orderBy: { observedAt: "desc" }
+      orderBy: { observedAt: "desc" },
+      take: STATE_SNAPSHOT_LIMIT
     })
     : [];
   const decisionRows = dbTokens.length
     ? await prisma.radarDecisionSnapshot.findMany({
       where: { mint: { in: dbTokens.map(token => token.mint) } },
-      orderBy: { observedAt: "desc" }
+      orderBy: { observedAt: "desc" },
+      take: STATE_SNAPSHOT_LIMIT
     })
     : [];
   const latestManipulation = new Map();
@@ -1001,9 +1011,10 @@ async function recordTokenObservations(observations, scanRunId) {
     for (const observation of created) {
       const history = await tx.tokenObservation.findMany({
         where: { mint: observation.mint, pairAddress: observation.pairAddress },
-        orderBy: { observedAt: "asc" },
-        take: 2_000
+        orderBy: { observedAt: "desc" },
+        take: FEATURE_HISTORY_LIMIT
       });
+      history.reverse();
       const snapshot = deriveFeatureSnapshot(history, { asOf: observation.observedAt });
       await tx.radarFeatureSnapshot.create({
         data: {
@@ -1161,17 +1172,19 @@ function discoveryClassFor(snapshot) {
 
 async function recordOutcomeCheckpoints(asOf = new Date()) {
   const decisions = await prisma.radarDecisionSnapshot.findMany({
-    orderBy: { observedAt: "asc" },
-    take: 5_000,
+    orderBy: { observedAt: "desc" },
+    take: OUTCOME_DECISION_LIMIT,
     include: { observation: true }
   });
+  decisions.reverse();
   if (!decisions.length) return { created: 0, completed: 0, censored: 0 };
   const mints = [...new Set(decisions.map(decision => decision.mint))];
   const observations = await prisma.tokenObservation.findMany({
     where: { mint: { in: mints } },
-    orderBy: { observedAt: "asc" },
-    take: 50_000
+    orderBy: { observedAt: "desc" },
+    take: OUTCOME_OBSERVATION_LIMIT
   });
+  observations.reverse();
   const byKey = new Map();
   for (const observation of observations) {
     const key = `${observation.mint}:${observation.pairAddress || ""}`;
@@ -1276,27 +1289,45 @@ function evaluationInput(row) {
 
 async function readEvaluationReport({ persist = true, options = {} } = {}) {
   const rows = await prisma.outcomeCheckpoint.findMany({
-    orderBy: { signalTime: "asc" },
-    take: 50_000,
+    orderBy: { signalTime: "desc" },
+    take: EVALUATION_ROW_LIMIT,
     include: { decisionSnapshot: { select: { decisionVersion: true, radarScore: true, scorecard: true } } }
   });
+  rows.reverse();
+  const totalRows = await prisma.outcomeCheckpoint.count();
   const report = evaluateOutcomes(rows.map(evaluationInput), options);
   if (persist) {
-    await prisma.evaluationRun.create({
-      data: {
-        evaluationVersion: EVALUATION_VERSION,
-        horizon: report.horizon,
-        configurationHash: EVALUATION_CONFIGURATION_HASH,
-        claimStatus: report.claimStatus,
-        sampleSize: report.metrics.sampleSize,
-        observedWindowDays: report.minimumRequirements.observedWindowDays,
-        generatedAt: new Date(report.generatedAt),
-        report
-      }
+    await prisma.$transaction(async tx => {
+      await tx.evaluationRun.create({
+        data: {
+          evaluationVersion: EVALUATION_VERSION,
+          horizon: report.horizon,
+          configurationHash: EVALUATION_CONFIGURATION_HASH,
+          claimStatus: report.claimStatus,
+          sampleSize: report.metrics.sampleSize,
+          observedWindowDays: report.minimumRequirements.observedWindowDays,
+          generatedAt: new Date(report.generatedAt),
+          report
+        }
+      });
+      const retained = await tx.evaluationRun.findMany({
+        orderBy: [{ generatedAt: "desc" }, { createdAt: "desc" }],
+        take: EVALUATION_RUN_RETENTION,
+        select: { id: true }
+      });
+      await tx.evaluationRun.deleteMany({
+        where: { id: { notIn: retained.map(row => row.id) } }
+      });
     });
   }
   return {
     ...report,
+    dataWindow: {
+      rowsReturned: rows.length,
+      rowsAvailable: totalRows,
+      truncated: totalRows > rows.length,
+      rowLimit: EVALUATION_ROW_LIMIT
+    },
     checkpointCounts: rows.reduce((counts, row) => {
       counts[row.checkpoint] = (counts[row.checkpoint] || 0) + 1;
       return counts;

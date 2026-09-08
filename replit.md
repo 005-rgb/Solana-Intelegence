@@ -12,6 +12,11 @@ Required environment variables:
 
 - `DATABASE_URL`: PostgreSQL connection string used by Prisma.
 - `SOLANA_RPC_URL`: one Helius or another Solana JSON-RPC endpoint used for live token security verification.
+- `RADAR_REQUIRE_AUTH` (optional): set to `true` to fail closed on all mutation
+  endpoints when `RADAR_AUTH_TOKEN` is missing. Mutation auth is also required
+  automatically when `NODE_ENV=production`.
+- `RADAR_AUTH_TOKEN` (optional): bearer token required for mutation endpoints
+  when configured. Store it in Replit Secrets, never in source control.
 - `SOLANA_RPC_URLS` (optional): multiple RPC endpoints in one secret, separated by commas or new lines. The server rotates healthy endpoints and fails over on timeout, HTTP 429, or 5xx; `SOLANA_RPC_URL` remains supported for compatibility.
 - `SOLANA_RPC_URLS` also accepts a JSON array/object or labeled lines such as `HELIUS=https://...`. Direct RPC URLs from multiple providers are accepted; dashboard/API-key management URLs are rejected and reported without exposing their values. Restart the workflow after changing the secret because the pool is loaded at process startup.
 - `DEXSCREENER_NEW_PAIRS_API_URL` (optional): a provider endpoint returning a validated `{ "pairs": [...] }` payload for latest/new Solana pair discovery. Pair base-token addresses are normalized into the Phase 1 universe; the source stays optional and never weakens baseline gates.
@@ -187,6 +192,11 @@ npm run db:push
 - Phase 7 never enables wallet execution, real-fund movement, or probability
   claims. Degraded operation keeps new qualification fail-closed and preserves
   the last-known-good board.
+
+`GET /api/evaluation` is read-only and does not create an `EvaluationRun` on
+dashboard refresh. Explicit persisted evaluation runs are retained to a bounded
+history, and large outcome datasets expose a `dataWindow.truncated` diagnostic
+instead of silently presenting an unbounded query.
 
 The authoritative product specification is
 [`docs/integrated-radar-core-market-brain-prd.md`](docs/integrated-radar-core-market-brain-prd.md).
